@@ -114,11 +114,40 @@ with st.sidebar:
         st.rerun()
 
     if backend_is_ready() and mode == "escalation":
-        if st.button("Finalizar y exportar caso"):
-            result = finalize_escalation_case(st.session_state.chat_state)
-            st.success("Caso persistido correctamente.")
-            st.json(result)
+    if st.button("Finalizar y exportar caso"):
+        result = finalize_escalation_case(st.session_state.chat_state)
 
+        st.success("Caso persistido correctamente.")
+
+        exported_file_path = result.get("exported_file")
+
+        if exported_file_path:
+            try:
+                with open(exported_file_path, "r", encoding="utf-8") as f:
+                    exported_text = f.read()
+
+                file_name = exported_file_path.split("/")[-1]
+
+                st.text_area(
+                    "Resumen exportado",
+                    exported_text,
+                    height=250
+                )
+                
+                st.download_button(
+                    label="Descargar resumen del caso (.txt)",
+                    data=exported_text,
+                    file_name=file_name,
+                    mime="text/plain"
+                )
+
+                with st.expander("Ver detalle del archivo exportado"):
+                    st.json(result)
+
+            except Exception as e:
+                st.error(f"No fue posible preparar la descarga del archivo: {e}")
+        else:
+            st.warning("No se encontró la ruta del archivo exportado.")
 
 # -----------------------------------------------------------------------------
 # Render chat history
