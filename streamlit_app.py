@@ -54,6 +54,14 @@ if "chat_state" not in st.session_state:
     else:
         st.session_state.chat_state = ChatSessionState()
 
+# Extra protection in case an old session survives a code update
+if getattr(st.session_state.chat_state, "incident_state", None) is None:
+    try:
+        from app.backend import IncidentState
+        st.session_state.chat_state.incident_state = IncidentState()
+    except Exception:
+        pass
+
 if "chat_messages" not in st.session_state:
     st.session_state.chat_messages = [
         {
