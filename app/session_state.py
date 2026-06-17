@@ -38,6 +38,7 @@ class ChatSessionState:
     )
     incident_state: object | None = None
     logs: list = field(default_factory=list)
+    pending_incident_field: str | None = None
 
     def log_turn(self, user_message: str, bot_message: str, route_type: str):
         self.logs.append(
