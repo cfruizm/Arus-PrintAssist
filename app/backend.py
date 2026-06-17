@@ -481,6 +481,44 @@ NO_VALUE_PATTERNS = [
     "no se",
 ]
 
+NON_INFORMATIVE_REPLY_PATTERNS = [
+    "ya te dije",
+    "ya lo dije",
+    "ya respondí",
+    "ya respondi",
+    "lo mismo",
+    "igual",
+]
+
+def is_non_informative_reply(user_message: str) -> bool:
+    text = user_message.strip().lower()
+    return any(pattern in text for pattern in NON_INFORMATIVE_REPLY_PATTERNS)
+
+
+def looks_like_specific_printer_data(user_message: str) -> bool:
+    text = user_message.lower()
+
+    model_or_device_hint = any(term in text for term in [
+        "laserjet",
+        "officejet",
+        "deskjet",
+        "pagewide",
+        "multifuncional",
+        "mfp",
+        "serial",
+        "serie",
+        "hostname",
+        "usb",
+        "ethernet",
+        "wifi",
+        "scanner",
+        "escaner",
+    ])
+
+    ip_hint = bool(re.search(r"\b\d{1,3}(?:\.\d{1,3}){3}\b", user_message))
+    hp_model_hint = bool(re.search(r"\bhp\s+[A-Za-z0-9\-]+\b", user_message, re.IGNORECASE))
+
+    return model_or_device_hint or ip_hint or hp_model_hint
 def should_activate_escalation_mode(user_message: str) -> bool:
     text = user_message.lower()
     return any(trigger in text for trigger in ESCALATION_TRIGGERS)
@@ -652,14 +690,7 @@ def extract_incident_fields(user_message: str):
         extracted["error_description"] = user_message.strip()
 
     # Printer data
-    if (
-        "impresora" in text
-        or "printer" in text
-        or "laserjet" in text
-        or "officejet" in text
-        or "multifuncional" in text
-        or "hp " in text
-    ):
+    if looks_like_specific_printer_data(user_message):
         extracted["printer_data"] = user_message.strip()
 
     # Client / contract / location
@@ -750,45 +781,85 @@ Resumen del incidente:
 
 
 def process_escalation_turn(user_message: str, state: IncidentState, session_state: ChatSessionState):
-    extracted = extract_incident_fields(user_message)
-
     pending_field = getattr(session_state, "pending_incident_field", None)
+    user_text = user_message.strip()
 
-    # If the user answered "no", "no aplica", etc. for the pending field,
-    # mark that field as explicitly unavailable so we do not ask again.
+    # -------------------------------------------------------------------------
+    # If the user answered with "no", "no aplica", etc. for the pending field,
+    # store an explicit unavailable value and continue.
+    # -------------------------------------------------------------------------
     if pending_field and is_no_value_answer(user_message):
         apply_no_value_to_field(state, pending_field)
+
+    # -------------------------------------------------------------------------
+    # If the user gives a non-informative reply like "ya te dije", keep asking
+    # for the same pending field instead of moving on.
+    # -------------------------------------------------------------------------
+    elif pending_field and is_non_informative_reply(user_message):
+        return {
+            "status": "collecting_information",
+            "missing_fields": get_missing_incident_fields(state),
+            "next_field": pending_field,
+            "next_question": FIELD_QUESTIONS[pending_field],
+            "incident_state": state.to_dict(),
+        }
+
     else:
-        # If the bot had just asked for a specific missing field,
-        # trust the answer even if extraction is imperfect.
-        if pending_field == "error_description" and not extracted["error_description"]:
-            extracted["error_description"] = user_message.strip()
+        extracted = extract_incident_fields(user_message)
 
-        elif pending_field == "software_involved" and not extracted["software_involved"]:
-            extracted["software_involved"] = user_message.strip()
+        # ---------------------------------------------------------------------
+        # Trust the user answer for the pending field strongly.
+        # This is the key to avoid loops.
+        # ---------------------------------------------------------------------
+        if pending_field == "software_involved":
+            if not extracted["software_involved"]:
+                extracted["software_involved"] = user_text
 
-        elif pending_field == "software_version" and not extracted["software_version"]:
-            # try to extract a version-like token if user only sent "25.2"
-            version_only = re.search(r"\b\d+(?:\.\d+)+\b", user_message)
-            if version_only:
-                extracted["software_version"] = version_only.group(0)
-            else:
-                extracted["software_version"] = user_message.strip()
+            # If the software phrase also contains a version like "Papercut MF 25.2"
+            if not extracted["software_version"]:
+                version_only = re.search(r"\b\d+(?:\.\d+)+\b", user_message)
+                if version_only:
+                    extracted["software_version"] = version_only.group(0)
 
-        elif pending_field == "actions_attempted" and not extracted["actions_attempted"]:
-            extracted["actions_attempted"] = [user_message.strip()]
+        elif pending_field == "software_version":
+            if not extracted["software_version"]:
+                version_only = re.search(r"\b\d+(?:\.\d+)+\b", user_message)
+                if version_only:
+                    extracted["software_version"] = version_only.group(0)
+                else:
+                    extracted["software_version"] = user_text
 
-        elif pending_field == "printer_data" and not extracted["printer_data"]:
-            extracted["printer_data"] = user_message.strip()
+        elif pending_field == "error_description":
+            # Always trust the full user answer as the symptom description
+            extracted["error_description"] = user_text
 
-        elif pending_field == "contract_client_location" and not extracted["contract_client_location"]:
-            extracted["contract_client_location"] = user_message.strip()
+        elif pending_field == "actions_attempted":
+            extracted["actions_attempted"] = [user_text]
 
-        elif pending_field == "evidence" and not extracted["evidence"]:
-            extracted["evidence"] = user_message.strip()
+        elif pending_field == "printer_data":
+            extracted["printer_data"] = user_text
 
-        elif pending_field == "impact_type" and not extracted["impact_type"]:
-            extracted["impact_type"] = user_message.strip()
+        elif pending_field == "contract_client_location":
+            extracted["contract_client_location"] = user_text
+
+        elif pending_field == "evidence":
+            extracted["evidence"] = user_text
+
+        elif pending_field == "impact_type":
+            extracted["impact_type"] = user_text
+
+        # ---------------------------------------------------------------------
+        # Prevent unrelated fields from being polluted by a reply intended for
+        # another pending field.
+        # ---------------------------------------------------------------------
+        if pending_field != "printer_data":
+            if extracted.get("printer_data") == user_text and not looks_like_specific_printer_data(user_message):
+                extracted["printer_data"] = None
+
+        if pending_field != "error_description":
+            # Keep auto-detected error only if it comes from a real error pattern
+            if extracted.get("error_description") == user_text and pending_field == "actions_attempted":
+                extracted["error_description"] = None
 
         update_incident_state(state, extracted)
 
@@ -812,7 +883,6 @@ def process_escalation_turn(user_message: str, state: IncidentState, session_sta
         "summary": summary,
         "incident_state": state.to_dict(),
     }
-    
 # -----------------------------------------------------------------------------
 # Logging / persistence
 # -----------------------------------------------------------------------------
