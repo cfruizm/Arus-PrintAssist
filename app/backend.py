@@ -337,7 +337,16 @@ def retrieve_context(query: str, top_k: int = 4):
 
     return "\n\n".join(context_blocks), final_docs
 
-
+def field_accepts_no_value(field_name: str) -> bool:
+    """
+    Only optional/enrichment fields should accept explicit 'no value' answers.
+    """
+    return field_name in {
+        "software_version",
+        "contract_client_location",
+        "evidence",
+        "impact_type",
+    }
 # -----------------------------------------------------------------------------
 # Prompting + generation
 # -----------------------------------------------------------------------------
@@ -490,9 +499,26 @@ NON_INFORMATIVE_REPLY_PATTERNS = [
     "igual",
 ]
 
+def normalize_user_reply(user_message: str) -> str:
+    return " ".join(user_message.strip().lower().split())
+
+
+def is_no_value_answer(user_message: str) -> bool:
+    """
+    Only treat exact short answers like 'no', 'no aplica', 'desconozco'
+    as explicit 'unknown / not available' values.
+    """
+    text = normalize_user_reply(user_message)
+    return text in NO_VALUE_PATTERNS
+
+
 def is_non_informative_reply(user_message: str) -> bool:
-    text = user_message.strip().lower()
-    return any(pattern in text for pattern in NON_INFORMATIVE_REPLY_PATTERNS)
+    """
+    Detect replies that should not overwrite the pending field.
+    """
+    text = normalize_user_reply(user_message)
+    return text in NON_INFORMATIVE_REPLY_PATTERNS
+
 
 
 def looks_like_specific_printer_data(user_message: str) -> bool:
@@ -543,11 +569,6 @@ def get_missing_incident_fields(state: IncidentState):
                 missing.append(field_name)
 
     return missing
-
-def is_no_value_answer(user_message: str) -> bool:
-    text = user_message.strip().lower()
-    return any(pattern == text or pattern in text for pattern in NO_VALUE_PATTERNS)
-
 
 def apply_no_value_to_field(state: IncidentState, field_name: str):
     fallback_values = {
@@ -785,15 +806,13 @@ def process_escalation_turn(user_message: str, state: IncidentState, session_sta
     user_text = user_message.strip()
 
     # -------------------------------------------------------------------------
-    # If the user answered with "no", "no aplica", etc. for the pending field,
-    # store an explicit unavailable value and continue.
+    # Handle explicit "no value" answers ONLY for optional fields
     # -------------------------------------------------------------------------
-    if pending_field and is_no_value_answer(user_message):
+    if pending_field and field_accepts_no_value(pending_field) and is_no_value_answer(user_message):
         apply_no_value_to_field(state, pending_field)
 
     # -------------------------------------------------------------------------
-    # If the user gives a non-informative reply like "ya te dije", keep asking
-    # for the same pending field instead of moving on.
+    # Handle unhelpful answers like "ya dije" without overwriting data
     # -------------------------------------------------------------------------
     elif pending_field and is_non_informative_reply(user_message):
         return {
@@ -808,14 +827,12 @@ def process_escalation_turn(user_message: str, state: IncidentState, session_sta
         extracted = extract_incident_fields(user_message)
 
         # ---------------------------------------------------------------------
-        # Trust the user answer for the pending field strongly.
-        # This is the key to avoid loops.
+        # Trust the answer strongly when the bot had just asked for a field
         # ---------------------------------------------------------------------
         if pending_field == "software_involved":
             if not extracted["software_involved"]:
                 extracted["software_involved"] = user_text
 
-            # If the software phrase also contains a version like "Papercut MF 25.2"
             if not extracted["software_version"]:
                 version_only = re.search(r"\b\d+(?:\.\d+)+\b", user_message)
                 if version_only:
@@ -830,7 +847,7 @@ def process_escalation_turn(user_message: str, state: IncidentState, session_sta
                     extracted["software_version"] = user_text
 
         elif pending_field == "error_description":
-            # Always trust the full user answer as the symptom description
+            # Always trust the user's reply as the error/symptom if this was asked
             extracted["error_description"] = user_text
 
         elif pending_field == "actions_attempted":
@@ -849,15 +866,13 @@ def process_escalation_turn(user_message: str, state: IncidentState, session_sta
             extracted["impact_type"] = user_text
 
         # ---------------------------------------------------------------------
-        # Prevent unrelated fields from being polluted by a reply intended for
-        # another pending field.
+        # Avoid polluting unrelated fields
         # ---------------------------------------------------------------------
         if pending_field != "printer_data":
             if extracted.get("printer_data") == user_text and not looks_like_specific_printer_data(user_message):
                 extracted["printer_data"] = None
 
         if pending_field != "error_description":
-            # Keep auto-detected error only if it comes from a real error pattern
             if extracted.get("error_description") == user_text and pending_field == "actions_attempted":
                 extracted["error_description"] = None
 
