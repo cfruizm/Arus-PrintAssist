@@ -550,6 +550,16 @@ def extract_incident_fields(user_message: str):
         if software in text:
             extracted["software_involved"] = software
             break
+    
+    if any(expr in text for expr in [
+        "no puedo",
+        "no deja",
+        "no me permite",
+        "no aparece",
+        "no logro",
+        "no carga"
+    ]):
+        extracted["error_description"] = user_message.strip()
 
     version_match = VERSION_RE.search(user_message)
     if version_match:
@@ -621,17 +631,35 @@ Resumen del incidente:
     return summary.strip()
 
 
-def process_escalation_turn(user_message: str, state: IncidentState):
+def process_escalation_turn(user_message: str, state: IncidentState, session_state: ChatSessionState):
     extracted = extract_incident_fields(user_message)
     update_incident_state(state, extracted)
 
+    pending_field = getattr(session_state, "pending_incident_field", None)
+
+    if pending_field == "error_description" and not extracted["error_description"]:
+        extracted["error_description"] = user_message.strip()
+
+    elif pending_field == "software_involved" and not extracted["software_involved"]:
+        extracted["software_involved"] = user_message.strip()
+
+    elif pending_field == "actions_attempted" and not extracted["actions_attempted"]:
+        extracted["actions_attempted"] = [user_message.strip()]
+
+    elif pending_field == "printer_data" and not extracted["printer_data"]:
+        extracted["printer_data"] = user_message.strip()
+
+    update_incident_state(state, extracted)
+    
     missing_fields = get_missing_incident_fields(state)
 
     if missing_fields:
-        next_question = generate_escalation_followup(state)
+        next_field = missing_fields[0]
+        next_question = FIELD_QUESTIONS[next_field]
         return {
             "status": "collecting_information",
             "missing_fields": missing_fields,
+            "next_field": next_field,
             "next_question": next_question,
             "incident_state": state.to_dict(),
         }
@@ -738,13 +766,15 @@ def handle_escalation_message(user_message: str, session_state: ChatSessionState
     session_state.mode = "escalation"
     session_state.incident_state.escalation_requested = True
 
-    result = process_escalation_turn(user_message, session_state.incident_state)
+    result = process_escalation_turn(user_message, session_state.incident_state, session_state)
 
     if result["status"] == "collecting_information":
         bot_message = result["next_question"]
+        session_state.pending_incident_field = result["next_field"]
         session_state.memory.add_turn(user_message, bot_message)
         session_state.log_turn(user_message, bot_message, "escalation_collect")
         return bot_message
+    session_state.pending_incident_field = None
 
     summary = result["summary"]
     bot_message = (
