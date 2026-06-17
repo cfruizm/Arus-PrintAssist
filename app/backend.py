@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import os
-os.environ["PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION"] = "python
+#os.environ["PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION"] = "python
 
 import json
 import re
