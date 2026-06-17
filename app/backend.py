@@ -446,37 +446,81 @@ ESCALATION_TRIGGERS = [
     "no se resolvió",
 ]
 
+
+CORE_INCIDENT_FIELDS = [
+    "software_involved",
+    "error_description",
+    "actions_attempted",
+    "printer_data",
+]
+
+ENRICHMENT_INCIDENT_FIELDS = [
+    "software_version",
+    "contract_client_location",
+    "evidence",
+    "impact_type",
+]
+
 FIELD_QUESTIONS = {
     "software_involved": "¿Qué software o herramienta de impresión está involucrado en el incidente?",
-    "software_version": "¿Conoces la versión del software involucrado?",
+    "software_version": "¿Conoces la versión del software involucrado? Si la conoces, compártela; si no, escribe 'no'.",
     "actions_attempted": "¿Qué acciones o validaciones ya realizaste antes de este punto?",
     "error_description": "¿Cuál es el error exacto o síntoma principal que estás observando?",
     "printer_data": "¿Qué datos de la impresora puedes compartir (modelo, conexión, ubicación, etc.)?",
-    "contract_client_location": "¿Qué cliente, contrato o ubicación está asociado al caso?",
-    "evidence": "¿Tienes evidencia disponible, como capturas o mensajes de error?",
-    "impact_type": "¿Qué tipo de afectación genera este incidente?",
+    "contract_client_location": "¿Qué cliente, contrato o ubicación está asociado al caso? Si no aplica o no lo conoces, escribe 'no'.",
+    "evidence": "¿Deseas adjuntar o describir alguna evidencia, como capturas o mensajes de error? Si no tienes, escribe 'no'.",
+    "impact_type": "¿Qué tipo de afectación genera este incidente? Por ejemplo: un usuario, varios usuarios, dispositivo crítico, indisponibilidad total o intermitente.",
 }
 
+NO_VALUE_PATTERNS = [
+    "no",
+    "no aplica",
+    "no tengo",
+    "desconozco",
+    "no sé",
+    "no se",
+]
 
 def should_activate_escalation_mode(user_message: str) -> bool:
     text = user_message.lower()
     return any(trigger in text for trigger in ESCALATION_TRIGGERS)
 
-
 def get_missing_incident_fields(state: IncidentState):
+    """
+    Ask core fields first. Once core fields are complete,
+    continue with enrichment fields.
+    """
     missing = []
 
-    if not state.software_involved:
-        missing.append("software_involved")
-    if not state.error_description:
-        missing.append("error_description")
-    if not state.actions_attempted:
-        missing.append("actions_attempted")
-    if not state.printer_data:
-        missing.append("printer_data")
+    for field_name in CORE_INCIDENT_FIELDS:
+        value = getattr(state, field_name, None)
+        if not value:
+            missing.append(field_name)
+
+    # Only ask enrichment once the core block is complete
+    if not missing:
+        for field_name in ENRICHMENT_INCIDENT_FIELDS:
+            value = getattr(state, field_name, None)
+            if not value:
+                missing.append(field_name)
 
     return missing
 
+def is_no_value_answer(user_message: str) -> bool:
+    text = user_message.strip().lower()
+    return any(pattern == text or pattern in text for pattern in NO_VALUE_PATTERNS)
+
+
+def apply_no_value_to_field(state: IncidentState, field_name: str):
+    fallback_values = {
+        "software_version": "No especificada por el usuario",
+        "contract_client_location": "No especificado por el usuario",
+        "evidence": "No adjunta evidencia",
+        "impact_type": "No especificado por el usuario",
+    }
+
+    if field_name in fallback_values:
+        setattr(state, field_name, fallback_values[field_name])
 
 def generate_escalation_followup(state: IncidentState):
     missing = get_missing_incident_fields(state)
@@ -546,47 +590,121 @@ def extract_incident_fields(user_message: str):
         "impact_type": None,
     }
 
-    for software in KNOWN_SOFTWARE:
-        if software in text:
-            extracted["software_involved"] = software
-            break
-    
+    # -------------------------------------------------------------------------
+    # Detect software + version in compact expressions like:
+    # "Papercut MF 25.2"
+    # "SDS 7.2"
+    # -------------------------------------------------------------------------
+    papercut_match = re.search(
+        r"\b(papercut(?:\s+(?:mf|ng|hive|pocket|mobility print))?)\s+v?(\d+(?:\.\d+)+)\b",
+        user_message,
+        re.IGNORECASE
+    )
+    if papercut_match:
+        extracted["software_involved"] = papercut_match.group(1).strip().lower()
+        extracted["software_version"] = papercut_match.group(2).strip()
+
+    sds_match = re.search(
+        r"\b(hp smart device services|sds|web jetadmin|hp access control|gav tracking)\s+v?(\d+(?:\.\d+)+)\b",
+        user_message,
+        re.IGNORECASE
+    )
+    if sds_match:
+        extracted["software_involved"] = sds_match.group(1).strip().lower()
+        extracted["software_version"] = sds_match.group(2).strip()
+
+    # Detect software by known names if version pattern did not match
+    if not extracted["software_involved"]:
+        for software in KNOWN_SOFTWARE:
+            if software in text:
+                extracted["software_involved"] = software
+                break
+
+    # Detect version if sentence includes "version" explicitly
+    version_match = VERSION_RE.search(user_message)
+    if version_match and not extracted["software_version"]:
+        extracted["software_version"] = version_match.group(1)
+
+    # Detect attempted actions
+    detected_actions = [pattern for pattern in ACTION_PATTERNS if pattern in text]
+    if detected_actions:
+        extracted["actions_attempted"] = list(set(detected_actions))
+
+    # Detect error / symptom descriptions
+    if any(pattern in text for pattern in ERROR_PATTERNS):
+        extracted["error_description"] = user_message.strip()
+
+    # Additional symptom patterns without the word "error"
     if any(expr in text for expr in [
         "no puedo",
         "no deja",
         "no me permite",
         "no aparece",
         "no logro",
-        "no carga"
+        "no carga",
+        "se detiene",
+        "se cae",
+        "no registra",
+        "no agrega",
+        "no detecta",
+        "no encuentra",
     ]):
         extracted["error_description"] = user_message.strip()
 
-    version_match = VERSION_RE.search(user_message)
-    if version_match:
-        extracted["software_version"] = version_match.group(1)
-
-    detected_actions = [pattern for pattern in ACTION_PATTERNS if pattern in text]
-    if detected_actions:
-        extracted["actions_attempted"] = list(set(detected_actions))
-
-    if any(pattern in text for pattern in ERROR_PATTERNS):
-        extracted["error_description"] = user_message.strip()
-
-    if "impresora" in text or "printer" in text:
+    # Printer data
+    if (
+        "impresora" in text
+        or "printer" in text
+        or "laserjet" in text
+        or "officejet" in text
+        or "multifuncional" in text
+        or "hp " in text
+    ):
         extracted["printer_data"] = user_message.strip()
 
-    if any(loc_term in text for loc_term in ["cliente", "contrato", "sede", "ubicación", "ubicacion"]):
+    # Client / contract / location
+    if any(term in text for term in [
+        "cliente",
+        "contrato",
+        "sede",
+        "ubicación",
+        "ubicacion",
+        "site",
+        "oficina",
+    ]):
         extracted["contract_client_location"] = user_message.strip()
 
-    if any(ev in text for ev in ["captura", "screenshot", "evidencia", "log"]):
+    # Evidence
+    if any(term in text for term in [
+        "captura",
+        "screenshot",
+        "pantallazo",
+        "evidencia",
+        "log",
+        "adjunto",
+        "mensaje de error",
+    ]):
         extracted["evidence"] = user_message.strip()
 
-    if any(im in text for im in ["no imprime", "caído", "caido", "afecta"]):
+    # Impact
+    if any(term in text for term in [
+        "afecta",
+        "varios usuarios",
+        "muchos usuarios",
+        "un usuario",
+        "todos los usuarios",
+        "dispositivo crítico",
+        "dispositivo critico",
+        "indisponibilidad",
+        "intermitente",
+        "no imprime",
+        "operación detenida",
+        "operacion detenida",
+    ]):
         extracted["impact_type"] = user_message.strip()
 
     return extracted
-
-
+    
 def update_incident_state(state: IncidentState, extracted_fields: dict):
     if extracted_fields["software_involved"] and not state.software_involved:
         state.software_involved = extracted_fields["software_involved"]
@@ -633,24 +751,47 @@ Resumen del incidente:
 
 def process_escalation_turn(user_message: str, state: IncidentState, session_state: ChatSessionState):
     extracted = extract_incident_fields(user_message)
-    update_incident_state(state, extracted)
 
     pending_field = getattr(session_state, "pending_incident_field", None)
 
-    if pending_field == "error_description" and not extracted["error_description"]:
-        extracted["error_description"] = user_message.strip()
+    # If the user answered "no", "no aplica", etc. for the pending field,
+    # mark that field as explicitly unavailable so we do not ask again.
+    if pending_field and is_no_value_answer(user_message):
+        apply_no_value_to_field(state, pending_field)
+    else:
+        # If the bot had just asked for a specific missing field,
+        # trust the answer even if extraction is imperfect.
+        if pending_field == "error_description" and not extracted["error_description"]:
+            extracted["error_description"] = user_message.strip()
 
-    elif pending_field == "software_involved" and not extracted["software_involved"]:
-        extracted["software_involved"] = user_message.strip()
+        elif pending_field == "software_involved" and not extracted["software_involved"]:
+            extracted["software_involved"] = user_message.strip()
 
-    elif pending_field == "actions_attempted" and not extracted["actions_attempted"]:
-        extracted["actions_attempted"] = [user_message.strip()]
+        elif pending_field == "software_version" and not extracted["software_version"]:
+            # try to extract a version-like token if user only sent "25.2"
+            version_only = re.search(r"\b\d+(?:\.\d+)+\b", user_message)
+            if version_only:
+                extracted["software_version"] = version_only.group(0)
+            else:
+                extracted["software_version"] = user_message.strip()
 
-    elif pending_field == "printer_data" and not extracted["printer_data"]:
-        extracted["printer_data"] = user_message.strip()
+        elif pending_field == "actions_attempted" and not extracted["actions_attempted"]:
+            extracted["actions_attempted"] = [user_message.strip()]
 
-    update_incident_state(state, extracted)
-    
+        elif pending_field == "printer_data" and not extracted["printer_data"]:
+            extracted["printer_data"] = user_message.strip()
+
+        elif pending_field == "contract_client_location" and not extracted["contract_client_location"]:
+            extracted["contract_client_location"] = user_message.strip()
+
+        elif pending_field == "evidence" and not extracted["evidence"]:
+            extracted["evidence"] = user_message.strip()
+
+        elif pending_field == "impact_type" and not extracted["impact_type"]:
+            extracted["impact_type"] = user_message.strip()
+
+        update_incident_state(state, extracted)
+
     missing_fields = get_missing_incident_fields(state)
 
     if missing_fields:
@@ -671,8 +812,7 @@ def process_escalation_turn(user_message: str, state: IncidentState, session_sta
         "summary": summary,
         "incident_state": state.to_dict(),
     }
-
-
+    
 # -----------------------------------------------------------------------------
 # Logging / persistence
 # -----------------------------------------------------------------------------
@@ -756,17 +896,26 @@ def ensure_session_state_integrity(session_state: ChatSessionState):
     if getattr(session_state, "incident_state", None) is None:
         session_state.incident_state = IncidentState()
 
+    if getattr(session_state, "pending_incident_field", None) is None:
+        session_state.pending_incident_field = None
+
     return session_state
 
 # -----------------------------------------------------------------------------
 # Routing
 # -----------------------------------------------------------------------------
+
 def handle_escalation_message(user_message: str, session_state: ChatSessionState):
     session_state = ensure_session_state_integrity(session_state)
+
     session_state.mode = "escalation"
     session_state.incident_state.escalation_requested = True
 
-    result = process_escalation_turn(user_message, session_state.incident_state, session_state)
+    result = process_escalation_turn(
+        user_message,
+        session_state.incident_state,
+        session_state
+    )
 
     if result["status"] == "collecting_information":
         bot_message = result["next_question"]
@@ -774,6 +923,7 @@ def handle_escalation_message(user_message: str, session_state: ChatSessionState
         session_state.memory.add_turn(user_message, bot_message)
         session_state.log_turn(user_message, bot_message, "escalation_collect")
         return bot_message
+
     session_state.pending_incident_field = None
 
     summary = result["summary"]
@@ -787,7 +937,6 @@ def handle_escalation_message(user_message: str, session_state: ChatSessionState
     session_state.memory.add_turn(user_message, bot_message)
     session_state.log_turn(user_message, bot_message, "escalation_summary")
     return bot_message
-
 
 def handle_normal_message(user_message: str, session_state: ChatSessionState):
     bot_message = generate_answer_with_rag(
