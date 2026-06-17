@@ -764,3 +764,34 @@ def route_user_message(user_message: str, session_state: ChatSessionState):
 
     # 4. Normal RAG flow
     return handle_normal_message(user_message, session_state)
+
+def get_backend_status():
+    status = {
+        "vectorstore_ok": False,
+        "embedding_ok": False,
+        "hf_client_ok": False,
+        "error": None,
+    }
+
+    try:
+        _ = get_embedding_model()
+        status["embedding_ok"] = True
+    except Exception as e:
+        status["error"] = f"Embedding model error: {e}"
+        return status
+
+    try:
+        _ = get_vectorstore()
+        status["vectorstore_ok"] = True
+    except Exception as e:
+        status["error"] = f"Vector store error: {e}"
+        return status
+
+    try:
+        hf_client = get_hf_client()
+        status["hf_client_ok"] = hf_client is not None
+    except Exception as e:
+        status["error"] = f"HF client error: {e}"
+        return status
+
+    return status
