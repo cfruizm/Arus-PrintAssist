@@ -3,6 +3,9 @@
 
 from __future__ import annotations
 
+import os
+os.environ["PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION"] = "python
+
 import json
 import re
 from datetime import datetime
@@ -10,7 +13,7 @@ from pathlib import Path
 
 import streamlit as st
 from huggingface_hub import InferenceClient
-from langchain_community.vectorstores import Chroma
+from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
 
 from app.config import CONFIG, LLM_CONFIG, RUNTIME_DIR
