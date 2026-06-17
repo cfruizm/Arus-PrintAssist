@@ -710,11 +710,31 @@ def finalize_escalation_case(session_state: ChatSessionState):
         "exported_file": str(exported_file),
     }
 
+def ensure_session_state_integrity(session_state: ChatSessionState):
+    """
+    Ensure the session state always has the required backend attributes.
+    This prevents failures when an old Streamlit session survives code updates.
+    """
+    if getattr(session_state, "mode", None) is None:
+        session_state.mode = "normal"
+
+    if getattr(session_state, "memory", None) is None:
+        from app.session_state import RollingConversationMemory
+        session_state.memory = RollingConversationMemory(max_turns=4)
+
+    if getattr(session_state, "logs", None) is None:
+        session_state.logs = []
+
+    if getattr(session_state, "incident_state", None) is None:
+        session_state.incident_state = IncidentState()
+
+    return session_state
 
 # -----------------------------------------------------------------------------
 # Routing
 # -----------------------------------------------------------------------------
 def handle_escalation_message(user_message: str, session_state: ChatSessionState):
+    session_state = ensure_session_state_integrity(session_state)
     session_state.mode = "escalation"
     session_state.incident_state.escalation_requested = True
 
@@ -749,7 +769,10 @@ def handle_normal_message(user_message: str, session_state: ChatSessionState):
     return bot_message
 
 
+
 def route_user_message(user_message: str, session_state: ChatSessionState):
+    session_state = ensure_session_state_integrity(session_state)
+
     # 1. If escalation mode is already active, continue it
     if session_state.mode == "escalation":
         return handle_escalation_message(user_message, session_state)
