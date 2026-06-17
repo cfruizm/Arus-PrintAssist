@@ -304,7 +304,80 @@ def compute_rerank_score(query: str, doc):
 
     return score
 
+def compute_keyword_overlap_ratio(query: str, content: str) -> float:
+    query_tokens = [tok for tok in re.findall(r"\w+", query.lower()) if len(tok) > 2]
+    if not query_tokens:
+        return 0.0
 
+    overlap = sum(1 for tok in query_tokens if tok in content.lower())
+    return overlap / max(len(query_tokens), 1)
+
+def assess_retrieval_support(query: str, docs: list) -> dict:
+    """
+    Determine whether the retrieved context is strong enough to answer
+    only with RAG, or whether a controlled fallback may be needed.
+    """
+    if not docs:
+        return {
+            "support_level": "none",
+            "top_score": 0.0,
+            "avg_overlap": 0.0,
+        }
+
+    scores = [compute_rerank_score(query, doc) for doc in docs]
+    overlaps = [compute_keyword_overlap_ratio(query, doc.page_content) for doc in docs]
+
+    top_score = max(scores) if scores else 0.0
+    avg_overlap = sum(overlaps) / len(overlaps) if overlaps else 0.0
+
+    if top_score >= 6.0 and avg_overlap >= 0.15:
+        support_level = "strong"
+    elif top_score >= 4.0 and avg_overlap >= 0.08:
+        support_level = "partial"
+    else:
+        support_level = "weak"
+
+    return {
+        "support_level": support_level,
+        "top_score": round(top_score, 3),
+        "avg_overlap": round(avg_overlap, 3),
+    }
+
+def is_low_risk_general_query(user_query: str) -> bool:
+    """
+    Allow controlled general fallback only for lower-risk queries,
+    such as definitions, concepts, basic explanations, or general guidance.
+    """
+    text = user_query.lower()
+
+    low_risk_patterns = [
+        "qué es",
+        "que es",
+        "para qué sirve",
+        "para que sirve",
+        "cómo funciona",
+        "como funciona",
+        "explica",
+        "diferencia entre",
+        "requerimientos",
+        "requisitos",
+        "monitor",
+        "qué hace",
+        "que hace",
+    ]
+
+    return any(pattern in text for pattern in low_risk_patterns)
+
+def should_use_general_fallback(user_query: str, support_info: dict) -> bool:
+    """
+    Use controlled model fallback only when retrieval support is not strong
+    and the question is low-risk.
+    """
+    if support_info["support_level"] == "strong":
+        return False
+
+    return is_low_risk_general_query(user_query)
+    
 def retrieve_context(query: str, top_k: int = 4):
     vectorstore = get_vectorstore()
     profile = detect_query_profile(query)
@@ -372,7 +445,32 @@ Debes seguir estrictamente estas reglas:
 """
 
 
-def build_rag_messages(user_query: str, retrieved_context: str, memory_text: str):
+def build_rag_messages(
+    user_query: str,
+    retrieved_context: str,
+    memory_text: str,
+    support_level: str = "strong",
+    allow_general_fallback: bool = False,
+):
+    fallback_instruction = ""
+
+    if allow_general_fallback:
+        fallback_instruction = """
+### INSTRUCCIÓN ADICIONAL
+El contexto recuperado es útil pero no completamente suficiente.
+Debes usar el contexto recuperado como fuente principal.
+Solo si hace falta, puedes complementar con orientación general de bajo riesgo basada en tu conocimiento interno.
+Si lo haces, debes dejarlo claro en la respuesta usando la sección:
+Nota:
+- Explica brevemente qué parte se apoya en orientación general y no directamente en la base documental.
+"""
+    else:
+        fallback_instruction = """
+### INSTRUCCIÓN ADICIONAL
+Debes responder únicamente con base en el contexto recuperado.
+Si el contexto no es suficiente, debes decirlo claramente y no inventar procedimientos ni pasos.
+"""
+
     user_content = f"""
 ### MEMORIA CORTA DE LA CONVERSACIÓN
 {memory_text}
@@ -383,19 +481,32 @@ def build_rag_messages(user_query: str, retrieved_context: str, memory_text: str
 ### PREGUNTA DEL USUARIO
 {user_query}
 
+### NIVEL DE SOPORTE DEL CONTEXTO
+{support_level}
+
 ### FORMATO DE RESPUESTA
 Responde con esta estructura:
 
 Respuesta:
-- Explica la respuesta solo con base en el contexto recuperado.
+- Explica la respuesta de forma clara y profesional.
 
 Fuente(s):
 - Menciona brevemente el documento o fuente principal utilizada.
 
-Limitación:
-- Si el contexto no es suficiente, dilo claramente.
-- Si la pregunta requiere una definición general y el contexto solo permite una respuesta parcial, indícalo.
 """
+
+    if allow_general_fallback:
+        user_content += """
+Nota:
+- Solo si fue necesario complementar con orientación general, indícalo aquí.
+"""
+    else:
+        user_content += """
+Limitación:
+- Si el contexto no es suficiente, dilo claramente aquí.
+"""
+
+    user_content += fallback_instruction
 
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
@@ -403,7 +514,6 @@ Limitación:
     ]
 
     return messages
-
 
 def generate_answer_with_rag(user_query: str, memory):
     hf_client = get_hf_client()
@@ -419,8 +529,18 @@ def generate_answer_with_rag(user_query: str, memory):
         top_k=CONFIG["retrieval_top_k"]
     )
 
+    support_info = assess_retrieval_support(user_query, retrieved_docs)
+    allow_general_fallback = should_use_general_fallback(user_query, support_info)
+
     memory_text = memory.format_history()
-    messages = build_rag_messages(user_query, retrieved_context, memory_text)
+
+    messages = build_rag_messages(
+        user_query=user_query,
+        retrieved_context=retrieved_context,
+        memory_text=memory_text,
+        support_level=support_info["support_level"],
+        allow_general_fallback=allow_general_fallback,
+    )
 
     response = hf_client.chat_completion(
         messages=messages,
@@ -432,8 +552,6 @@ def generate_answer_with_rag(user_query: str, memory):
     memory.add_turn(user_query, answer)
 
     return answer
-
-
 # -----------------------------------------------------------------------------
 # Escalation logic
 # -----------------------------------------------------------------------------
