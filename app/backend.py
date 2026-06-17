@@ -428,20 +428,24 @@ Eres Arus PrintAssist, un asistente especializado exclusivamente en soporte de p
 
 Tu función es:
 - responder preguntas sobre impresoras, software de impresión y herramientas del servicio,
+- Compartir documentación relevante sobre el uso y solución de problemas de los servicios de impresión,
+- Priorizar la privacidad y seguridad de los datos del usuario.
 - orientar diagnósticos básicos de primer nivel,
-- usar únicamente la información contenida en el contexto recuperado,
+- usar la base documental disponible como fuente principal,
 - ayudar a estructurar un resumen de incidente si el caso requiere escalamiento.
 
 Debes seguir estrictamente estas reglas:
 - Responde únicamente sobre temas relacionados con impresión, software de impresión, herramientas del servicio y procedimientos técnicos.
 - No respondas preguntas fuera de alcance.
-- No inventes información.
-- No completes con conocimiento general si el contexto recuperado no lo respalda claramente.
-- Si el contexto no es suficiente para responder con precisión, dilo explícitamente.
-- Si la pregunta pide una definición general y el contexto solo contiene instrucciones operativas, indícalo claramente.
+- No inventes procedimientos críticos si la información disponible no es suficiente.
+- Si hace falta complementar una explicación general, hazlo de forma prudente y útil, sin explicar internamente cómo construiste la respuesta.
+- No menciones RAG, contexto recuperado, fallback, modelo ni arquitectura interna.
 - Responde en español.
-- Mantén un tono cordial, claro y profesional.
-- Cuando sea posible, menciona brevemente la fuente o el tipo de documento usado.
+- Mantén un tono cordial, claro, profesional y orientado a resolver la necesidad del usuario.
+- La respuesta debe priorizar utilidad práctica.
+- Si la información disponible no es suficiente para responder con plena precisión, indícalo solo de forma breve y natural al final usando:
+  Aviso: ...
+- No uses los encabezados "Limitación" ni "Nota".
 """
 
 
@@ -456,57 +460,50 @@ def build_rag_messages(
 
     if allow_general_fallback:
         fallback_instruction = """
-### INSTRUCCIÓN ADICIONAL
-El contexto recuperado es útil pero no completamente suficiente.
-Debes usar el contexto recuperado como fuente principal.
-Solo si hace falta, puedes complementar con orientación general de bajo riesgo basada en tu conocimiento interno.
-Si lo haces, debes dejarlo claro en la respuesta usando la sección:
-Nota:
-- Explica brevemente qué parte se apoya en orientación general y no directamente en la base documental.
+La base documental disponible es útil pero no completamente suficiente.
+Úsala como fuente principal.
+Si hace falta, puedes complementar con orientación general de bajo riesgo para responder de forma más útil.
+No expliques al usuario que estás usando fallback ni que estás combinando fuentes internas y externas.
 """
     else:
         fallback_instruction = """
-### INSTRUCCIÓN ADICIONAL
-Debes responder únicamente con base en el contexto recuperado.
-Si el contexto no es suficiente, debes decirlo claramente y no inventar procedimientos ni pasos.
+Debes basar tu respuesta principalmente en la información documental disponible.
+Si la información no es suficiente para responder con precisión, no inventes pasos críticos.
 """
 
     user_content = f"""
 ### MEMORIA CORTA DE LA CONVERSACIÓN
 {memory_text}
 
-### CONTEXTO RECUPERADO
+### INFORMACIÓN DISPONIBLE
 {retrieved_context}
 
 ### PREGUNTA DEL USUARIO
 {user_query}
 
-### NIVEL DE SOPORTE DEL CONTEXTO
+### NIVEL DE SOPORTE DOCUMENTAL
 {support_level}
 
 ### FORMATO DE RESPUESTA
-Responde con esta estructura:
+Responde usando este formato exacto:
 
 Respuesta:
-- Explica la respuesta de forma clara y profesional.
+- Da una respuesta clara, útil y orientada a resolver la necesidad del usuario.
 
 Fuente(s):
-- Menciona brevemente el documento o fuente principal utilizada.
+- Menciona brevemente la fuente o documento principal utilizado.
 
-"""
+### REGLAS DE ESTILO
+- No menciones limitaciones salvo que sea realmente necesario.
+- No uses las etiquetas "Limitación" ni "Nota".
+- Si hace falta advertir algo importante, añade solo una línea final como:
+Aviso: ...
+- No expliques tu proceso interno.
+- No menciones contexto recuperado, RAG, fallback ni modelo.
 
-    if allow_general_fallback:
-        user_content += """
-Nota:
-- Solo si fue necesario complementar con orientación general, indícalo aquí.
+### INSTRUCCIÓN ADICIONAL
+{fallback_instruction}
 """
-    else:
-        user_content += """
-Limitación:
-- Si el contexto no es suficiente, dilo claramente aquí.
-"""
-
-    user_content += fallback_instruction
 
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
@@ -514,14 +511,62 @@ Limitación:
     ]
 
     return messages
+def clean_user_facing_answer(answer: str) -> str:
+    """
+    Clean the final answer so the user sees a simpler and more natural output.
+    - Remove explicit internal-style sections like 'Limitación:' or 'Nota:'
+    - Convert them into a short 'Aviso:' line only when useful
+    """
+    text = answer.strip()
+
+    # Normalize heading variants
+    text = re.sub(r"^\s*nota\s*:\s*", "Aviso: ", text, flags=re.IGNORECASE | re.MULTILINE)
+    text = re.sub(r"^\s*limitaci[oó]n\s*:\s*", "Aviso: ", text, flags=re.IGNORECASE | re.MULTILINE)
+
+    # Remove repeated blank lines
+    text = re.sub(r"\n{3,}", "\n\n", text)
+
+    # If multiple "Aviso:" lines exist, keep them but make formatting compact
+    lines = [line.rstrip() for line in text.splitlines()]
+    cleaned_lines = []
+
+    aviso_buffer = []
+
+    for line in lines:
+        stripped = line.strip()
+
+        if not stripped:
+            cleaned_lines.append("")
+            continue
+
+        if stripped.lower().startswith("aviso:"):
+            aviso_buffer.append(stripped)
+        else:
+            cleaned_lines.append(line)
+
+    # Keep only one compact aviso block at the end if any aviso exists
+    final_text = "\n".join(cleaned_lines).strip()
+
+    if aviso_buffer:
+        unique_avisos = []
+        for aviso in aviso_buffer:
+            if aviso not in unique_avisos:
+                unique_avisos.append(aviso)
+
+        final_text += "\n\n" + "\n".join(unique_avisos)
+
+    # Final tidy-up
+    final_text = re.sub(r"\n{3,}", "\n\n", final_text).strip()
+
+    return final_text
 
 def generate_answer_with_rag(user_query: str, memory):
     hf_client = get_hf_client()
 
     if hf_client is None:
         return (
-            "El backend está listo, pero no se encontró HF_TOKEN en st.secrets. "
-            "Configura el secreto en Streamlit Community Cloud para habilitar la generación."
+            "No fue posible generar la respuesta porque falta la configuración "
+            "del servicio de inferencia."
         )
 
     retrieved_context, retrieved_docs = retrieve_context(
@@ -549,6 +594,8 @@ def generate_answer_with_rag(user_query: str, memory):
     )
 
     answer = response.choices[0].message.content.strip()
+    answer = clean_user_facing_answer(answer)
+
     memory.add_turn(user_query, answer)
 
     return answer
