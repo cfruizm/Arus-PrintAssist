@@ -76,6 +76,18 @@ with st.sidebar:
     mode = getattr(st.session_state.chat_state, "mode", "normal")
     st.write(f"**Modo actual:** {mode}")
 
+    if backend_is_ready():
+        st.success("Backend ready")
+    else:
+        st.warning("Backend not ready")
+
+        try:
+            from app.backend import get_backend_status
+            status = get_backend_status()
+            st.json(status)
+        except Exception as e:
+            st.error(f"No fue posible obtener el estado del backend: {e}")
+
     if st.button("Nueva conversación"):
         if reset_chat_session_state is not None:
             st.session_state.chat_state = reset_chat_session_state()
