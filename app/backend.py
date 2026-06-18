@@ -358,7 +358,13 @@ def assess_retrieval_support(query: str, docs: list) -> dict:
         "top_score": round(top_score, 3),
         "avg_overlap": round(avg_overlap, 3),
     }
-def classify_query_intent(user_query: str) -> str:def classify_query_intent(user_query: str    """
+def classify_query_intent(user_query: str) -> str:
+    """
+    Classify the query into:
+    - conceptual
+    - procedural
+    - troubleshooting
+    """
     text = user_query.lower()
 
     procedural_patterns = [
@@ -420,12 +426,6 @@ def classify_query_intent(user_query: str) -> str:def classify_query_intent(user
         return "conceptual"
 
     return "procedural"
-
-    """
-    Classify the query into:
-    - conceptual
-    - procedural
-    - troubleshooting
 
 def has_hard_documentary_anchor(user_query: str, docs: list) -> bool:
     """
