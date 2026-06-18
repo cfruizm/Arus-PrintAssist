@@ -770,28 +770,7 @@ Fuente(s):
 
 Aviso: La base documental actual no ofrece soporte suficientemente claro para dar un procedimiento preciso."""
 
-def generate_answer_with_rag(user_query: str, memory):def generate_answer_with_ragallback=allow_general_fallback,
-        real_source_labels=real_source_labels,
-    )
-
-    response = hf_client.chat_completion(
-        messages=messages,
-        max_tokens=LLM_CONFIG["max_tokens"],
-        temperature=LLM_CONFIG["temperature"]
-    )
-
-    answer = response.choices[0].message.content.strip()
-    answer = clean_user_facing_answer(answer)
-    answer = enforce_real_source_traceability(
-        answer=answer,
-        real_source_labels=real_source_labels,
-        support_info=support_info,
-        user_query=user_query,
-    )
-
-    memory.add_turn(user_query, answer)
-
-    return answer
+def generate_answer_with_rag(user_query: str, memory):
     hf_client = get_hf_client()
 
     if hf_client is None:
@@ -833,6 +812,36 @@ def generate_answer_with_rag(user_query: str, memory):def generate_answer_with_r
         memory.add_turn(user_query, answer)
         return answer
 
+    memory_text = memory.format_history()
+
+    messages = build_rag_messages(
+        user_query=user_query,
+        retrieved_context=retrieved_context,
+        memory_text=memory_text,
+        support_level=support_info["support_level"],
+        allow_general_fallback=allow_general_fallback,
+        real_source_labels=real_source_labels,
+    )
+
+    response = hf_client.chat_completion(
+        messages=messages,
+        max_tokens=LLM_CONFIG["max_tokens"],
+        temperature=LLM_CONFIG["temperature"]
+    )
+
+    answer = response.choices[0].message.content.strip()
+    answer = clean_user_facing_answer(answer)
+    answer = enforce_real_source_traceability(
+        answer=answer,
+        real_source_labels=real_source_labels,
+        support_info=support_info,
+        user_query=user_query,
+    )
+
+    memory.add_turn(user_query, answer)
+
+    return answer
+    
     memory_text = memory.format_history()
 
     messages = build_rag_messages(
