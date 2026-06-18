@@ -358,6 +358,124 @@ def assess_retrieval_support(query: str, docs: list) -> dict:
         "top_score": round(top_score, 3),
         "avg_overlap": round(avg_overlap, 3),
     }
+def classify_query_intent(user_query: str) -> str:def classify_query_intent(user_query: str    """
+    text = user_query.lower()
+
+    procedural_patterns = [
+        "cómo instalar",
+        "como instalar",
+        "cómo agregar",
+        "como agregar",
+        "cómo incorporar",
+        "como incorporar",
+        "cómo configurar",
+        "como configurar",
+        "cómo habilitar",
+        "como habilitar",
+        "cómo crear",
+        "como crear",
+        "qué requerimientos",
+        "que requerimientos",
+        "qué requisitos",
+        "que requisitos",
+    ]
+
+    troubleshooting_patterns = [
+        "qué hacer si",
+        "que hacer si",
+        "error",
+        "falla",
+        "cola",
+        "atasco",
+        "offline",
+        "desaparecen trabajos",
+        "disappearing",
+        "stuck",
+        "not held",
+        "cannot add",
+        "no puedo",
+        "no deja",
+    ]
+
+    conceptual_patterns = [
+        "qué es",
+        "que es",
+        "para qué sirve",
+        "para que sirve",
+        "cómo funciona",
+        "como funciona",
+        "qué hace",
+        "que hace",
+        "explica",
+        "diferencia entre",
+    ]
+
+    if any(pattern in text for pattern in procedural_patterns):
+        return "procedural"
+
+    if any(pattern in text for pattern in troubleshooting_patterns):
+        return "troubleshooting"
+
+    if any(pattern in text for pattern in conceptual_patterns):
+        return "conceptual"
+
+    return "procedural"
+
+    """
+    Classify the query into:
+    - conceptual
+    - procedural
+    - troubleshooting
+def has_hard_documentary_anchor(user_query: str, docs: list) -> bool:
+    """
+    Determine whether the retrieved docs contain enough concrete support
+    for a procedural or troubleshooting answer.
+    """
+    if not docs:
+        return False
+
+    text = user_query.lower()
+
+    query_terms = []
+    if "papercut" in text:
+        query_terms.append("papercut")
+    if "hp" in text:
+        query_terms.append("hp")
+    if "sds" in text:
+        query_terms.append("sds")
+    if "web jet admin" in text or "web jetadmin" in text:
+        query_terms.append("web jetadmin")
+    if "oxp" in text:
+        query_terms.append("oxp")
+
+    action_terms = [
+        "install",
+        "instal",
+        "configure",
+        "configur",
+        "add",
+        "agreg",
+        "incorpor",
+        "device",
+        "printer",
+        "queue",
+        "embedded",
+        "release",
+        "authentication",
+        "oxp",
+    ]
+
+    for doc in docs:
+        content = doc.page_content.lower()
+        meta = doc.metadata
+
+        query_match = any(term in content or term in str(meta).lower() for term in query_terms) if query_terms else True
+        action_match = any(term in content for term in action_terms)
+
+        if query_match and action_match:
+            return True
+
+    return False
 
 def is_low_risk_general_query(user_query: str) -> bool:
     """
@@ -386,13 +504,18 @@ def is_low_risk_general_query(user_query: str) -> bool:
 
 def should_use_general_fallback(user_query: str, support_info: dict) -> bool:
     """
-    Use controlled model fallback only when retrieval support is not strong
-    and the question is low-risk.
+    Only conceptual queries may use controlled general fallback.
+    Procedural and troubleshooting queries must remain grounded.
     """
+    intent = classify_query_intent(user_query)
+
+    if intent != "conceptual":
+        return False
+
     if support_info["support_level"] == "strong":
         return False
 
-    return is_low_risk_general_query(user_query)
+    return True
     
 def retrieve_context(query: str, top_k: int = 4):
     vectorstore = get_vectorstore()
@@ -596,37 +719,40 @@ def answer_uses_fake_generic_sources(answer: str) -> bool:
 
 def enforce_real_source_traceability(answer: str, real_source_labels: list[str], support_info: dict, user_query: str) -> str:
     """
-    Replace invented or generic sources with real retrieved source labels.
-    If support is weak, force a conservative source section.
+    Always rebuild the source section from real retrieved labels only.
+    Never trust the model to invent source names.
     """
     text = answer.strip()
 
-    # Split answer in a soft way
-    parts = re.split(r"\n\s*fuente\(s\)\s*:\s*", text, flags=re.IGNORECASE)
-    response_part = parts[0].strip()
+    # Extract avisos if present
+    aviso_lines = []
+    for line in text.splitlines():
+        if line.strip().lower().startswith("aviso:"):
+            aviso_lines.append(line.strip())
 
+    # Keep only the core response before any 'Fuente(s):'
+    split_parts = re.split(r"\n\s*fuente\(s\)\s*:\s*", text, flags=re.IGNORECASE)
+    response_part = split_parts[0].strip()
+
+    # Build trusted source block
     if support_info["support_level"] == "weak":
-        forced_sources = "Fuente(s):\n- Base de conocimiento actual sin coincidencias documentales suficientes"
-        return f"{response_part}\n\n{forced_sources}"
-
-    # If the model invented generic sources, overwrite them
-    if answer_uses_fake_generic_sources(text):
+        source_block = "Fuente(s):\n- Base de conocimiento actual sin coincidencias documentales suficientes"
+    else:
         if real_source_labels:
-            real_sources_block = "Fuente(s):\n" + "\n".join(f"- {label}" for label in real_source_labels[:3])
+            source_block = "Fuente(s):\n" + "\n".join(f"- {label}" for label in real_source_labels[:3])
         else:
-            real_sources_block = "Fuente(s):\n- Base de conocimiento actual sin coincidencias documentales suficientes"
-        return f"{response_part}\n\n{real_sources_block}"
+            source_block = "Fuente(s):\n- Base de conocimiento actual sin coincidencias documentales suficientes"
 
-    # If the model returned no source section at all, add one
-    if len(parts) == 1:
-        if real_source_labels:
-            real_sources_block = "Fuente(s):\n" + "\n".join(f"- {label}" for label in real_source_labels[:3])
-        else:
-            real_sources_block = "Fuente(s):\n- Base de conocimiento actual sin coincidencias documentales suficientes"
-        return f"{response_part}\n\n{real_sources_block}"
+    final_text = f"{response_part}\n\n{source_block}"
 
-    return text
+    if aviso_lines:
+        unique_avisos = []
+        for aviso in aviso_lines:
+            if aviso not in unique_avisos:
+                unique_avisos.append(aviso)
+        final_text += "\n\n" + "\n".join(unique_avisos)
 
+    return final_text.strip()
 
 def build_conservative_no_support_answer(user_query: str, real_source_labels: list[str] | None = None) -> str:
     """
@@ -644,44 +770,7 @@ Fuente(s):
 
 Aviso: La base documental actual no ofrece soporte suficientemente claro para dar un procedimiento preciso."""
 
-def generate_answer_with_rag(user_query: str, memory):
-    hf_client = get_hf_client()
-
-    if hf_client is None:
-        return (
-            "No fue posible generar la respuesta porque falta la configuración "
-            "del servicio de inferencia."
-        )
-
-    retrieved_context, retrieved_docs = retrieve_context(
-        user_query,
-        top_k=CONFIG["retrieval_top_k"]
-    )
-
-    support_info = assess_retrieval_support(user_query, retrieved_docs)
-    allow_general_fallback = should_use_general_fallback(user_query, support_info)
-    real_source_labels = build_real_source_labels(retrieved_docs)
-
-    # -------------------------------------------------------------------------
-    # Hard grounding rule:
-    # If support is weak and the query is not low-risk, do not let the model improvise.
-    # -------------------------------------------------------------------------
-    if support_info["support_level"] == "weak" and not allow_general_fallback:
-        answer = build_conservative_no_support_answer(
-            user_query=user_query,
-            real_source_labels=real_source_labels,
-        )
-        memory.add_turn(user_query, answer)
-        return answer
-
-    memory_text = memory.format_history()
-
-    messages = build_rag_messages(
-        user_query=user_query,
-        retrieved_context=retrieved_context,
-        memory_text=memory_text,
-        support_level=support_info["support_level"],
-        allow_general_fallback=allow_general_fallback,
+def generate_answer_with_rag(user_query: str, memory):def generate_answer_with_ragallback=allow_general_fallback,
         real_source_labels=real_source_labels,
     )
 
@@ -703,6 +792,55 @@ def generate_answer_with_rag(user_query: str, memory):
     memory.add_turn(user_query, answer)
 
     return answer
+    hf_client = get_hf_client()
+
+    if hf_client is None:
+        return (
+            "No fue posible generar la respuesta porque falta la configuración "
+            "del servicio de inferencia."
+        )
+
+    retrieved_context, retrieved_docs = retrieve_context(
+        user_query,
+        top_k=CONFIG["retrieval_top_k"]
+    )
+
+    support_info = assess_retrieval_support(user_query, retrieved_docs)
+    real_source_labels = build_real_source_labels(retrieved_docs)
+
+    query_intent = classify_query_intent(user_query)
+    allow_general_fallback = should_use_general_fallback(user_query, support_info)
+    hard_anchor = has_hard_documentary_anchor(user_query, retrieved_docs)
+
+    # -------------------------------------------------------------------------
+    # Hard grounding rules
+    # -------------------------------------------------------------------------
+    # 1. Procedural or troubleshooting queries must not improvise without strong anchor
+    if query_intent in {"procedural", "troubleshooting"} and not hard_anchor:
+        answer = build_conservative_no_support_answer(
+            user_query=user_query,
+            real_source_labels=real_source_labels,
+        )
+        memory.add_turn(user_query, answer)
+        return answer
+
+    # 2. Weak support on non-conceptual queries -> conservative answer
+    if support_info["support_level"] == "weak" and query_intent != "conceptual":
+        answer = build_conservative_no_support_answer(
+            user_query=user_query,
+            real_source_labels=real_source_labels,
+        )
+        memory.add_turn(user_query, answer)
+        return answer
+
+    memory_text = memory.format_history()
+
+    messages = build_rag_messages(
+        user_query=user_query,
+        retrieved_context=retrieved_context,
+        memory_text=memory_text,
+        support_level=support_info["support_level"],
+
 # -----------------------------------------------------------------------------
 # Escalation logic
 # -----------------------------------------------------------------------------
