@@ -184,6 +184,22 @@ def format_source_label(metadata: dict) -> str:
         return f"{title} | {source_name} | page {page}"
     return f"{source_name} | page {page}"
 
+def build_real_source_labels(docs: list) -> list[str]:
+    """
+    Create a unique ordered list of real source labels from retrieved docs.
+    """
+    labels = []
+    for doc in docs:
+        label = format_source_label(doc.metadata)
+        if label not in labels:
+            labels.append(label)
+    return labels
+
+def build_source_block(real_source_labels: list[str]) -> str:
+    if not real_source_labels:
+        return "No matching sources available."
+
+    return "\n".join(f"- {label}" for label in real_source_labels)
 
 def make_chroma_filter(**kwargs):
     clauses = [{k: v} for k, v in kwargs.items() if v is not None]
@@ -428,8 +444,6 @@ Eres Arus PrintAssist, un asistente especializado exclusivamente en soporte de p
 
 Tu función es:
 - responder preguntas sobre impresoras, software de impresión y herramientas del servicio,
-- Compartir documentación relevante sobre el uso y solución de problemas de los servicios de impresión,
-- Priorizar la privacidad y seguridad de los datos del usuario.
 - orientar diagnósticos básicos de primer nivel,
 - usar la base documental disponible como fuente principal,
 - ayudar a estructurar un resumen de incidente si el caso requiere escalamiento.
@@ -438,14 +452,14 @@ Debes seguir estrictamente estas reglas:
 - Responde únicamente sobre temas relacionados con impresión, software de impresión, herramientas del servicio y procedimientos técnicos.
 - No respondas preguntas fuera de alcance.
 - No inventes procedimientos críticos si la información disponible no es suficiente.
-- Si hace falta complementar una explicación general, hazlo de forma prudente y útil, sin explicar internamente cómo construiste la respuesta.
+- Si la información documental no soporta claramente una respuesta, dilo de forma breve y profesional.
+- No inventes nombres de fuentes.
+- Solo puedes citar las fuentes exactas que te hayan sido proporcionadas en la lista de fuentes disponibles.
+- No uses expresiones genéricas como "Documentación oficial de..." salvo que aparezcan literalmente en las fuentes disponibles.
 - No menciones RAG, contexto recuperado, fallback, modelo ni arquitectura interna.
 - Responde en español.
 - Mantén un tono cordial, claro, profesional y orientado a resolver la necesidad del usuario.
-- La respuesta debe priorizar utilidad práctica.
-- Si la información disponible no es suficiente para responder con plena precisión, indícalo solo de forma breve y natural al final usando:
-  Aviso: ...
-- No uses los encabezados "Limitación" ni "Nota".
+- La respuesta debe priorizar utilidad práctica y trazabilidad real.
 """
 
 
@@ -455,19 +469,23 @@ def build_rag_messages(
     memory_text: str,
     support_level: str = "strong",
     allow_general_fallback: bool = False,
+    real_source_labels: list[str] | None = None,
 ):
-    fallback_instruction = ""
+    real_source_labels = real_source_labels or []
+    source_block = build_source_block(real_source_labels)
 
     if allow_general_fallback:
         fallback_instruction = """
-La base documental disponible es útil pero no completamente suficiente.
-Úsala como fuente principal.
-Si hace falta, puedes complementar con orientación general de bajo riesgo para responder de forma más útil.
-No expliques al usuario que estás usando fallback ni que estás combinando fuentes internas y externas.
+Puedes complementar de forma prudente con orientación general solo si:
+- la pregunta es de bajo riesgo,
+- el contexto documental es parcial,
+- y la explicación adicional no inventa procedimientos específicos.
+
+Si complementas, NO lo expliques como proceso interno.
 """
     else:
         fallback_instruction = """
-Debes basar tu respuesta principalmente en la información documental disponible.
+Debes basar la respuesta principalmente en la información documental disponible.
 Si la información no es suficiente para responder con precisión, no inventes pasos críticos.
 """
 
@@ -475,8 +493,11 @@ Si la información no es suficiente para responder con precisión, no inventes p
 ### MEMORIA CORTA DE LA CONVERSACIÓN
 {memory_text}
 
-### INFORMACIÓN DISPONIBLE
+### INFORMACIÓN DOCUMENTAL DISPONIBLE
 {retrieved_context}
+
+### FUENTES DISPONIBLES PARA CITAR
+{source_block}
 
 ### PREGUNTA DEL USUARIO
 {user_query}
@@ -485,21 +506,24 @@ Si la información no es suficiente para responder con precisión, no inventes p
 {support_level}
 
 ### FORMATO DE RESPUESTA
-Responde usando este formato exacto:
+Responde usando exactamente esta estructura:
 
 Respuesta:
 - Da una respuesta clara, útil y orientada a resolver la necesidad del usuario.
 
 Fuente(s):
-- Menciona brevemente la fuente o documento principal utilizado.
+- Incluye únicamente fuentes de la lista "FUENTES DISPONIBLES PARA CITAR".
+- Si la respuesta no tiene suficiente respaldo documental directo, escribe:
+- Base de conocimiento actual sin coincidencias documentales suficientes
 
 ### REGLAS DE ESTILO
 - No menciones limitaciones salvo que sea realmente necesario.
-- No uses las etiquetas "Limitación" ni "Nota".
 - Si hace falta advertir algo importante, añade solo una línea final como:
 Aviso: ...
 - No expliques tu proceso interno.
 - No menciones contexto recuperado, RAG, fallback ni modelo.
+- No inventes nombres de fuente.
+- No cites "Documentación oficial de ..." si no aparece exactamente en la lista de fuentes disponibles.
 
 ### INSTRUCCIÓN ADICIONAL
 {fallback_instruction}
@@ -511,6 +535,7 @@ Aviso: ...
     ]
 
     return messages
+    
 def clean_user_facing_answer(answer: str) -> str:
     """
     Clean the final answer so the user sees a simpler and more natural output.
@@ -559,6 +584,65 @@ def clean_user_facing_answer(answer: str) -> str:
     final_text = re.sub(r"\n{3,}", "\n\n", final_text).strip()
 
     return final_text
+def answer_uses_fake_generic_sources(answer: str) -> bool:
+    generic_patterns = [
+        "documentación oficial de",
+        "documentacion oficial de",
+        "official documentation of",
+    ]
+    text = answer.lower()
+    return any(pattern in text for pattern in generic_patterns)
+
+
+def enforce_real_source_traceability(answer: str, real_source_labels: list[str], support_info: dict, user_query: str) -> str:
+    """
+    Replace invented or generic sources with real retrieved source labels.
+    If support is weak, force a conservative source section.
+    """
+    text = answer.strip()
+
+    # Split answer in a soft way
+    parts = re.split(r"\n\s*fuente\(s\)\s*:\s*", text, flags=re.IGNORECASE)
+    response_part = parts[0].strip()
+
+    if support_info["support_level"] == "weak":
+        forced_sources = "Fuente(s):\n- Base de conocimiento actual sin coincidencias documentales suficientes"
+        return f"{response_part}\n\n{forced_sources}"
+
+    # If the model invented generic sources, overwrite them
+    if answer_uses_fake_generic_sources(text):
+        if real_source_labels:
+            real_sources_block = "Fuente(s):\n" + "\n".join(f"- {label}" for label in real_source_labels[:3])
+        else:
+            real_sources_block = "Fuente(s):\n- Base de conocimiento actual sin coincidencias documentales suficientes"
+        return f"{response_part}\n\n{real_sources_block}"
+
+    # If the model returned no source section at all, add one
+    if len(parts) == 1:
+        if real_source_labels:
+            real_sources_block = "Fuente(s):\n" + "\n".join(f"- {label}" for label in real_source_labels[:3])
+        else:
+            real_sources_block = "Fuente(s):\n- Base de conocimiento actual sin coincidencias documentales suficientes"
+        return f"{response_part}\n\n{real_sources_block}"
+
+    return text
+
+
+def build_conservative_no_support_answer(user_query: str, real_source_labels: list[str] | None = None) -> str:
+    """
+    Conservative answer for weak support on non-low-risk questions.
+    """
+    source_block = "- Base de conocimiento actual sin coincidencias documentales suficientes"
+    if real_source_labels:
+        source_block = "\n".join(f"- {label}" for label in real_source_labels[:2])
+
+    return f"""Respuesta:
+No encontré información suficientemente específica y confiable en la base de conocimiento actual para responder con precisión a esta consulta. Si se trata de una tarea operativa o de configuración, te recomiendo validar con documentación adicional o escalar el caso si el impacto lo requiere.
+
+Fuente(s):
+{source_block}
+
+Aviso: La base documental actual no ofrece soporte suficientemente claro para dar un procedimiento preciso."""
 
 def generate_answer_with_rag(user_query: str, memory):
     hf_client = get_hf_client()
@@ -576,6 +660,19 @@ def generate_answer_with_rag(user_query: str, memory):
 
     support_info = assess_retrieval_support(user_query, retrieved_docs)
     allow_general_fallback = should_use_general_fallback(user_query, support_info)
+    real_source_labels = build_real_source_labels(retrieved_docs)
+
+    # -------------------------------------------------------------------------
+    # Hard grounding rule:
+    # If support is weak and the query is not low-risk, do not let the model improvise.
+    # -------------------------------------------------------------------------
+    if support_info["support_level"] == "weak" and not allow_general_fallback:
+        answer = build_conservative_no_support_answer(
+            user_query=user_query,
+            real_source_labels=real_source_labels,
+        )
+        memory.add_turn(user_query, answer)
+        return answer
 
     memory_text = memory.format_history()
 
@@ -585,6 +682,7 @@ def generate_answer_with_rag(user_query: str, memory):
         memory_text=memory_text,
         support_level=support_info["support_level"],
         allow_general_fallback=allow_general_fallback,
+        real_source_labels=real_source_labels,
     )
 
     response = hf_client.chat_completion(
@@ -595,6 +693,12 @@ def generate_answer_with_rag(user_query: str, memory):
 
     answer = response.choices[0].message.content.strip()
     answer = clean_user_facing_answer(answer)
+    answer = enforce_real_source_traceability(
+        answer=answer,
+        real_source_labels=real_source_labels,
+        support_info=support_info,
+        user_query=user_query,
+    )
 
     memory.add_turn(user_query, answer)
 
