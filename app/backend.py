@@ -511,24 +511,41 @@ def has_hard_documentary_anchor(user_query: str, docs: list, query_intent: str) 
         "server",
         "vmware",
         "hyperv",
+        "cpu",
     ]
 
     for doc in docs:
         content = doc.page_content.lower()
-        meta = str(doc.metadata).lower()
+        meta = doc.metadata
 
-        query_match = any(term in content or term in meta for term in query_terms) if query_terms else True
+        meta_text = str(meta).lower()
+        title_text = str(meta.get("title", "")).lower()
+        product = str(meta.get("product", "")).lower()
+        component = str(meta.get("component", "")).lower()
+        document_family = str(meta.get("document_family", "")).lower()
+        source_name = str(meta.get("source", "")).lower()
+
+        query_match = any(term in content or term in title_text or term in meta_text for term in query_terms) if query_terms else True
 
         if query_intent == "requirements":
-            meta_match = (
-                "requirements" in meta
-                or "document_family': 'requirements" in meta
-                or "component': 'requirements" in meta
-                or "document_family\": \"requirements" in meta
-                or "component\": \"requirements" in meta
+            # For requirements, be more permissive and trust requirement-like metadata strongly
+            metadata_requirements_match = (
+                document_family == "requirements"
+                or component == "requirements"
+                or "requirements" in title_text
+                or "requer" in title_text
+                or "requirements" in source_name
+                or "requer" in source_name
             )
-            content_match = any(term in content for term in requirements_terms)
-            if query_match and (meta_match or content_match):
+
+            content_requirements_match = any(term in content for term in requirements_terms)
+
+            product_match = product in {"sds", "web_jetadmin", "hp_access_control", "gav_tracking"} or "sds" in meta_text
+
+            if product_match and (metadata_requirements_match or content_requirements_match):
+                return True
+
+            if query_match and content_requirements_match:
                 return True
 
         elif query_intent == "procedural":
@@ -542,7 +559,6 @@ def has_hard_documentary_anchor(user_query: str, docs: list, query_intent: str) 
                 return True
 
         elif query_intent == "conceptual":
-            # conceptual queries can use lighter support
             if query_match:
                 return True
 
@@ -905,8 +921,9 @@ def generate_answer_with_rag(user_query: str, memory):
     # -------------------------------------------------------------------------
     # Requirements queries:
     # allow them only if documentary support is real; otherwise be conservative
+    
     if query_intent == "requirements":
-        if not hard_anchor:
+        if not hard_anchor and support_info["support_level"] == "weak":
             answer = build_conservative_no_support_answer(
                 user_query=user_query,
                 real_source_labels=real_source_labels,
