@@ -362,10 +362,24 @@ def classify_query_intent(user_query: str) -> str:
     """
     Classify the query into:
     - conceptual
+    - requirements
     - procedural
     - troubleshooting
     """
     text = user_query.lower()
+
+    requirements_patterns = [
+        "qué requerimientos",
+        "que requerimientos",
+        "qué requisitos",
+        "que requisitos",
+        "requerimientos necesarios",
+        "requisitos necesarios",
+        "system requirements",
+        "minimum requirements",
+        "requisitos mínimos",
+        "requisitos minimos",
+    ]
 
     procedural_patterns = [
         "cómo instalar",
@@ -380,10 +394,6 @@ def classify_query_intent(user_query: str) -> str:
         "como habilitar",
         "cómo crear",
         "como crear",
-        "qué requerimientos",
-        "que requerimientos",
-        "qué requisitos",
-        "que requisitos",
     ]
 
     troubleshooting_patterns = [
@@ -416,6 +426,9 @@ def classify_query_intent(user_query: str) -> str:
         "diferencia entre",
     ]
 
+    if any(pattern in text for pattern in requirements_patterns):
+        return "requirements"
+
     if any(pattern in text for pattern in procedural_patterns):
         return "procedural"
 
@@ -427,10 +440,10 @@ def classify_query_intent(user_query: str) -> str:
 
     return "procedural"
 
-def has_hard_documentary_anchor(user_query: str, docs: list) -> bool:
+def has_hard_documentary_anchor(user_query: str, docs: list, query_intent: str) -> bool:
     """
     Determine whether the retrieved docs contain enough concrete support
-    for a procedural or troubleshooting answer.
+    for the current type of query.
     """
     if not docs:
         return False
@@ -448,8 +461,10 @@ def has_hard_documentary_anchor(user_query: str, docs: list) -> bool:
         query_terms.append("web jetadmin")
     if "oxp" in text:
         query_terms.append("oxp")
+    if "monitor" in text:
+        query_terms.append("monitor")
 
-    action_terms = [
+    procedural_terms = [
         "install",
         "instal",
         "configure",
@@ -466,17 +481,111 @@ def has_hard_documentary_anchor(user_query: str, docs: list) -> bool:
         "oxp",
     ]
 
+    troubleshooting_terms = [
+        "error",
+        "issue",
+        "problem",
+        "troubleshoot",
+        "stuck",
+        "missing",
+        "queue",
+        "print jobs",
+        "device",
+        "offline",
+        "not held",
+    ]
+
+    requirements_terms = [
+        "requirement",
+        "requirements",
+        "requer",
+        "requisitos",
+        "requerimientos",
+        "minimum",
+        "system requirements",
+        "hardware",
+        "ram",
+        "disk",
+        "os",
+        "windows",
+        "server",
+        "vmware",
+        "hyperv",
+    ]
+
     for doc in docs:
         content = doc.page_content.lower()
-        meta = doc.metadata
+        meta = str(doc.metadata).lower()
 
-        query_match = any(term in content or term in str(meta).lower() for term in query_terms) if query_terms else True
-        action_match = any(term in content for term in action_terms)
+        query_match = any(term in content or term in meta for term in query_terms) if query_terms else True
 
-        if query_match and action_match:
-            return True
+        if query_intent == "requirements":
+            meta_match = (
+                "requirements" in meta
+                or "document_family': 'requirements" in meta
+                or "component': 'requirements" in meta
+                or "document_family\": \"requirements" in meta
+                or "component\": \"requirements" in meta
+            )
+            content_match = any(term in content for term in requirements_terms)
+            if query_match and (meta_match or content_match):
+                return True
+
+        elif query_intent == "procedural":
+            action_match = any(term in content for term in procedural_terms)
+            if query_match and action_match:
+                return True
+
+        elif query_intent == "troubleshooting":
+            action_match = any(term in content for term in troubleshooting_terms)
+            if query_match and action_match:
+                return True
+
+        elif query_intent == "conceptual":
+            # conceptual queries can use lighter support
+            if query_match:
+                return True
 
     return False
+
+def is_explicit_follow_up_query(user_query: str) -> bool:
+    """
+    Detect whether the user is clearly referring to the previous turn.
+    """
+    text = user_query.lower().strip()
+
+    follow_up_patterns = [
+        "y eso",
+        "y como",
+        "y cómo",
+        "eso",
+        "lo anterior",
+        "esa herramienta",
+        "ese software",
+        "ese sistema",
+        "ese producto",
+        "tambien",
+        "también",
+        "y en ese caso",
+        "y para eso",
+    ]
+
+    return any(pattern in text for pattern in follow_up_patterns)
+
+def should_use_memory_for_query(user_query: str, query_intent: str) -> bool:
+    """
+    Reduce memory contamination:
+    - conceptual queries usually should not inherit previous operational context
+    - requirements queries usually should not inherit previous questions either
+    - only keep memory if the user explicitly refers to previous context
+    """
+    if is_explicit_follow_up_query(user_query):
+        return True
+
+    if query_intent in {"conceptual", "requirements"}:
+        return False
+
+    return True
 
 def is_low_risk_general_query(user_query: str) -> bool:
     """
@@ -789,12 +898,24 @@ def generate_answer_with_rag(user_query: str, memory):
 
     query_intent = classify_query_intent(user_query)
     allow_general_fallback = should_use_general_fallback(user_query, support_info)
-    hard_anchor = has_hard_documentary_anchor(user_query, retrieved_docs)
+    hard_anchor = has_hard_documentary_anchor(user_query, retrieved_docs, query_intent)
 
     # -------------------------------------------------------------------------
     # Hard grounding rules
     # -------------------------------------------------------------------------
-    # 1. Procedural or troubleshooting queries must not improvise without strong anchor
+    # Requirements queries:
+    # allow them only if documentary support is real; otherwise be conservative
+    if query_intent == "requirements":
+        if not hard_anchor:
+            answer = build_conservative_no_support_answer(
+                user_query=user_query,
+                real_source_labels=real_source_labels,
+            )
+            memory.add_turn(user_query, answer)
+            return answer
+
+    # Procedural or troubleshooting queries:
+    # do not improvise without strong documentary support
     if query_intent in {"procedural", "troubleshooting"} and not hard_anchor:
         answer = build_conservative_no_support_answer(
             user_query=user_query,
@@ -803,7 +924,7 @@ def generate_answer_with_rag(user_query: str, memory):
         memory.add_turn(user_query, answer)
         return answer
 
-    # 2. Weak support on non-conceptual queries -> conservative answer
+    # Weak support on non-conceptual queries -> conservative answer
     if support_info["support_level"] == "weak" and query_intent != "conceptual":
         answer = build_conservative_no_support_answer(
             user_query=user_query,
@@ -812,7 +933,13 @@ def generate_answer_with_rag(user_query: str, memory):
         memory.add_turn(user_query, answer)
         return answer
 
-    memory_text = memory.format_history()
+    # -------------------------------------------------------------------------
+    # Memory control
+    # -------------------------------------------------------------------------
+    if should_use_memory_for_query(user_query, query_intent):
+        memory_text = memory.format_history()
+    else:
+        memory_text = "No previous conversation."
 
     messages = build_rag_messages(
         user_query=user_query,
