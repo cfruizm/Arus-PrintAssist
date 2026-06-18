@@ -841,15 +841,6 @@ def generate_answer_with_rag(user_query: str, memory):
     memory.add_turn(user_query, answer)
 
     return answer
-    
-    memory_text = memory.format_history()
-
-    messages = build_rag_messages(
-        user_query=user_query,
-        retrieved_context=retrieved_context,
-        memory_text=memory_text,
-        support_level=support_info["support_level"],
-
 # -----------------------------------------------------------------------------
 # Escalation logic
 # -----------------------------------------------------------------------------
