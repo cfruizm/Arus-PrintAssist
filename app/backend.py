@@ -426,6 +426,7 @@ def classify_query_intent(user_query: str) -> str:def classify_query_intent(user
     - conceptual
     - procedural
     - troubleshooting
+
 def has_hard_documentary_anchor(user_query: str, docs: list) -> bool:
     """
     Determine whether the retrieved docs contain enough concrete support
@@ -584,7 +585,6 @@ Debes seguir estrictamente estas reglas:
 - Mantén un tono cordial, claro, profesional y orientado a resolver la necesidad del usuario.
 - La respuesta debe priorizar utilidad práctica y trazabilidad real.
 """
-
 
 def build_rag_messages(
     user_query: str,
