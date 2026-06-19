@@ -895,67 +895,131 @@ Fuente(s):
 
 Aviso: La base documental actual no ofrece soporte suficientemente claro para dar un procedimiento preciso."""
 
-def extract_requirement_sentences_from_docs(docs: list, max_sentences: int = 8) -> list:
+def normalize_requirement_line(line: str) -> str:
     """
-    Extract requirement-like lines from retrieved requirement documents.
-    The goal is to produce grounded, concise answers without relying only on free generation.
+    Clean noisy PDF lines for user-facing output.
     """
-    candidate_lines = []
+    line = " ".join(line.strip().split())
 
-    requirement_keywords = [
-        "windows",
-        "server",
-        "ram",
-        "disk",
-        "ghz",
-        "hyperv",
-        "vmware",
-        "cpu",
-        "x86",
-        "x64",
-        "icmp",
-        "ping",
-        "requisitos",
-        "requirements",
-        "hardware",
-        "espacio",
-        "memoria",
-        "sistema operativo",
-        "virtual",
-        "nic",
-        "red",
+    # Remove obvious header/footer noise
+    noisy_fragments = [
+        "© ekm",
+        "company number",
+        "hp sds manager system requirements",
+        "hp sds – system requirements",
+        "introducción",
+        "introduccion",
     ]
 
+    low = line.lower()
+    if any(fragment in low for fragment in noisy_fragments):
+        return ""
+
+    # Drop very short or meaningless fragments
+    if len(line) < 20:
+        return ""
+
+    # Avoid title-only or broken lead-in fragments
+    if low.endswith(":") or low in {"monitor", "requisitos", "requirements"}:
+        return ""
+
+    return line
+
+
+def extract_structured_requirements_from_docs(docs: list) -> dict:
+    """
+    Extract structured requirement categories from retrieved docs.
+    """
+    structured = {
+        "system": [],
+        "virtualization": [],
+        "hardware": [],
+        "network": [],
+        "other": [],
+    }
+
     for doc in docs:
-        content = doc.page_content.splitlines()
-
-        for line in content:
-            line_clean = " ".join(line.strip().split())
-
-            if len(line_clean) < 15:
+        for raw_line in doc.page_content.splitlines():
+            line = normalize_requirement_line(raw_line)
+            if not line:
                 continue
 
-            if any(keyword in line_clean.lower() for keyword in requirement_keywords):
-                if line_clean not in candidate_lines:
-                    candidate_lines.append(line_clean)
+            low = line.lower()
 
-    return candidate_lines[:max_sentences]
+            if any(term in low for term in [
+                "windows", "server", "sistema operativo", "os "
+            ]):
+                if line not in structured["system"]:
+                    structured["system"].append(line)
+
+            elif any(term in low for term in [
+                "vmware", "hyperv", "hyper-v", "virtual"
+            ]):
+                if line not in structured["virtualization"]:
+                    structured["virtualization"].append(line)
+
+            elif any(term in low for term in [
+                "ram", "memoria", "ghz", "cpu", "x86", "x64", "espacio", "disco", "hardware"
+            ]):
+                if line not in structured["hardware"]:
+                    structured["hardware"].append(line)
+
+            elif any(term in low for term in [
+                "icmp", "ping", "nic", "red", "firewall", "puerto", "puertos"
+            ]):
+                if line not in structured["network"]:
+                    structured["network"].append(line)
+
+            else:
+                if line not in structured["other"]:
+                    structured["other"].append(line)
+
+    return structured
 
 
-def build_requirements_answer_from_docs(user_query: str, docs: list) -> str:
+ef build_requirements_answer_from_docs(user_query: str, docs: list) -> str:
     """
-    Build a grounded answer for requirements-oriented queries using only retrieved documents.
+    Build a grounded, cleaner answer for requirements-oriented queries.
     """
     source_labels = build_real_source_labels(docs)
-    requirement_lines = extract_requirement_sentences_from_docs(docs)
+    structured = extract_structured_requirements_from_docs(docs)
 
-    if not requirement_lines:
+    # Build compact user-facing bullets
+    bullets = []
+
+    if structured["system"]:
+        bullets.append(
+            f"- **Sistemas operativos compatibles:** {structured['system'][0]}"
+        )
+
+    if structured["virtualization"]:
+        bullets.append(
+            f"- **Plataformas de virtualización compatibles:** {structured['virtualization'][0]}"
+        )
+
+    if structured["hardware"]:
+        bullets.append(
+            f"- **Requisitos mínimos de hardware:** {structured['hardware'][0]}"
+        )
+
+    if structured["network"]:
+        bullets.append(
+            f"- **Requisitos de red / conectividad:** {structured['network'][0]}"
+        )
+
+    # If some category was not cleanly populated, use useful fallback lines
+    fallback_pool = structured["other"][:6]
+    for line in fallback_pool:
+        if len(bullets) >= 5:
+            break
+        bullets.append(f"- {line}")
+
+    # If still empty, fall back conservatively
+    if not bullets:
         return build_conservative_no_support_answer(
             user_query=user_query,
             real_source_labels=source_labels,
         )
-
-    bullet_lines = "\n".join(f"- {line}" for line in requirement_lines[:6])
 
     source_block = (
         "Fuente(s):\n" + "\n".join(f"- {label}" for label in source_labels[:3])
@@ -964,9 +1028,9 @@ def build_requirements_answer_from_docs(user_query: str, docs: list) -> str:
     )
 
     return f"""Respuesta:
-Con base en la documentación disponible, estos son algunos de los requisitos relevantes identificados para la consulta:
+Con base en la documentación disponible, estos son los requisitos relevantes identificados para esta consulta:
 
-{bullet_lines}
+{chr(10).join(bullets)}
 
 {source_block}"""
 
