@@ -934,12 +934,64 @@ Fuente(s):
 
 Aviso: La base documental actual no ofrece soporte suficientemente claro para dar un procedimiento preciso."""
 
+import re
+from collections import defaultdict
+from pathlib import Path
+
+
+def build_real_source_labels(docs: list) -> list:
+    """
+    Build a compact ordered list of real source labels.
+    If multiple chunks come from the same document, collapse page labels.
+    """
+    grouped = defaultdict(list)
+
+    for doc in docs:
+        metadata = doc.metadata
+        title = metadata.get("title", "")
+        source = metadata.get("source", "unknown_source")
+        source_name = Path(source).name if "/" in str(source) else str(source)
+
+        page_label = metadata.get("page_label", metadata.get("page", None))
+        key = (title, source_name)
+
+        if page_label is not None:
+            try:
+                page_num = int(str(page_label).strip())
+                grouped[key].append(page_num)
+            except Exception:
+                pass
+
+    labels = []
+
+    for (title, source_name), pages in grouped.items():
+        pages = sorted(set(pages))
+
+        if not pages:
+            if title:
+                labels.append(f"{title} | {source_name}")
+            else:
+                labels.append(source_name)
+            continue
+
+        if len(pages) == 1:
+            page_text = f"page {pages[0]}"
+        else:
+            page_text = f"pages {pages[0]}–{pages[-1]}"
+
+        if title:
+            labels.append(f"{title} | {source_name} | {page_text}")
+        else:
+            labels.append(f"{source_name} | {page_text}")
+
+    return labels
+
+
 def normalize_requirement_line(line: str) -> str:
     """
     Clean noisy PDF lines for user-facing output.
     """
-    line = " ".join(line.strip().split())
-
+    line = " ".join(str(line).strip().split())
     if not line:
         return ""
 
@@ -952,73 +1004,69 @@ def normalize_requirement_line(line: str) -> str:
         "© ekm",
         "introducción",
         "introduccion",
+        "last updated",
     ]
 
     if any(fragment in low for fragment in noisy_fragments):
         return ""
 
-    if len(line) < 8:
+    # Remove isolated page markers or tiny fragments
+    if len(line) < 6:
         return ""
 
     return line
 
 
-def extract_bullet_items_from_section(text: str, start_markers: list[str], stop_markers: list[str]) -> list[str]:
+def sort_docs_by_page(docs: list) -> list:
+    def _page_num(doc):
+        page = doc.metadata.get("page")
+        try:
+            return int(page)
+        except Exception:
+            return 999999
+
+    return sorted(docs, key=_page_num)
+
+
+def build_combined_lines_from_docs(docs: list) -> list[str]:
     """
-    Extract bullet-like items from a text section defined by start/stop markers.
-    Works on PDF text that may contain wrapped bullet lines.
+    Build a cleaned ordered line list from all retrieved docs.
     """
-    lines = [normalize_requirement_line(line) for line in text.splitlines()]
-    lines = [line for line in lines if line]
+    ordered_docs = sort_docs_by_page(docs)
+    lines = []
 
-    start_idx = None
-    for i, line in enumerate(lines):
-        low = line.lower()
-        if any(marker in low for marker in start_markers):
-            start_idx = i
-            break
+    for doc in ordered_docs:
+        for raw_line in doc.page_content.splitlines():
+            line = normalize_requirement_line(raw_line)
+            if line:
+                lines.append(line)
 
-    if start_idx is None:
-        return []
+    return lines
 
-    collected = []
-    current = None
 
-    for line in lines[start_idx + 1:]:
-        low = line.lower()
+def is_section_header(line: str) -> str | None:
+    low = line.lower()
 
-        if any(marker in low for marker in stop_markers):
-            break
+    if "los siguientes son los requisitos operativos requeridos" in low or low == "sistemas operativos":
+        return "environment"
+    if "los sistemas operativos soportados" in low or "sistemas operativos soportados" in low:
+        return "operating_systems"
+    if "plataformas de virtualización compatibles" in low or "plataformas de virtualizacion compatibles" in low:
+        return "virtualization"
+    if low == "hardware" or "requisitos mínimos de hardware" in low or "requisitos minimos de hardware" in low:
+        return "hardware"
+    if "preparando el entorno" in low or "para que hp sds monitor funcione" in low:
+        return "network_security"
 
-        # Bullet start
-        if line.startswith("•") or line.startswith("-"):
-            if current:
-                collected.append(current.strip("•- ").strip())
-            current = line.strip()
-        else:
-            # Continuation line
-            if current:
-                current += " " + line.strip()
-            else:
-                # Some PDFs put the first line without bullet
-                current = line.strip()
-
-    if current:
-        collected.append(current.strip("•- ").strip())
-
-    # De-duplicate while preserving order
-    unique_items = []
-    for item in collected:
-        if item and item not in unique_items:
-            unique_items.append(item)
-
-    return unique_items
+    return None
 
 
 def extract_structured_requirements_from_docs(docs: list) -> dict:
     """
-    Extract structured requirement categories from retrieved docs.
+    Parse requirement sections using a simple state machine over the combined lines.
     """
+    lines = build_combined_lines_from_docs(docs)
+
     structured = {
         "environment": [],
         "operating_systems": [],
@@ -1028,127 +1076,87 @@ def extract_structured_requirements_from_docs(docs: list) -> dict:
         "notes": [],
     }
 
-    for doc in docs:
-        text = doc.page_content
+    current_section = None
+    current_bullet = None
 
-        env_items = extract_bullet_items_from_section(
-            text,
-            start_markers=[
-                "los siguientes son los requisitos operativos requeridos",
-                "requisitos operativos requeridos",
-            ],
-            stop_markers=[
-                "los sistemas operativos soportados",
-                "plataformas de virtualización compatibles",
-                "hardware",
-                "preparando el entorno",
-            ]
-        )
+    def flush_bullet():
+        nonlocal current_bullet, current_section
+        if current_bullet and current_section:
+            text = " ".join(current_bullet).strip("•- ").strip()
+            if text and text not in structured[current_section]:
+                structured[current_section].append(text)
+        current_bullet = None
 
-        os_items = extract_bullet_items_from_section(
-            text,
-            start_markers=[
-                "los sistemas operativos soportados",
-                "sistemas operativos soportados",
-                "sistemas operativos",
-            ],
-            stop_markers=[
-                "plataformas de virtualización compatibles",
-                "hardware",
-                "preparando el entorno",
-            ]
-        )
+    for line in lines:
+        header = is_section_header(line)
 
-        virt_items = extract_bullet_items_from_section(
-            text,
-            start_markers=[
-                "plataformas de virtualización compatibles",
-            ],
-            stop_markers=[
-                "hardware",
-                "preparando el entorno",
-            ]
-        )
+        # Section change
+        if header is not None:
+            flush_bullet()
+            current_section = header
 
-        hw_items = extract_bullet_items_from_section(
-            text,
-            start_markers=[
-                "hardware",
-                "requisitos mínimos de hardware",
-                "los requisitos mínimos de hardware",
-            ],
-            stop_markers=[
-                "preparando el entorno",
-                "nota:",
-            ]
-        )
+            # Capture inline virtualization value if present
+            if header == "virtualization":
+                m = re.search(r"plataformas de virtualizaci[oó]n compatibles[:\s]+(.+)", line, re.IGNORECASE)
+                if m:
+                    value = m.group(1).strip()
+                    if value and value not in structured["virtualization"]:
+                        structured["virtualization"].append(value)
 
-        network_items = extract_bullet_items_from_section(
-            text,
-            start_markers=[
-                "preparando el entorno",
-                "para que hp sds monitor funcione",
-            ],
-            stop_markers=[
-                "nota:",
-            ]
-        )
+            continue
 
-        # Store unique items
-        for item in env_items:
-            if item not in structured["environment"]:
-                structured["environment"].append(item)
+        # Capture notes separately
+        if line.lower().startswith("nota:"):
+            note_text = line.strip()
+            if note_text not in structured["notes"]:
+                structured["notes"].append(note_text)
+            continue
 
-        for item in os_items:
-            if item not in structured["operating_systems"]:
-                structured["operating_systems"].append(item)
+        # Bullet start
+        if line.startswith("•") or line.startswith("-"):
+            flush_bullet()
+            if current_section:
+                current_bullet = [line]
+            continue
 
-        for item in virt_items:
-            if item not in structured["virtualization"]:
-                structured["virtualization"].append(item)
+        # Continuation line for an open bullet
+        if current_bullet is not None:
+            current_bullet.append(line)
+            continue
 
-        for item in hw_items:
-            if item not in structured["hardware"]:
-                structured["hardware"].append(item)
-
-        for item in network_items:
-            if item not in structured["network_security"]:
-                structured["network_security"].append(item)
-
-        # Capture some useful notes
-        for raw_line in text.splitlines():
-            line = normalize_requirement_line(raw_line)
-            low = line.lower()
-            if "nota:" in low and line not in structured["notes"]:
-                structured["notes"].append(line)
+    flush_bullet()
 
     return structured
 
 
-def compact_os_list(os_items: list[str]) -> str:
-    if not os_items:
-        return ""
+def shorten_requirement_item(item: str, max_len: int = 180) -> str:
+    item = " ".join(item.split()).strip()
+    if len(item) <= max_len:
+        return item
 
-    # Return up to 8 OS items in one compact line
-    cleaned = [item.strip("•- ").strip() for item in os_items if item.strip()]
-    cleaned = cleaned[:8]
-
-    return "; ".join(cleaned)
+    truncated = item[:max_len].rsplit(" ", 1)[0]
+    return truncated + "..."
 
 
-def compact_list(items: list[str], limit: int = 3) -> str:
-    if not items:
-        return ""
-
-    cleaned = [item.strip("•- ").strip() for item in items if item.strip()]
-    cleaned = cleaned[:limit]
+def join_items(items: list[str], max_items: int = 4, max_len: int = 180) -> str:
+    cleaned = []
+    for item in items[:max_items]:
+        text = shorten_requirement_item(item, max_len=max_len)
+        if text and text not in cleaned:
+            cleaned.append(text)
 
     return "; ".join(cleaned)
+
+
+def compact_source_heading(source_labels: list[str]) -> str:
+    if len(source_labels) == 1:
+        return "Fuente principal:"
+    return "Fuentes principales:"
 
 
 def build_requirements_answer_from_docs(user_query: str, docs: list) -> str:
     """
-    Build a grounded, structured, user-friendly answer for requirements queries.
+    Build a grounded, structured, much cleaner answer for requirements queries.
     """
     source_labels = build_real_source_labels(docs)
     structured = extract_structured_requirements_from_docs(docs)
@@ -1156,27 +1164,27 @@ def build_requirements_answer_from_docs(user_query: str, docs: list) -> str:
     bullets = []
 
     # Environment prerequisites
-    env_text = compact_list(structured["environment"], limit=4)
+    env_text = join_items(structured["environment"], max_items=3, max_len=140)
     if env_text:
         bullets.append(f"- **Prerrequisitos del entorno:** {env_text}")
 
-    # Operating systems
-    os_text = compact_os_list(structured["operating_systems"])
+    # Supported operating systems
+    os_text = join_items(structured["operating_systems"], max_items=8, max_len=60)
     if os_text:
         bullets.append(f"- **Sistemas operativos compatibles:** {os_text}")
 
     # Virtualization
-    virt_text = compact_list(structured["virtualization"], limit=2)
+    virt_text = join_items(structured["virtualization"], max_items=2, max_len=80)
     if virt_text:
         bullets.append(f"- **Plataformas de virtualización compatibles:** {virt_text}")
 
     # Hardware
-    hw_text = compact_list(structured["hardware"], limit=4)
+    hw_text = join_items(structured["hardware"], max_items=4, max_len=120)
     if hw_text:
         bullets.append(f"- **Requisitos mínimos de hardware:** {hw_text}")
 
-    # Network / security / connectivity
-    net_text = compact_list(structured["network_security"], limit=4)
+    # Network and security
+    net_text = join_items(structured["network_security"], max_items=4, max_len=160)
     if net_text:
         bullets.append(f"- **Requisitos de red / seguridad:** {net_text}")
 
@@ -1186,17 +1194,23 @@ def build_requirements_answer_from_docs(user_query: str, docs: list) -> str:
             real_source_labels=source_labels,
         )
 
+    source_heading = compact_source_heading(source_labels)
     source_block = (
-        "Fuente(s):\n" + "\n".join(f"- {label}" for label in source_labels[:2])
+        source_heading + "\n" + "\n".join(f"- {label}" for label in source_labels[:2])
         if source_labels
         else "Fuente(s):\n- Base de conocimiento actual sin coincidencias documentales suficientes"
     )
 
-    # Optional short aviso if notes exist
+    # Optional curated aviso from notes
     aviso = ""
-    if structured["notes"]:
-        first_note = structured["notes"][0]
-        aviso = f"\n\nAviso: {first_note}"
+    useful_notes = []
+    for note in structured["notes"]:
+        low = note.lower()
+        if "nic" in low or "proxy" in low or "web jetadmin" in low:
+            useful_notes.append(note)
+
+    if useful_notes:
+        aviso = f"\n\nAviso: {shorten_requirement_item(useful_notes[0], max_len=180)}"
 
     return f"""Respuesta:
 Con base en la documentación disponible, estos son los requisitos relevantes identificados para esta consulta:
@@ -1204,7 +1218,7 @@ Con base en la documentación disponible, estos son los requisitos relevantes id
 {chr(10).join(bullets)}
 
 {source_block}{aviso}"""
-    
+
 def generate_answer_with_rag(user_query: str, memory):
     hf_client = get_hf_client()
 
