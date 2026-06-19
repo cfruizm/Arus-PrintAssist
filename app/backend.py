@@ -241,7 +241,7 @@ def detect_query_profile(query: str):
 def compute_rerank_score(query: str, doc, query_intent: str | None = None) -> float:
     text = query.lower()
     content = doc.page_content.lower()
-    md = doc.metadata
+    metadata = doc.metadata
 
     if query_intent is None:
         query_intent = classify_query_intent(query)
@@ -249,25 +249,27 @@ def compute_rerank_score(query: str, doc, query_intent: str | None = None) -> fl
     score = 0.0
 
     # ------------------------------------------------------------------
-    # Base: prefer curated / high-priority sources
+    # Base: prefer curated / higher-priority sources
     # ------------------------------------------------------------------
-    priority = md.get("priority", 3)
-    score += max(0, 5 - priority)
+    priority = metadata.get("priority", 3)
+    score += max(0.0, 5.0 - float(priority))
 
-    source_type = str(md.get("source_type", "")).lower()
-    source_group = str(md.get("source_group", "")).lower()
-    product = str(md.get("product", "")).lower()
-    component = str(md.get("component", "")).lower()
-    family = str(md.get("document_family", "")).lower()
-    vendor = str(md.get("vendor", "")).lower()
-    title = str(md.get("title", "")).lower()
+    source_type = str(metadata.get("source_type", "")).lower()
+    source_group = str(metadata.get("source_group", "")).lower()
+    product = str(metadata.get("product", "")).lower()
+    component = str(metadata.get("component", "")).lower()
+    document_family = str(metadata.get("document_family", "")).lower()
+    vendor = str(metadata.get("vendor", "")).lower()
+    title = str(metadata.get("title", "")).lower()
 
     if source_type == "pdf":
         score += 2.5
-    elif source_type in {"kb_article", "manual"}:
+    elif source_type == "manual":
+        score += 1.5
+    elif source_type == "kb_article":
         score += 1.0
     elif source_type in {"troubleshooting", "known_issue"}:
-        score += 0.5
+        score += 0.4
 
     if source_group == "core_support":
         score += 1.0
@@ -283,8 +285,8 @@ def compute_rerank_score(query: str, doc, query_intent: str | None = None) -> fl
     # Intent-aware boosts / penalties
     # ------------------------------------------------------------------
     if query_intent == "requirements":
-        # Strong preference for requirements-like documents
-        if family == "requirements" or component == "requirements":
+        # Strong preference for requirements-like sources
+        if document_family == "requirements" or component == "requirements":
             score += 5.0
         if source_type == "pdf":
             score += 1.5
@@ -299,13 +301,13 @@ def compute_rerank_score(query: str, doc, query_intent: str | None = None) -> fl
             score += 3.0
 
         if any(term in content for term in [
-            "windows server", "windows 10", ".net", "vmware", "hyperv", "hyper-v",
-            "ram", "gigabyte", "espacio libre", "icmp echo", "proxy http", "ipv4"
+            "windows server", ".net", "vmware", "hyperv", "ram",
+            "gigabyte", "espacio libre", "icmp echo", "proxy http", "ipv4"
         ]):
             score += 2.0
 
     elif query_intent == "procedural":
-        # Procedures should prefer install/config/admin docs, not troubleshooting
+        # Procedures should prefer install/config/admin docs over troubleshooting
         if source_type in {"troubleshooting", "known_issue"}:
             score -= 1.0
 
@@ -552,7 +554,6 @@ Debes seguir estrictamente estas reglas:
 - La respuesta debe priorizar utilidad práctica y trazabilidad real.
 """
 
-
 def build_rag_messages(
     user_query: str,
     retrieved_context: str,
@@ -637,7 +638,7 @@ Fuente(s):
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": user_content},
     ]
-
+    
 def clean_user_facing_answer(answer: str) -> str:
     text = answer.strip()
     text = re.sub(r"^\s*nota\s*:\s*", "Aviso: ", text, flags=re.IGNORECASE | re.MULTILINE)
@@ -984,7 +985,7 @@ def generate_answer_with_rag(user_query: str, memory):
 
     retrieved_context, retrieved_docs = retrieve_context(
         user_query,
-        top_k=CONFIG["retrieval_top_k"]
+        top_k=CONFIG["retrieval_top_k"],
     )
 
     support_info = assess_retrieval_support(user_query, retrieved_docs)
@@ -993,7 +994,7 @@ def generate_answer_with_rag(user_query: str, memory):
     allow_general_fallback = should_use_general_fallback(user_query, support_info)
     hard_anchor = has_hard_documentary_anchor(user_query, retrieved_docs, query_intent)
 
-    # Requirements: use normal RAG if there is real support.
+    # Requirements: use standard RAG if there is real support.
     # Only fail closed if support is truly weak and there is no anchor.
     if query_intent == "requirements":
         if support_info["support_level"] in {"weak", "none"} and not hard_anchor:
@@ -1052,6 +1053,7 @@ def generate_answer_with_rag(user_query: str, memory):
 
     memory.add_turn(user_query, answer)
     return answer
+    
 # -----------------------------------------------------------------------------
 # Debug helpers
 # -----------------------------------------------------------------------------
