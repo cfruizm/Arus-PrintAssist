@@ -851,48 +851,54 @@ def join_items(items: list[str], max_items: int = 4) -> str:
         if value and value not in cleaned:
             cleaned.append(value)
     return "; ".join(cleaned)
-
 def build_requirements_answer_from_docs(user_query: str, docs: list) -> str:
     """
-    Build a grounded, structured answer for requirements queries
+    Build a grounded and complete answer for requirements queries
     using deterministic extraction from the retrieved PDF text.
+    This version avoids fragile generic parsing and targets the
+    actual structure of the HP SDS requirements document.
     """
+    import re
+
     text = build_combined_requirement_text(docs)
     source_labels = build_real_source_labels(docs)
 
-    # Normalize text once
-    normalized_text = text.replace("\r", "\n")
-    normalized_text = re.sub(r"[ \t]+", " ", normalized_text)
-    normalized_text = re.sub(r"\n{3,}", "\n\n", normalized_text)
+    normalized = text.replace("\r", "\n")
+    normalized = re.sub(r"[ \t]+", " ", normalized)
+    normalized = re.sub(r"\n{3,}", "\n\n", normalized)
 
-    def find_block(start_markers: list[str], end_markers: list[str]) -> str:
-        lower_text = normalized_text.lower()
+    def normalize_item(value: str) -> str:
+        value = " ".join(value.strip().split())
+        return value.strip(" ;,.-")
+
+    def extract_block(start_patterns: list[str], end_patterns: list[str]) -> str:
+        lower_text = normalized.lower()
 
         start_pos = None
         chosen_marker = None
-        for marker in start_markers:
-            pos = lower_text.find(marker.lower())
-            if pos != -1 and (start_pos is None or pos < start_pos):
-                start_pos = pos
-                chosen_marker = marker
+        for pattern in start_patterns:
+            pos = lower_text.find(pattern.lower())
+            if pos != -1:
+                if start_pos is None or pos < start_pos:
+                    start_pos = pos
+                    chosen_marker = pattern
 
         if start_pos is None:
             return ""
 
-        # Start AFTER the heading
         start_pos += len(chosen_marker)
 
-        end_pos = len(normalized_text)
-        for marker in end_markers:
-            pos = lower_text.find(marker.lower(), start_pos)
+        end_pos = len(normalized)
+        for pattern in end_patterns:
+            pos = lower_text.find(pattern.lower(), start_pos)
             if pos != -1 and pos < end_pos:
                 end_pos = pos
 
-        return normalized_text[start_pos:end_pos].strip()
+        return normalized[start_pos:end_pos].strip()
 
-    def extract_bullets(block: str, strip_note: bool = False) -> list[str]:
+    def extract_bullets(block: str) -> list[str]:
         """
-        Extract bulleted items while preserving wrapped lines.
+        Extract bullet items preserving wrapped bullet continuity.
         """
         if not block:
             return []
@@ -905,35 +911,221 @@ def build_requirements_answer_from_docs(user_query: str, docs: list) -> str:
 
         items = []
         for item in matches:
-            item = " ".join(item.split()).strip()
+            item = normalize_item(item)
 
-            # Remove obvious document noise
-            noise_patterns = [
+            # Remove obvious document artifacts
+            noise_fragments = [
                 "HP SDS MANAGER SYSTEM REQUIREMENTS",
                 "HP SDS – SYSTEM REQUIREMENTS",
                 "© EKM",
                 "COMPANY NUMBER",
             ]
             low = item.lower()
-            if any(noise.lower() in low for noise in noise_patterns):
+            if any(fragment.lower() in low for fragment in noise_fragments):
                 continue
-
-            # Remove accidental note contamination from the item if needed
-            if strip_note and "NOTA:" in item:
-                item = item.split("NOTA:")[0].strip()
 
             if item and item not in items:
                 items.append(item)
 
         return items
 
-    def pretty_join(items: list[str], max_items: int = 8) -> str:
+    def safe_join(items: list[str], max_items: int = 8) -> str:
+        """
+        Join complete items WITHOUT adding '...'.
+        """
         cleaned = []
         for item in items[:max_items]:
-            item = " ".join(item.split()).strip(" ;,.-")
+            item = normalize_item(item)
             if item and item not in cleaned:
                 cleaned.append(item)
         return "; ".join(cleaned)
+
+    # -------------------------------------------------------------------------
+    # PRIMARY SECTION EXTRACTION
+    # -------------------------------------------------------------------------
+    environment_block = extract_block(
+        start_patterns=[
+            "Los siguientes son los requisitos operativos requeridos",
+            "requisitos operativos requeridos para un monitor HP SDS",
+        ],
+        end_patterns=[
+            "Los sistemas operativos soportados",
+            "Plataformas de virtualización compatibles",
+            "Hardware",
+        ]
+    )
+
+    os_block = extract_block(
+        start_patterns=[
+            "Los sistemas operativos soportados son los siguientes",
+            "Los sistemas operativos soportados",
+        ],
+        end_patterns=[
+            "Plataformas de virtualización compatibles",
+            "Hardware",
+        ]
+    )
+
+    hardware_block = extract_block(
+        start_patterns=[
+            "Los requisitos mínimos de hardware para HP SDS Monitor",
+            "Los requisitos mínimos de hardware",
+            "Hardware",
+        ],
+        end_patterns=[
+            "Preparando el entorno",
+            "NOTA:",
+        ]
+    )
+
+    network_block = extract_block(
+        start_patterns=[
+            "Para que HP SDS Monitor funcione, se deben cumplir los siguientes criterios",
+            "Preparando el entorno",
+        ],
+        end_patterns=[
+            "VeriSign Class 3 Public",
+            "1NOTA:",
+            "2NOTA:",
+        ]
+    )
+
+    environment_items = extract_bullets(environment_block)
+    os_items = extract_bullets(os_block)
+    hardware_items = extract_bullets(hardware_block)
+    network_items = extract_bullets(network_block)
+
+    # -------------------------------------------------------------------------
+    # DETERMINISTIC FALLBACKS FOR THIS DOCUMENT
+    # -------------------------------------------------------------------------
+    if not environment_items:
+        environment_items = []
+        for pattern in [
+            r"•\s*\.NET\s*4\.5",
+            r"•\s*Access to the Internet or HTTP proxy server",
+            r"•\s*IPv4 network",
+        ]:
+            match = re.search(pattern, normalized, flags=re.IGNORECASE)
+            if match:
+                environment_items.append(normalize_item(match.group(0).lstrip("•- ").strip()))
+
+    if not os_items:
+        os_candidates = re.findall(
+            r"(Windows Server 2008 R2|Windows Server 2008|Windows Server 2012|Windows Server 2016|Windows Server 2019 y por encima|Windows 7|Windows 8|Windows 10)",
+            normalized,
+            flags=re.IGNORECASE
+        )
+        os_items = []
+        for item in os_candidates:
+            item = normalize_item(item)
+            if item and item not in os_items:
+                os_items.append(item)
+
+    # Remove accidental note contamination from hardware
+    cleaned_hw = []
+    for item in hardware_items:
+        if "NOTA:" in item:
+            item = item.split("NOTA:")[0].strip()
+        item = normalize_item(item)
+        if item and item not in cleaned_hw:
+            cleaned_hw.append(item)
+    hardware_items = cleaned_hw
+
+    if not hardware_items:
+        hardware_items = []
+        for pattern in [
+            r"32-bit \(x86\) or 64-bit \(x64\) Processor: 1 GHz \(gigahertz\)",
+            r"Memory: 1 GB \(gigabyte\) RAM",
+            r"Espacio necesario para la instalación: mínimo 200 MB de espacio libre en disco",
+        ]:
+            match = re.search(pattern, normalized, flags=re.IGNORECASE)
+            if match:
+                hardware_items.append(normalize_item(match.group(0)))
+
+    if not network_items:
+        network_items = []
+        fallback_network_patterns = [
+            r"Su infraestructura de red debe permitir el enrutamiento del tráfico ICMP Echo \(\"Ping\"\) entre JAMC y las impresoras.*?(?=•|$)",
+            r"Su infraestructura de servidor de seguridad de Internet/proxy HTTP debe permitir la comunicación.*?(?=•|$)",
+            r"Cuando se usan credenciales de proxy HTTP, la autenticación de acceso básico debe estar habilitada.*?(?=•|$)",
+            r"Las credenciales de la cuenta de servicio.*?(?=•|$)",
+        ]
+        for pattern in fallback_network_patterns:
+            match = re.search(pattern, normalized, flags=re.IGNORECASE | re.DOTALL)
+            if match:
+                value = normalize_item(match.group(0))
+                if value and value not in network_items:
+                    network_items.append(value)
+
+    # -------------------------------------------------------------------------
+    # DIRECT SINGLE-VALUE EXTRACTION
+    # -------------------------------------------------------------------------
+    virtualization_value = ""
+    virt_match = re.search(
+        r"Plataformas de virtualización compatibles[:\s]+([^\n]+)",
+        normalized,
+        flags=re.IGNORECASE
+    )
+    if virt_match:
+        virtualization_value = normalize_item(virt_match.group(1))
+
+    note_value = ""
+    note_match = re.search(
+        r"NOTA:\s*(Se admiten los sistemas Windows con varias NIC.*?)(?:\n|$)",
+        normalized,
+        flags=re.IGNORECASE
+    )
+    if note_match:
+        note_value = normalize_item(note_match.group(1))
+
+    bullets = []
+
+    if environment_items:
+        bullets.append(
+            f"- **Prerrequisitos del entorno:** {safe_join(environment_items, max_items=4)}"
+        )
+
+    if os_items:
+        bullets.append(
+            f"- **Sistemas operativos compatibles:** {safe_join(os_items, max_items=8)}"
+        )
+
+    if virtualization_value:
+        bullets.append(
+            f"- **Plataformas de virtualización compatibles:** {virtualization_value}"
+        )
+
+    if hardware_items:
+        bullets.append(
+            f"- **Requisitos mínimos de hardware:** {safe_join(hardware_items, max_items=4)}"
+        )
+
+    if network_items:
+        bullets.append(
+            f"- **Requisitos de red / seguridad:** {safe_join(network_items, max_items=4)}"
+        )
+
+    if not bullets:
+        return build_conservative_no_support_answer(
+            user_query=user_query,
+            real_source_labels=source_labels,
+        )
+
+    source_heading = "Fuente principal:" if len(source_labels) == 1 else "Fuentes principales:"
+    source_block = (
+        source_heading
+        + "\n"
+        + "\n".join(f"- {label}" for label in source_labels[:2])
+    )
+
+    aviso = f"\n\nAviso: {note_value}" if note_value else ""
+
+    return f"""Respuesta:
+Con base en la documentación disponible, estos son los requisitos relevantes identificados para esta consulta:
+
+{chr(10).join(bullets)}
+
+{source_block}{aviso}"""
 
     # -------------------------------------------------------------------------
     # SECTION EXTRACTION
