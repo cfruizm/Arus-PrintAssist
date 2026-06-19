@@ -895,6 +895,80 @@ Fuente(s):
 
 Aviso: La base documental actual no ofrece soporte suficientemente claro para dar un procedimiento preciso."""
 
+def extract_requirement_sentences_from_docs(docs: list, max_sentences: int = 8) -> list"""
+    Extract requirement-like lines from retrieved requirement documents.
+    The goal is to produce grounded, concise answers without relying only on free generation.
+    """
+    candidate_lines = []
+
+    requirement_keywords = [
+        "windows",
+        "server",
+        "ram",
+        "disk",
+        "ghz",
+        "hyperv",
+        "vmware",
+        "cpu",
+        "x86",
+        "x64",
+        "icmp",
+        "ping",
+        "requisitos",
+        "requirements",
+        "hardware",
+        "espacio",
+        "memoria",
+        "sistema operativo",
+        "virtual",
+        "nic",
+        "red",
+    ]
+
+    for doc in docs:
+        content = doc.page_content.splitlines()
+
+        for line in content:
+            line_clean = " ".join(line.strip().split())
+
+            if len(line_clean) < 15:
+                continue
+
+            if any(keyword in line_clean.lower() for keyword in requirement_keywords):
+                if line_clean not in candidate_lines:
+                    candidate_lines.append(line_clean)
+
+    return candidate_lines[:max_sentences]
+
+
+def build_requirements_answer_from_docs(user_query: str, docs: list) -> str:
+    """
+    Build a grounded answer for requirements-oriented queries using only retrieved documents.
+    """
+    source_labels = build_real_source_labels(docs)
+    requirement_lines = extract_requirement_sentences_from_docs(docs)
+
+    if not requirement_lines:
+        return build_conservative_no_support_answer(
+            user_query=user_query,
+            real_source_labels=source_labels,
+        )
+
+    bullet_lines = "\n".join(f"- {line}" for line in requirement_lines[:6])
+
+    source_block = (
+        "Fuente(s):\n" + "\n".join(f"- {label}" for label in source_labels[:3])
+        if source_labels
+        else "Fuente(s):\n- Base de conocimiento actual sin coincidencias documentales suficientes"
+    )
+
+    return f"""Respuesta:
+Con base en la documentación disponible, estos son algunos de los requisitos relevantes identificados para la consulta:
+
+{bullet_lines}
+
+{source_block}"""
+
 def generate_answer_with_rag(user_query: str, memory):
     hf_client = get_hf_client()
 
@@ -917,13 +991,17 @@ def generate_answer_with_rag(user_query: str, memory):
     hard_anchor = has_hard_documentary_anchor(user_query, retrieved_docs, query_intent)
 
     # -------------------------------------------------------------------------
-    # Hard grounding rules
+    # Special grounded path for requirements queries
     # -------------------------------------------------------------------------
-    # Requirements queries:
-    # allow them only if documentary support is real; otherwise be conservative
-    
     if query_intent == "requirements":
-        if not hard_anchor and support_info["support_level"] == "weak":
+        if hard_anchor:
+            answer = build_requirements_answer_from_docs(
+                user_query=user_query,
+                docs=retrieved_docs,
+            )
+            memory.add_turn(user_query, answer)
+            return answer
+        else:
             answer = build_conservative_no_support_answer(
                 user_query=user_query,
                 real_source_labels=real_source_labels,
@@ -931,8 +1009,9 @@ def generate_answer_with_rag(user_query: str, memory):
             memory.add_turn(user_query, answer)
             return answer
 
-    # Procedural or troubleshooting queries:
-    # do not improvise without strong documentary support
+    # -------------------------------------------------------------------------
+    # Hard grounding rules for procedural and troubleshooting queries
+    # -------------------------------------------------------------------------
     if query_intent in {"procedural", "troubleshooting"} and not hard_anchor:
         answer = build_conservative_no_support_answer(
             user_query=user_query,
@@ -941,7 +1020,6 @@ def generate_answer_with_rag(user_query: str, memory):
         memory.add_turn(user_query, answer)
         return answer
 
-    # Weak support on non-conceptual queries -> conservative answer
     if support_info["support_level"] == "weak" and query_intent != "conceptual":
         answer = build_conservative_no_support_answer(
             user_query=user_query,
