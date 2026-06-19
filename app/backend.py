@@ -1,7 +1,6 @@
 # app/backend.py
 # Backend bridge for Arus PrintAssist Streamlit app
 
-
 from __future__ import annotations
 
 import json
@@ -209,8 +208,7 @@ def build_real_source_labels(docs: list) -> list:
 def build_source_block(real_source_labels: list[str]) -> str:
     if not real_source_labels:
         return "- Base de conocimiento actual sin coincidencias documentales suficientes"
-    return "
-".join(f"- {label}" for label in real_source_labels[:3])
+    return "\n".join(f"- {label}" for label in real_source_labels[:3])
 
 
 
@@ -450,11 +448,8 @@ def retrieve_context(query: str, top_k: int = 4):
     for i, doc in enumerate(final_docs, start=1):
         source_label = format_source_label(doc.metadata)
         content = doc.page_content.strip()
-        context_blocks.append(f"[Chunk {i}] Source: {source_label}
-{content}")
-    return "
-
-".join(context_blocks), final_docs
+        context_blocks.append(f"[Chunk {i}] Source: {source_label}\n{content}")
+    return "\n\n".join(context_blocks), final_docs
 
 
 # -----------------------------------------------------------------------------
@@ -642,8 +637,7 @@ def enforce_real_source_traceability(
 def build_conservative_no_support_answer(user_query: str, real_source_labels: list[str] | None = None) -> str:
     source_block = "- Base de conocimiento actual sin coincidencias documentales suficientes"
     if real_source_labels:
-        source_block = "
-".join(f"- {label}" for label in real_source_labels[:2])
+        source_block = "\n".join(f"- {label}" for label in real_source_labels[:2])
     return f"""Respuesta:
 No encontré información suficientemente específica y confiable en la base de conocimiento actual para responder con precisión a esta consulta. Si se trata de una tarea operativa o de configuración, te recomiendo validar con documentación adicional o escalar el caso si el impacto lo requiere.
 
@@ -874,6 +868,20 @@ Con base en la documentación disponible, estos son los requisitos relevantes id
 {chr(10).join(bullets)}
 
 {source_block}{aviso}"""
+
+
+
+def compact_source_heading(source_labels: list[str]) -> str:
+    return "Fuente(s):"
+
+
+def field_accepts_no_value(field_name: str) -> bool:
+    return field_name in {
+        "software_version",
+        "contract_client_location",
+        "evidence",
+        "impact_type",
+    }
 
 # -----------------------------------------------------------------------------
 # Generation
