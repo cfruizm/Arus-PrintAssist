@@ -1,13 +1,12 @@
 # app/backend.py
 # Backend bridge for Arus PrintAssist Streamlit app
 
-from __future__ import annotations
 
-import os
-#os.environ["PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION"] = "python
+from __future__ import annotations
 
 import json
 import re
+from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 
@@ -17,7 +16,7 @@ from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
 
 from app.config import CONFIG, LLM_CONFIG, RUNTIME_DIR
-from app.session_state import ChatSessionState
+from app.session_state import ChatSessionState, RollingConversationMemory
 
 
 # -----------------------------------------------------------------------------
@@ -50,199 +49,173 @@ class IncidentState:
 
 
 # -----------------------------------------------------------------------------
-# Streamlit resource loading
+# Streamlit resources
 # -----------------------------------------------------------------------------
 @st.cache_resource
+
 def get_embedding_model():
-    return HuggingFaceEmbeddings(
-        model_name=CONFIG["embedding_model_name"]
-    )
+    return HuggingFaceEmbeddings(model_name=CONFIG["embedding_model_name"])
+
+
+def get_vectorstore_signature(vectorstore_dir: str) -> str:
+    base = Path(vectorstore_dir)
+    if not base.exists():
+        return "missing"
+    parts = []
+    for path in sorted(base.rglob("*")):
+        if path.is_file():
+            parts.append(f"{path.relative_to(base)}:{path.stat().st_size}")
+    return "|".join(parts)
 
 
 @st.cache_resource
-def get_vectorstore():
+
+def get_vectorstore_cached(signature: str):
     vectorstore_dir = CONFIG["vectorstore_dir"]
-
-    if not Path(vectorstore_dir).exists():
-        raise FileNotFoundError(
-            f"Vector store directory not found: {vectorstore_dir}. "
-            "Please copy the persistent Chroma index into data/vectorstore "
-            "or adjust CONFIG['vectorstore_dir']."
-        )
-
+    collection_name = CONFIG.get("collection_name", "langchain")
     return Chroma(
+        collection_name=collection_name,
         persist_directory=vectorstore_dir,
         embedding_function=get_embedding_model(),
     )
 
 
+def get_vectorstore():
+    vectorstore_dir = CONFIG["vectorstore_dir"]
+    if not Path(vectorstore_dir).exists():
+        raise FileNotFoundError(f"Vector store directory not found: {vectorstore_dir}")
+    signature = get_vectorstore_signature(vectorstore_dir)
+    return get_vectorstore_cached(signature)
+
+
 @st.cache_resource
+
 def get_hf_client():
     hf_token = st.secrets.get("HF_TOKEN", None)
-
-    if hf_token is None:
+    if not hf_token:
         return None
-
-    return InferenceClient(
-        model=LLM_CONFIG["model_name"],
-        token=hf_token
-    )
+    return InferenceClient(model=LLM_CONFIG["model_name"], token=hf_token)
 
 
 def backend_is_ready() -> bool:
     try:
-        _ = get_vectorstore()
         _ = get_embedding_model()
-        # HF client can be optional during initial UI testing
+        _ = get_vectorstore()
         return True
     except Exception:
         return False
 
 
 # -----------------------------------------------------------------------------
-# Session state helpers
+# Session helpers
 # -----------------------------------------------------------------------------
+
 def create_chat_session_state() -> ChatSessionState:
     state = ChatSessionState()
     state.incident_state = IncidentState()
     return state
 
 
+
 def reset_chat_session_state() -> ChatSessionState:
     return create_chat_session_state()
+
+
+
+def ensure_session_state_integrity(session_state: ChatSessionState):
+    if getattr(session_state, "mode", None) is None:
+        session_state.mode = "normal"
+    if getattr(session_state, "memory", None) is None:
+        session_state.memory = RollingConversationMemory(max_turns=4)
+    if getattr(session_state, "logs", None) is None:
+        session_state.logs = []
+    if getattr(session_state, "incident_state", None) is None:
+        session_state.incident_state = IncidentState()
+    if getattr(session_state, "pending_incident_field", None) is None:
+        session_state.pending_incident_field = None
+    return session_state
 
 
 # -----------------------------------------------------------------------------
 # Scope control
 # -----------------------------------------------------------------------------
 PRINT_SCOPE_KEYWORDS = [
-    "impresora",
-    "printer",
-    "papercut",
-    "sds",
-    "hp",
-    "epson",
-    "web jetadmin",
-    "cola de impresión",
-    "cola de impresion",
-    "cola",
-    "spooler",
-    "driver",
-    "firmware",
-    "escaner",
-    "scanner",
-    "toner",
-    "impresión",
-    "impresion",
+    "impresora", "printer", "papercut", "sds", "hp", "epson", "web jetadmin",
+    "cola de impresión", "cola de impresion", "cola", "spooler", "driver", "firmware",
+    "escaner", "scanner", "toner", "impresión", "impresion", "multifuncional",
+    "copiadora", "mfp", "oxp", "wja", "jetadmin",
 ]
 
 SUPPORT_FLOW_KEYWORDS = [
-    "escalar",
-    "nivel 2",
-    "abrir caso",
-    "incidente",
-    "ticket",
-    "no funcionó",
-    "no funciona",
-    "sigue igual",
-    "sigue fallando",
-    "ya hice eso",
-    "ya lo intenté",
-    "ya intenté",
-    "ya reinicié",
-    "ya reinicie",
-    "no se resolvió",
+    "escalar", "nivel 2", "abrir caso", "incidente", "ticket", "no funcionó",
+    "no funciona", "sigue igual", "sigue fallando", "ya hice eso", "ya lo intenté",
+    "ya intenté", "ya reinicié", "ya reinicie", "no se resolvió",
 ]
 
 OUT_OF_SCOPE_RESPONSE = (
     "Solo puedo ayudar con temas relacionados con el servicio de impresión, "
-    "como diagnóstico, documentación, uso de herramientas "
-    "y escalamiento de incidentes."
+    "como diagnóstico, documentación, uso de herramientas y escalamiento de incidentes."
 )
 
 
 def is_in_scope_message(user_message: str) -> bool:
     text = user_message.lower()
-
-    domain_match = any(keyword in text for keyword in PRINT_SCOPE_KEYWORDS)
-    support_flow_match = any(keyword in text for keyword in SUPPORT_FLOW_KEYWORDS)
-
-    return domain_match or support_flow_match
+    return any(k in text for k in PRINT_SCOPE_KEYWORDS) or any(k in text for k in SUPPORT_FLOW_KEYWORDS)
 
 
 # -----------------------------------------------------------------------------
 # Retrieval helpers
 # -----------------------------------------------------------------------------
+
 def format_source_label(metadata: dict) -> str:
     source = metadata.get("source", "unknown_source")
-    page = metadata.get("page_label", metadata.get("page", "n/a"))
     title = metadata.get("title", "")
+    source_name = Path(str(source)).name if "/" in str(source) else str(source)
+    page = metadata.get("page_label", metadata.get("page", None))
+    if page is None:
+        return f"{title} | {source_name}" if title else source_name
+    return f"{title} | {source_name} | page {page}" if title else f"{source_name} | page {page}"
 
-    source_name = Path(source).name if "/" in str(source) else str(source)
 
-    if title:
-        return f"{title} | {source_name} | page {page}"
-    return f"{source_name} | page {page}"
-
-from collections import defaultdict
 
 def build_real_source_labels(docs: list) -> list:
-    """
-    Build a compact ordered list of real source labels.
-    If multiple chunks come from the same document, collapse page labels into a page range.
-    """
     grouped = defaultdict(list)
-
     for doc in docs:
-        metadata = doc.metadata
-        title = metadata.get("title", "")
-        source = metadata.get("source", "unknown_source")
-        source_name = Path(source).name if "/" in str(source) else str(source)
-
-        page_label = metadata.get("page_label", metadata.get("page", None))
-
+        md = doc.metadata
+        title = md.get("title", "")
+        source = md.get("source", "unknown_source")
+        source_name = Path(str(source)).name if "/" in str(source) else str(source)
+        page = md.get("page_label", md.get("page", None))
         key = (title, source_name)
-
-        if page_label is not None:
+        if page is not None:
             try:
-                page_num = int(str(page_label).strip())
-                grouped[key].append(page_num)
+                grouped[key].append(int(str(page)))
             except Exception:
                 pass
-
+        else:
+            grouped[key]
     labels = []
-
     for (title, source_name), pages in grouped.items():
         pages = sorted(set(pages))
-
-        if not pages:
-            if title:
-                labels.append(f"{title} | {source_name}")
-            else:
-                labels.append(source_name)
-            continue
-
-        if len(pages) == 1:
-            page_text = f"page {pages[0]}"
+        if pages:
+            page_text = f"page {pages[0]}" if len(pages) == 1 else f"pages {pages[0]}–{pages[-1]}"
+            labels.append(f"{title} | {source_name} | {page_text}" if title else f"{source_name} | {page_text}")
         else:
-            page_text = f"pages {pages[0]}–{pages[-1]}"
-
-        if title:
-            labels.append(f"{title} | {source_name} | {page_text}")
-        else:
-            labels.append(f"{source_name} | {page_text}")
-
+            labels.append(f"{title} | {source_name}" if title else source_name)
     return labels
+
+
 
 def build_source_block(real_source_labels: list[str]) -> str:
     if not real_source_labels:
-        return "No matching sources available."
+        return "- Base de conocimiento actual sin coincidencias documentales suficientes"
+    return "
+".join(f"- {label}" for label in real_source_labels[:3])
 
-    return "\n".join(f"- {label}" for label in real_source_labels)
+
 
 def make_chroma_filter(**kwargs):
     clauses = [{k: v} for k, v in kwargs.items() if v is not None]
-
     if not clauses:
         return None
     if len(clauses) == 1:
@@ -250,73 +223,41 @@ def make_chroma_filter(**kwargs):
     return {"$and": clauses}
 
 
+
 def detect_query_profile(query: str):
     text = query.lower()
+    profile = {"k_initial": 12, "k_final": CONFIG.get("retrieval_top_k", 4), "filter": None}
 
-    profile = {
-        "k_initial": 12,
-        "k_final": 4,
-        "filter": None,
-    }
-
-    # PaperCut-oriented
-    if any(term in text for term in [
-        "papercut",
-        "trabajos de impresión",
-        "trabajos de impresion",
-        "print jobs",
-        "find-me",
-        "mobility print",
-    ]):
-        profile["filter"] = make_chroma_filter(
-            vendor="papercut",
-            source_group="core_support"
-        )
+    if any(term in text for term in ["papercut", "print jobs", "trabajos de impresión", "trabajos de impresion", "find-me", "mobility print"]):
+        profile["filter"] = make_chroma_filter(vendor="papercut")
         return profile
 
-    # SDS / HP-oriented
-    if any(term in text for term in [
-        "sds",
-        "dca",
-        "sda",
-        "jamc",
-        "hp smart device services",
-    ]):
-        profile["filter"] = make_chroma_filter(
-            vendor="hp",
-            source_group="core_support"
-        )
+    if any(term in text for term in ["sds", "dca", "sda", "jamc", "hp smart device services"]):
+        profile["filter"] = make_chroma_filter(vendor="hp", product="sds")
         return profile
 
-    # Queue / print blocking style issues
-    if any(term in text for term in [
-        "cola",
-        "queue",
-        "bloqueada",
-        "atascada",
-        "atasco",
-        "no imprime",
-    ]):
-        profile["filter"] = make_chroma_filter(
-            source_group="core_support",
-            priority=1
-        )
+    if any(term in text for term in ["web jet admin", "web jetadmin", "wja"]):
+        profile["filter"] = make_chroma_filter(vendor="hp", product="web_jetadmin")
+        return profile
+
+    if any(term in text for term in ["queue", "cola", "bloqueada", "atascada", "spooler"]):
+        profile["filter"] = make_chroma_filter(priority=1)
         return profile
 
     return profile
 
 
+
 def compute_rerank_score(query: str, doc):
     text = query.lower()
     content = doc.page_content.lower()
-    metadata = doc.metadata
+    md = doc.metadata
 
     score = 0.0
-
-    priority = metadata.get("priority", 3)
+    priority = md.get("priority", 3)
     score += max(0, 5 - priority)
 
-    source_type = metadata.get("source_type", "")
+    source_type = md.get("source_type", "")
     if source_type in {"pdf", "troubleshooting", "known_issue"}:
         score += 2.0
     elif source_type == "kb_article":
@@ -324,406 +265,198 @@ def compute_rerank_score(query: str, doc):
     elif source_type == "manual":
         score += 0.5
 
-    title = str(metadata.get("title", "")).lower()
-    if "temporarily hidden message" in title:
-        score += 2.0
+    title = str(md.get("title", "")).lower()
     if "known issues" in title:
+        score -= 1.0
+    if "end user articles" in title or "knowledge base" in title or "troubleshooting articles" in title:
         score -= 1.5
-    if "end user articles" in title:
-        score -= 2.0
-    if "knowledge base" in title:
-        score -= 2.0
-    if "troubleshooting articles" in title:
-        score -= 2.0
 
     query_tokens = [tok for tok in re.findall(r"\w+", text) if len(tok) > 2]
     overlap = sum(1 for tok in query_tokens if tok in content)
     score += overlap * 0.4
 
-    if "dca" in text:
-        if "dca" in content:
-            score += 2.0
-        if "sda" in content and "dca" not in content:
-            score -= 1.5
+    product = str(md.get("product", "")).lower()
+    component = str(md.get("component", "")).lower()
+    family = str(md.get("document_family", "")).lower()
 
-    if "papercut" in text and metadata.get("vendor") == "papercut":
+    if "requirements" in text or "requisitos" in text or "requerimientos" in text:
+        if family == "requirements" or component == "requirements":
+            score += 3.0
+        if product == "sds":
+            score += 1.5
+        if "monitor" in text and component in {"requirements", "monitor"}:
+            score += 1.0
+
+    if "papercut" in text and md.get("vendor") == "papercut":
         score += 2.0
-
-    if "trabajos" in text or "print jobs" in text:
-        if "print jobs" in content or "trabajos" in content or "release" in content:
-            score += 1.5
-
-    if "cola" in text or "bloqueada" in text:
-        if "cola" in content or "queue" in content or "bloqueada" in content:
-            score += 1.5
+    if "web jet admin" in text or "web jetadmin" in text or "wja" in text:
+        if product == "web_jetadmin":
+            score += 2.0
+    if "oxp" in text and "oxp" in content:
+        score += 1.5
 
     return score
+
+
 
 def compute_keyword_overlap_ratio(query: str, content: str) -> float:
     query_tokens = [tok for tok in re.findall(r"\w+", query.lower()) if len(tok) > 2]
     if not query_tokens:
         return 0.0
-
     overlap = sum(1 for tok in query_tokens if tok in content.lower())
     return overlap / max(len(query_tokens), 1)
 
+
+
 def assess_retrieval_support(query: str, docs: list) -> dict:
-    """
-    Determine whether the retrieved context is strong enough to answer
-    only with RAG, or whether a controlled fallback may be needed.
-    """
     if not docs:
-        return {
-            "support_level": "none",
-            "top_score": 0.0,
-            "avg_overlap": 0.0,
-        }
-
-    scores = [compute_rerank_score(query, doc) for doc in docs]
-    overlaps = [compute_keyword_overlap_ratio(query, doc.page_content) for doc in docs]
-
+        return {"support_level": "none", "top_score": 0.0, "avg_overlap": 0.0}
+    scores = [compute_rerank_score(query, d) for d in docs]
+    overlaps = [compute_keyword_overlap_ratio(query, d.page_content) for d in docs]
     top_score = max(scores) if scores else 0.0
     avg_overlap = sum(overlaps) / len(overlaps) if overlaps else 0.0
-
-    if top_score >= 6.0 and avg_overlap >= 0.15:
+    if top_score >= 6.0 and avg_overlap >= 0.12:
         support_level = "strong"
-    elif top_score >= 4.0 and avg_overlap >= 0.08:
+    elif top_score >= 4.0 and avg_overlap >= 0.06:
         support_level = "partial"
     else:
-        support_level = "weak"
-
+        support_level = "weak" if docs else "none"
     return {
         "support_level": support_level,
         "top_score": round(top_score, 3),
         "avg_overlap": round(avg_overlap, 3),
     }
+
+
+
 def classify_query_intent(user_query: str) -> str:
-    """
-    Classify the query into:
-    - conceptual
-    - requirements
-    - procedural
-    - troubleshooting
-    """
     text = user_query.lower()
-
     requirements_patterns = [
-        "qué requerimientos",
-        "que requerimientos",
-        "qué requisitos",
-        "que requisitos",
-        "requerimientos necesarios",
-        "requisitos necesarios",
-        "system requirements",
-        "minimum requirements",
-        "requisitos mínimos",
-        "requisitos minimos",
+        "qué requerimientos", "que requerimientos", "qué requisitos", "que requisitos",
+        "requerimientos necesarios", "requisitos necesarios", "system requirements",
+        "minimum requirements", "requisitos mínimos", "requisitos minimos",
     ]
-
     procedural_patterns = [
-        "cómo instalar",
-        "como instalar",
-        "cómo agregar",
-        "como agregar",
-        "cómo incorporar",
-        "como incorporar",
-        "cómo configurar",
-        "como configurar",
-        "cómo habilitar",
-        "como habilitar",
-        "cómo crear",
-        "como crear",
+        "cómo instalar", "como instalar", "cómo agregar", "como agregar", "cómo incorporar",
+        "como incorporar", "cómo configurar", "como configurar", "cómo habilitar",
+        "como habilitar", "cómo crear", "como crear",
     ]
-
     troubleshooting_patterns = [
-        "qué hacer si",
-        "que hacer si",
-        "error",
-        "falla",
-        "cola",
-        "atasco",
-        "offline",
-        "desaparecen trabajos",
-        "disappearing",
-        "stuck",
-        "not held",
-        "cannot add",
-        "no puedo",
-        "no deja",
+        "qué hacer si", "que hacer si", "error", "falla", "cola", "atasco", "offline",
+        "desaparecen trabajos", "disappearing", "stuck", "not held", "cannot add", "no puedo", "no deja",
     ]
-
     conceptual_patterns = [
-        "qué es",
-        "que es",
-        "para qué sirve",
-        "para que sirve",
-        "cómo funciona",
-        "como funciona",
-        "qué hace",
-        "que hace",
-        "explica",
-        "diferencia entre",
+        "qué es", "que es", "para qué sirve", "para que sirve", "cómo funciona",
+        "como funciona", "qué hace", "que hace", "explica", "diferencia entre",
     ]
-
-    if any(pattern in text for pattern in requirements_patterns):
+    if any(p in text for p in requirements_patterns):
         return "requirements"
-
-    if any(pattern in text for pattern in procedural_patterns):
+    if any(p in text for p in procedural_patterns):
         return "procedural"
-
-    if any(pattern in text for pattern in troubleshooting_patterns):
+    if any(p in text for p in troubleshooting_patterns):
         return "troubleshooting"
-
-    if any(pattern in text for pattern in conceptual_patterns):
+    if any(p in text for p in conceptual_patterns):
         return "conceptual"
-
     return "procedural"
 
+
+
 def has_hard_documentary_anchor(user_query: str, docs: list, query_intent: str) -> bool:
-    """
-    Determine whether the retrieved docs contain enough concrete support
-    for the current type of query.
-    """
     if not docs:
         return False
-
     text = user_query.lower()
-
-    query_terms = []
-    if "papercut" in text:
-        query_terms.append("papercut")
-    if "hp" in text:
-        query_terms.append("hp")
-    if "sds" in text:
-        query_terms.append("sds")
-    if "web jet admin" in text or "web jetadmin" in text:
-        query_terms.append("web jetadmin")
-    if "oxp" in text:
-        query_terms.append("oxp")
-    if "monitor" in text:
-        query_terms.append("monitor")
-
-    procedural_terms = [
-        "install",
-        "instal",
-        "configure",
-        "configur",
-        "add",
-        "agreg",
-        "incorpor",
-        "device",
-        "printer",
-        "queue",
-        "embedded",
-        "release",
-        "authentication",
-        "oxp",
-    ]
-
-    troubleshooting_terms = [
-        "error",
-        "issue",
-        "problem",
-        "troubleshoot",
-        "stuck",
-        "missing",
-        "queue",
-        "print jobs",
-        "device",
-        "offline",
-        "not held",
-    ]
-
-    requirements_terms = [
-        "requirement",
-        "requirements",
-        "requer",
-        "requisitos",
-        "requerimientos",
-        "minimum",
-        "system requirements",
-        "hardware",
-        "ram",
-        "disk",
-        "os",
-        "windows",
-        "server",
-        "vmware",
-        "hyperv",
-        "cpu",
-    ]
-
     for doc in docs:
         content = doc.page_content.lower()
-        meta = doc.metadata
-
-        meta_text = str(meta).lower()
-        title_text = str(meta.get("title", "")).lower()
-        product = str(meta.get("product", "")).lower()
-        component = str(meta.get("component", "")).lower()
-        document_family = str(meta.get("document_family", "")).lower()
-        source_name = str(meta.get("source", "")).lower()
-
-        query_match = any(term in content or term in title_text or term in meta_text for term in query_terms) if query_terms else True
-
+        md = doc.metadata
+        product = str(md.get("product", "")).lower()
+        component = str(md.get("component", "")).lower()
+        family = str(md.get("document_family", "")).lower()
+        title = str(md.get("title", "")).lower()
+        source = str(md.get("source", "")).lower()
         if query_intent == "requirements":
-            # For requirements, be more permissive and trust requirement-like metadata strongly
-            metadata_requirements_match = (
-                document_family == "requirements"
+            if (
+                family == "requirements"
                 or component == "requirements"
-                or "requirements" in title_text
-                or "requer" in title_text
-                or "requirements" in source_name
-                or "requer" in source_name
-            )
-
-            content_requirements_match = any(term in content for term in requirements_terms)
-
-            product_match = product in {"sds", "web_jetadmin", "hp_access_control", "gav_tracking"} or "sds" in meta_text
-
-            if product_match and (metadata_requirements_match or content_requirements_match):
+                or "requirement" in title
+                or "requer" in title
+                or "requirement" in source
+                or "requer" in source
+            ) and product in {"sds", "web_jetadmin", "hp_access_control", "gav_tracking"}:
                 return True
-
-            if query_match and content_requirements_match:
+            req_terms = ["requirements", "requisitos", "requerimientos", "hardware", "windows", "server", "ram", "disk", "vmware", "hyperv", "cpu", "monitor"]
+            if any(t in content for t in req_terms):
                 return True
-
         elif query_intent == "procedural":
-            action_match = any(term in content for term in procedural_terms)
-            if query_match and action_match:
+            terms = ["install", "instal", "configure", "configur", "add", "agreg", "incorpor", "device", "printer", "embedded", "authentication", "oxp"]
+            if any(t in content for t in terms):
                 return True
-
         elif query_intent == "troubleshooting":
-            action_match = any(term in content for term in troubleshooting_terms)
-            if query_match and action_match:
+            terms = ["error", "issue", "problem", "troubleshoot", "stuck", "missing", "queue", "offline", "not held"]
+            if any(t in content for t in terms):
                 return True
-
         elif query_intent == "conceptual":
-            if query_match:
+            if product or content:
                 return True
-
     return False
 
+
+
 def is_explicit_follow_up_query(user_query: str) -> bool:
-    """
-    Detect whether the user is clearly referring to the previous turn.
-    """
     text = user_query.lower().strip()
-
     follow_up_patterns = [
-        "y eso",
-        "y como",
-        "y cómo",
-        "eso",
-        "lo anterior",
-        "esa herramienta",
-        "ese software",
-        "ese sistema",
-        "ese producto",
-        "tambien",
-        "también",
-        "y en ese caso",
-        "y para eso",
+        "y eso", "y como", "y cómo", "eso", "lo anterior", "esa herramienta",
+        "ese software", "ese sistema", "ese producto", "tambien", "también",
+        "y en ese caso", "y para eso",
     ]
+    return any(p in text for p in follow_up_patterns)
 
-    return any(pattern in text for pattern in follow_up_patterns)
+
 
 def should_use_memory_for_query(user_query: str, query_intent: str) -> bool:
-    """
-    Reduce memory contamination:
-    - conceptual queries usually should not inherit previous operational context
-    - requirements queries usually should not inherit previous questions either
-    - only keep memory if the user explicitly refers to previous context
-    """
     if is_explicit_follow_up_query(user_query):
         return True
-
     if query_intent in {"conceptual", "requirements"}:
         return False
-
     return True
+
+
 
 def is_low_risk_general_query(user_query: str) -> bool:
-    """
-    Allow controlled general fallback only for lower-risk queries,
-    such as definitions, concepts, basic explanations, or general guidance.
-    """
     text = user_query.lower()
-
     low_risk_patterns = [
-        "qué es",
-        "que es",
-        "para qué sirve",
-        "para que sirve",
-        "cómo funciona",
-        "como funciona",
-        "explica",
-        "diferencia entre",
-        "requerimientos",
-        "requisitos",
-        "monitor",
-        "qué hace",
-        "que hace",
+        "qué es", "que es", "para qué sirve", "para que sirve", "cómo funciona",
+        "como funciona", "explica", "diferencia entre", "qué hace", "que hace",
     ]
+    return any(p in text for p in low_risk_patterns)
 
-    return any(pattern in text for pattern in low_risk_patterns)
+
 
 def should_use_general_fallback(user_query: str, support_info: dict) -> bool:
-    """
-    Only conceptual queries may use controlled general fallback.
-    Procedural and troubleshooting queries must remain grounded.
-    """
     intent = classify_query_intent(user_query)
-
     if intent != "conceptual":
         return False
+    return support_info["support_level"] != "strong"
 
-    if support_info["support_level"] == "strong":
-        return False
 
-    return True
-    
+
 def retrieve_context(query: str, top_k: int = 4):
     vectorstore = get_vectorstore()
     profile = detect_query_profile(query)
-
-    filtered_retriever = vectorstore.as_retriever(
-        search_kwargs={
-            "k": profile["k_initial"],
-            "filter": profile["filter"]
-        }
-    )
-
-    docs = filtered_retriever.invoke(query)
-
-    ranked_docs = sorted(
-        docs,
-        key=lambda d: compute_rerank_score(query, d),
-        reverse=True
-    )
-
-    final_docs = ranked_docs[:profile["k_final"]]
+    retriever = vectorstore.as_retriever(search_kwargs={"k": profile["k_initial"], "filter": profile["filter"]})
+    docs = retriever.invoke(query)
+    ranked_docs = sorted(docs, key=lambda d: compute_rerank_score(query, d), reverse=True)
+    final_docs = ranked_docs[: profile["k_final"]]
     context_blocks = []
-
     for i, doc in enumerate(final_docs, start=1):
         source_label = format_source_label(doc.metadata)
         content = doc.page_content.strip()
+        context_blocks.append(f"[Chunk {i}] Source: {source_label}
+{content}")
+    return "
 
-        context_blocks.append(
-            f"[Chunk {i}] Source: {source_label}\n{content}"
-        )
+".join(context_blocks), final_docs
 
-    return "\n\n".join(context_blocks), final_docs
 
-def field_accepts_no_value(field_name: str) -> bool:
-    """
-    Only optional/enrichment fields should accept explicit 'no value' answers.
-    """
-    return field_name in {
-        "software_version",
-        "contract_client_location",
-        "evidence",
-        "impact_type",
-    }
 # -----------------------------------------------------------------------------
 # Prompting + generation
 # -----------------------------------------------------------------------------
@@ -750,31 +483,21 @@ Debes seguir estrictamente estas reglas:
 - La respuesta debe priorizar utilidad práctica y trazabilidad real.
 """
 
-def build_rag_messages(
-    user_query: str,
-    retrieved_context: str,
-    memory_text: str,
-    support_level: str = "strong",
-    allow_general_fallback: bool = False,
-    real_source_labels: list[str] | None = None,
-):
+
+
+def build_rag_messages(user_query: str, retrieved_context: str, memory_text: str, support_level: str = "strong", allow_general_fallback: bool = False, real_source_labels: list[str] | None = None):
     real_source_labels = real_source_labels or []
     source_block = build_source_block(real_source_labels)
-
     if allow_general_fallback:
-        fallback_instruction = """
-Puedes complementar de forma prudente con orientación general solo si:
-- la pregunta es de bajo riesgo,
-- el contexto documental es parcial,
-- y la explicación adicional no inventa procedimientos específicos.
-
-Si complementas, NO lo expliques como proceso interno.
-"""
+        fallback_instruction = (
+            "Puedes complementar de forma prudente con orientación general solo si la pregunta es de bajo riesgo y el contexto documental es parcial. "
+            "No expliques al usuario el proceso interno."
+        )
     else:
-        fallback_instruction = """
-Debes basar la respuesta principalmente en la información documental disponible.
-Si la información no es suficiente para responder con precisión, no inventes pasos críticos.
-"""
+        fallback_instruction = (
+            "Debes basar la respuesta principalmente en la información documental disponible. "
+            "Si la información no es suficiente para responder con precisión, no inventes pasos críticos."
+        )
 
     user_content = f"""
 ### MEMORIA CORTA DE LA CONVERSACIÓN
@@ -799,14 +522,13 @@ Respuesta:
 - Da una respuesta clara, útil y orientada a resolver la necesidad del usuario.
 
 Fuente(s):
-- Incluye únicamente fuentes de la lista "FUENTES DISPONIBLES PARA CITAR".
+- Incluye únicamente fuentes de la lista de fuentes disponibles para citar.
 - Si la respuesta no tiene suficiente respaldo documental directo, escribe:
 - Base de conocimiento actual sin coincidencias documentales suficientes
 
 ### REGLAS DE ESTILO
 - No menciones limitaciones salvo que sea realmente necesario.
-- Si hace falta advertir algo importante, añade solo una línea final como:
-Aviso: ...
+- Si hace falta advertir algo importante, añade solo una línea final como: Aviso: ...
 - No expliques tu proceso interno.
 - No menciones contexto recuperado, RAG, fallback ni modelo.
 - No inventes nombres de fuente.
@@ -815,117 +537,113 @@ Aviso: ...
 ### INSTRUCCIÓN ADICIONAL
 {fallback_instruction}
 """
+    return [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": user_content}]
 
-    messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": user_content},
-    ]
 
-    return messages
-    
+
 def clean_user_facing_answer(answer: str) -> str:
-    """
-    Clean the final answer so the user sees a simpler and more natural output.
-    - Remove explicit internal-style sections like 'Limitación:' or 'Nota:'
-    - Convert them into a short 'Aviso:' line only when useful
-    """
     text = answer.strip()
 
-    # Normalize heading variants
-    text = re.sub(r"^\s*nota\s*:\s*", "Aviso: ", text, flags=re.IGNORECASE | re.MULTILINE)
-    text = re.sub(r"^\s*limitaci[oó]n\s*:\s*", "Aviso: ", text, flags=re.IGNORECASE | re.MULTILINE)
+    # Normalize internal-style sections into a softer "Aviso:"
+    text = re.sub(
+        r"^\s*nota\s*:\s*",
+        "Aviso: ",
+        text,
+        flags=re.IGNORECASE | re.MULTILINE
+    )
+    text = re.sub(
+        r"^\s*limitaci[oó]n\s*:\s*",
+        "Aviso: ",
+        text,
+        flags=re.IGNORECASE | re.MULTILINE
+    )
 
-    # Remove repeated blank lines
+    # Collapse excessive blank lines
     text = re.sub(r"\n{3,}", "\n\n", text)
 
-    # If multiple "Aviso:" lines exist, keep them but make formatting compact
     lines = [line.rstrip() for line in text.splitlines()]
-    cleaned_lines = []
-
-    aviso_buffer = []
+    cleaned = []
+    avisos = []
 
     for line in lines:
         stripped = line.strip()
 
         if not stripped:
-            cleaned_lines.append("")
+            cleaned.append("")
             continue
 
         if stripped.lower().startswith("aviso:"):
-            aviso_buffer.append(stripped)
+            if stripped not in avisos:
+                avisos.append(stripped)
         else:
-            cleaned_lines.append(line)
+            cleaned.append(line)
 
-    # Keep only one compact aviso block at the end if any aviso exists
-    final_text = "\n".join(cleaned_lines).strip()
+    final = "\n".join(cleaned).strip()
 
-    if aviso_buffer:
-        unique_avisos = []
-        for aviso in aviso_buffer:
-            if aviso not in unique_avisos:
-                unique_avisos.append(aviso)
+    if avisos:
+        final += "\n\n" + "\n".join(avisos)
 
-        final_text += "\n\n" + "\n".join(unique_avisos)
+    return re.sub(r"\n{3,}", "\n\n", final).strip()
 
-    # Final tidy-up
-    final_text = re.sub(r"\n{3,}", "\n\n", final_text).strip()
-
-    return final_text
 def answer_uses_fake_generic_sources(answer: str) -> bool:
-    generic_patterns = [
-        "documentación oficial de",
-        "documentacion oficial de",
-        "official documentation of",
-    ]
+    generic_patterns = ["documentación oficial de", "documentacion oficial de", "official documentation of"]
     text = answer.lower()
     return any(pattern in text for pattern in generic_patterns)
 
-
-def enforce_real_source_traceability(answer: str, real_source_labels: list[str], support_info: dict, user_query: str) -> str:
+def enforce_real_source_traceability(
+    answer: str,
+    real_source_labels: list[str],
+    support_info: dict,
+    user_query: str
+) -> str:
     """
-    Always rebuild the source section from real retrieved labels only.
+    Rebuild the source section using only real retrieved source labels.
     Never trust the model to invent source names.
     """
     text = answer.strip()
 
-    # Extract avisos if present
-    aviso_lines = []
-    for line in text.splitlines():
-        if line.strip().lower().startswith("aviso:"):
-            aviso_lines.append(line.strip())
+    # Preserve aviso lines if they exist
+    aviso_lines = [
+        line.strip()
+        for line in text.splitlines()
+        if line.strip().lower().startswith("aviso:")
+    ]
 
-    # Keep only the core response before any 'Fuente(s):'
-    split_parts = re.split(r"\n\s*fuente\(s\)\s*:\s*", text, flags=re.IGNORECASE)
+    # Split response from any model-generated source section
+    split_parts = re.split(
+        r"\n\s*fuente\(s\)\s*:\s*",
+        text,
+        flags=re.IGNORECASE
+    )
     response_part = split_parts[0].strip()
 
     # Build trusted source block
-    if support_info["support_level"] == "weak":
-        source_block = "Fuente(s):\n- Base de conocimiento actual sin coincidencias documentales suficientes"
+    if support_info["support_level"] in {"weak", "none"}:
+        source_block = (
+            "Fuente(s):\n"
+            "- Base de conocimiento actual sin coincidencias documentales suficientes"
+        )
     else:
-        if real_source_labels:
-            source_block = "Fuente(s):\n" + "\n".join(f"- {label}" for label in real_source_labels[:3])
-        else:
-            source_block = "Fuente(s):\n- Base de conocimiento actual sin coincidencias documentales suficientes"
+        source_block = "Fuente(s):\n" + build_source_block(real_source_labels)
 
     final_text = f"{response_part}\n\n{source_block}"
 
+    # Re-append unique avisos at the end
     if aviso_lines:
-        unique_avisos = []
+        seen = []
         for aviso in aviso_lines:
-            if aviso not in unique_avisos:
-                unique_avisos.append(aviso)
-        final_text += "\n\n" + "\n".join(unique_avisos)
+            if aviso not in seen:
+                seen.append(aviso)
+
+        final_text += "\n\n" + "\n".join(seen)
 
     return final_text.strip()
 
 def build_conservative_no_support_answer(user_query: str, real_source_labels: list[str] | None = None) -> str:
-    """
-    Conservative answer for weak support on non-low-risk questions.
-    """
     source_block = "- Base de conocimiento actual sin coincidencias documentales suficientes"
     if real_source_labels:
-        source_block = "\n".join(f"- {label}" for label in real_source_labels[:2])
-
+        source_block = "
+".join(f"- {label}" for label in real_source_labels[:2])
     return f"""Respuesta:
 No encontré información suficientemente específica y confiable en la base de conocimiento actual para responder con precisión a esta consulta. Si se trata de una tarea operativa o de configuración, te recomiendo validar con documentación adicional o escalar el caso si el impacto lo requiere.
 
@@ -934,395 +652,221 @@ Fuente(s):
 
 Aviso: La base documental actual no ofrece soporte suficientemente claro para dar un procedimiento preciso."""
 
-import re
-from collections import defaultdict
-from pathlib import Path
 
-
-def build_real_source_labels(docs: list) -> list:
-    """
-    Build a compact ordered list of real source labels.
-    If multiple chunks come from the same document, collapse page labels.
-    """
-    grouped = defaultdict(list)
-
-    for doc in docs:
-        metadata = doc.metadata
-        title = metadata.get("title", "")
-        source = metadata.get("source", "unknown_source")
-        source_name = Path(source).name if "/" in str(source) else str(source)
-
-        page_label = metadata.get("page_label", metadata.get("page", None))
-        key = (title, source_name)
-
-        if page_label is not None:
-            try:
-                page_num = int(str(page_label).strip())
-                grouped[key].append(page_num)
-            except Exception:
-                pass
-
-    labels = []
-
-    for (title, source_name), pages in grouped.items():
-        pages = sorted(set(pages))
-
-        if not pages:
-            if title:
-                labels.append(f"{title} | {source_name}")
-            else:
-                labels.append(source_name)
-            continue
-
-        if len(pages) == 1:
-            page_text = f"page {pages[0]}"
-        else:
-            page_text = f"pages {pages[0]}–{pages[-1]}"
-
-        if title:
-            labels.append(f"{title} | {source_name} | {page_text}")
-        else:
-            labels.append(f"{source_name} | {page_text}")
-
-    return labels
-
-import re
-from collections import defaultdict
-from pathlib import Path
-
-
-def build_real_source_labels(docs: list) -> list:
-    """
-    Build a compact ordered list of real source labels.
-    If multiple chunks come from the same document, collapse page labels.
-    """
-    grouped = defaultdict(list)
-
-    for doc in docs:
-        metadata = doc.metadata
-        title = metadata.get("title", "")
-        source = metadata.get("source", "unknown_source")
-        source_name = Path(source).name if "/" in str(source) else str(source)
-
-        page_label = metadata.get("page_label", metadata.get("page", None))
-        key = (title, source_name)
-
-        if page_label is not None:
-            try:
-                page_num = int(str(page_label).strip())
-                grouped[key].append(page_num)
-            except Exception:
-                pass
-
-    labels = []
-
-    for (title, source_name), pages in grouped.items():
-        pages = sorted(set(pages))
-
-        if not pages:
-            if title:
-                labels.append(f"{title} | {source_name}")
-            else:
-                labels.append(source_name)
-            continue
-
-        if len(pages) == 1:
-            page_text = f"page {pages[0]}"
-        else:
-            page_text = f"pages {pages[0]}–{pages[-1]}"
-
-        if title:
-            labels.append(f"{title} | {source_name} | {page_text}")
-        else:
-            labels.append(f"{source_name} | {page_text}")
-
-    return labels
-
-
-def compact_source_heading(source_labels: list[str]) -> str:
-    if len(source_labels) == 1:
-        return "Fuente principal:"
-    return "Fuentes principales:"
-
+# -----------------------------------------------------------------------------
+# Requirements answer builder
+# -----------------------------------------------------------------------------
 
 def build_combined_requirement_text(docs: list) -> str:
-    """
-    Combine retrieved requirement pages into one normalized text block,
-    preserving order by page.
-    """
-    def _page_num(doc):
+    def page_num(doc):
         try:
-            return int(doc.metadata.get("page", 999999))
+            return int(doc.metadata.get("page", 999))
         except Exception:
-            return 999999
+            return 999
 
-    ordered_docs = sorted(docs, key=_page_num)
+    docs_sorted = sorted(docs, key=page_num)
 
-    parts = []
-    for doc in ordered_docs:
-        text = doc.page_content or ""
+    text = "\n".join(
+        doc.page_content for doc in docs_sorted if doc.page_content
+    )
 
-        # Normalize broken spacing
-        text = text.replace("\r", "\n")
-        text = re.sub(r"[ \t]+", " ", text)
+    text = text.replace("\r", "\n")
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
 
-        # Remove repeated noisy headers
-        noisy_patterns = [
-            r"HP SDS MANAGER SYSTEM REQUIREMENTS.*?(?:\n|$)",
-            r"HP SDS – SYSTEM REQUIREMENTS.*?(?:\n|$)",
-            r"© EKM GLOBAL LIMITED.*?(?:\n|$)",
-            r"Introducción.*?(?:\n|$)",
-        ]
-        for pattern in noisy_patterns:
-            text = re.sub(pattern, "", text, flags=re.IGNORECASE)
+    return text.strip()
 
-        parts.append(text)
+def clean_requirement_line(line: str) -> str:
+    line = " ".join(line.strip().split())
+    if not line:
+        return ""
 
-    combined = "\n".join(parts)
-    combined = re.sub(r"\n{3,}", "\n\n", combined)
-    return combined.strip()
-
-
-def clean_requirement_item(item: str) -> str:
-    """
-    Clean a bullet item extracted from the PDF.
-    """
-    item = " ".join(item.strip().split())
-
-    # Remove leading bullets / dashes
-    item = item.lstrip("•- ").strip()
-
-    # Remove isolated numeric note markers
-    item = re.sub(r"\b\d+\s*NOTA:.*$", "", item, flags=re.IGNORECASE)
-
-    # Remove trailing broken fragments
-    broken_tails = [
-        "que utiliza hp sds monitor",
-        "hp sds",
-        "monitor.",
+    low = line.lower()
+    noise = [
+        "hp sds manager system requirements",
+        "hp sds – system requirements",
+        "company number",
+        "© ekm",
+        "introducción",
+        "introduccion",
     ]
-    low = item.lower()
-    for tail in broken_tails:
-        if low.endswith(tail):
-            item = item[: -len(tail)].strip(" ;,.-")
 
-    return item.strip()
+    if any(n in low for n in noise):
+        return ""
+
+    return line.strip(" ;,.-")
 
 
-def extract_bullets_from_text_block(block: str) -> list[str]:
-    """
-    Extract bullet items from a text block, preserving wrapped bullet continuity.
-    """
+def extract_section(text: str, starts: list[str], stops: list[str]) -> str:
+    t = text.lower()
+    start = None
+
+    for marker in starts:
+        p = t.find(marker.lower())
+        if p != -1:
+            start = p
+            break
+
+    if start is None:
+        return ""
+
+    end = len(text)
+    for marker in stops:
+        p = t.find(marker.lower(), start + 1)
+        if p != -1:
+            end = min(end, p)
+
+    return text[start:end]
+
+
+def extract_bullets(block: str) -> list[str]:
     if not block:
         return []
 
-    lines = [line.strip() for line in block.splitlines() if line.strip()]
+    lines = [clean_requirement_line(l) for l in block.splitlines()]
+    lines = [l for l in lines if l]
+
     items = []
     current = None
 
     for line in lines:
         if line.startswith("•") or line.startswith("-"):
             if current:
-                items.append(clean_requirement_item(current))
-            current = line
+                items.append(current)
+            current = line.lstrip("•- ").strip()
         else:
-            if current is not None:
+            if current:
                 current += " " + line
-            else:
-                # fallback: treat the first non-bullet line as a possible item
-                current = line
 
     if current:
-        items.append(clean_requirement_item(current))
+        items.append(current)
 
-    # de-duplicate while preserving order
-    unique_items = []
+    # remove duplicates
+    unique = []
     for item in items:
-        if item and item not in unique_items:
-            unique_items.append(item)
+        if item and item not in unique:
+            unique.append(item)
 
-    return unique_items
-
-
-def extract_section_block(text: str, start_markers: list[str], stop_markers: list[str]) -> str:
-    """
-    Extract a text section between any start marker and the nearest stop marker.
-    """
-    text_low = text.lower()
-
-    start_positions = []
-    for marker in start_markers:
-        pos = text_low.find(marker.lower())
-        if pos != -1:
-            start_positions.append(pos)
-
-    if not start_positions:
-        return ""
-
-    start_pos = min(start_positions)
-
-    stop_positions = []
-    for marker in stop_markers:
-        pos = text_low.find(marker.lower(), start_pos + 1)
-        if pos != -1:
-            stop_positions.append(pos)
-
-    end_pos = min(stop_positions) if stop_positions else len(text)
-
-    return text[start_pos:end_pos].strip()
+    return unique
 
 
-def extract_structured_requirements_from_docs(docs: list) -> dict:
-    """
-    Extract requirement sections from the combined PDF text.
-    """
-    text = build_combined_requirement_text(docs)
-
-    environment_block = extract_section_block(
-        text,
-        start_markers=[
-            "Los siguientes son los requisitos operativos requeridos",
-            "requisitos operativos requeridos para un monitor HP SDS",
-        ],
-        stop_markers=[
-            "Los sistemas operativos soportados",
-            "Plataformas de virtualización compatibles",
-            "Hardware",
-        ]
-    )
-
-    os_block = extract_section_block(
-        text,
-        start_markers=[
-            "Los sistemas operativos soportados son los siguientes",
-            "Los sistemas operativos soportados",
-        ],
-        stop_markers=[
-            "Plataformas de virtualización compatibles",
-            "Hardware",
-        ]
-    )
-
-    virtualization_block = extract_section_block(
-        text,
-        start_markers=[
-            "Plataformas de virtualización compatibles",
-        ],
-        stop_markers=[
-            "Hardware",
-            "Preparando el entorno",
-        ]
-    )
-
-    hardware_block = extract_section_block(
-        text,
-        start_markers=[
-            "Los requisitos mínimos de hardware",
-            "Hardware",
-        ],
-        stop_markers=[
-            "Preparando el entorno",
-        ]
-    )
-
-    network_block = extract_section_block(
-        text,
-        start_markers=[
-            "Preparando el entorno",
-            "Para que HP SDS Monitor funcione",
-        ],
-        stop_markers=[
-            "1NOTA:",
-            "2NOTA:",
-        ]
-    )
-
-    notes = []
-    for match in re.findall(r"NOTA:\s*(.+?)(?=\n[A-ZÁÉÍÓÚÑ]|$)", text, flags=re.IGNORECASE | re.DOTALL):
-        note = " ".join(match.split()).strip()
-        if note and note not in notes:
-            notes.append(note)
-
-    return {
-        "environment": extract_bullets_from_text_block(environment_block),
-        "operating_systems": extract_bullets_from_text_block(os_block),
-        "virtualization": extract_bullets_from_text_block(virtualization_block),
-        "hardware": extract_bullets_from_text_block(hardware_block),
-        "network_security": extract_bullets_from_text_block(network_block),
-        "notes": notes,
-    }
+def shorten_requirement_item(item: str, max_len: int = 170) -> str:
+    item = " ".join(item.strip().split())
+    return item if len(item) <= max_len else item[:max_len].rsplit(" ", 1)[0] + "..."
 
 
-def shorten_requirement_item(item: str, max_len: int = 180) -> str:
-    item = " ".join(item.split()).strip()
-    if len(item) <= max_len:
-        return item
-
-    truncated = item[:max_len].rsplit(" ", 1)[0]
-    return truncated + "..."
-
-
-def join_items(items: list[str], max_items: int = 4, max_len: int = 180) -> str:
+def join_items(items: list[str], max_items: int = 4) -> str:
     cleaned = []
     for item in items[:max_items]:
-        text = shorten_requirement_item(item, max_len=max_len)
-        if text and text not in cleaned:
-            cleaned.append(text)
-
+        value = shorten_requirement_item(item)
+        if value and value not in cleaned:
+            cleaned.append(value)
     return "; ".join(cleaned)
 
 
 def build_requirements_answer_from_docs(user_query: str, docs: list) -> str:
-    """
-    Build a grounded, structured, enriched answer for requirements queries.
-    """
+    text = build_combined_requirement_text(docs)
     source_labels = build_real_source_labels(docs)
-    structured = extract_structured_requirements_from_docs(docs)
+
+    env_block = extract_section(
+        text,
+        [
+            "Los siguientes son los requisitos operativos requeridos",
+            "requisitos operativos requeridos para un monitor HP SDS",
+        ],
+        [
+            "Los sistemas operativos soportados",
+            "Plataformas de virtualización compatibles",
+            "Hardware",
+        ],
+    )
+
+    os_block = extract_section(
+        text,
+        [
+            "Los sistemas operativos soportados son los siguientes",
+            "Los sistemas operativos soportados",
+        ],
+        [
+            "Plataformas de virtualización compatibles",
+            "Hardware",
+        ],
+    )
+
+    hw_block = extract_section(
+        text,
+        [
+            "Los requisitos mínimos de hardware",
+            "Hardware",
+        ],
+        [
+            "Preparando el entorno",
+        ],
+    )
+
+    net_block = extract_section(
+        text,
+        [
+            "Preparando el entorno",
+            "Para que HP SDS Monitor funcione",
+        ],
+        [
+            "1NOTA:",
+            "2NOTA:",
+            "VeriSign Class 3 Public",
+        ],
+    )
+
+    env_items = extract_bullets(env_block)
+    os_items = extract_bullets(os_block)
+    hw_items = extract_bullets(hw_block)
+    net_items = extract_bullets(net_block)
+
+    virtualization_value = ""
+    m = re.search(
+        r"Plataformas de virtualización compatibles[:\s]+([^\n]+)",
+        text,
+        re.IGNORECASE
+    )
+    if m:
+        virtualization_value = clean_requirement_line(m.group(1))
+
+    note_value = ""
+    m = re.search(
+        r"NOTA:\s*(Se admiten los sistemas Windows con varias NIC.*?)(?:\n|$)",
+        text,
+        re.IGNORECASE
+    )
+    if m:
+        note_value = clean_requirement_line(m.group(1))
 
     bullets = []
 
-    env_text = join_items(structured["environment"], max_items=4, max_len=120)
-    if env_text:
-        bullets.append(f"- **Prerrequisitos del entorno:** {env_text}")
+    if env_items:
+        bullets.append(f"- **Prerrequisitos del entorno:** {join_items(env_items, 4)}")
 
-    os_text = join_items(structured["operating_systems"], max_items=8, max_len=60)
-    if os_text:
-        bullets.append(f"- **Sistemas operativos compatibles:** {os_text}")
+    if os_items:
+        bullets.append(f"- **Sistemas operativos compatibles:** {join_items(os_items, 8)}")
 
-    virt_text = join_items(structured["virtualization"], max_items=2, max_len=100)
-    if virt_text:
-        bullets.append(f"- **Plataformas de virtualización compatibles:** {virt_text}")
+    if virtualization_value:
+        bullets.append(f"- **Plataformas de virtualización compatibles:** {virtualization_value}")
 
-    hw_text = join_items(structured["hardware"], max_items=4, max_len=130)
-    if hw_text:
-        bullets.append(f"- **Requisitos mínimos de hardware:** {hw_text}")
+    if hw_items:
+        bullets.append(f"- **Requisitos mínimos de hardware:** {join_items(hw_items, 4)}")
 
-    net_text = join_items(structured["network_security"], max_items=4, max_len=170)
-    if net_text:
-        bullets.append(f"- **Requisitos de red / seguridad:** {net_text}")
+    if net_items:
+        bullets.append(f"- **Requisitos de red / seguridad:** {join_items(net_items, 4)}")
 
     if not bullets:
-        return build_conservative_no_support_answer(
-            user_query=user_query,
-            real_source_labels=source_labels,
-        )
+        return build_conservative_no_support_answer(user_query, source_labels)
 
-    source_heading = compact_source_heading(source_labels)
     source_block = (
-        source_heading + "\n" + "\n".join(f"- {label}" for label in source_labels[:2])
-        if source_labels
-        else "Fuente(s):\n- Base de conocimiento actual sin coincidencias documentales suficientes"
+        compact_source_heading(source_labels)
+        + "\n"
+        + "\n".join(f"- {s}" for s in source_labels[:2])
     )
 
-    aviso = ""
-    useful_notes = []
-    for note in structured["notes"]:
-        low = note.lower()
-        if "nic" in low or "proxy" in low or "web jetadmin" in low:
-            useful_notes.append(note)
-
-    if useful_notes:
-        aviso = f"\n\nAviso: {shorten_requirement_item(useful_notes[0], max_len=180)}"
+    aviso = f"\n\nAviso: {shorten_requirement_item(note_value)}" if note_value else ""
 
     return f"""Respuesta:
 Con base en la documentación disponible, estos son los requisitos relevantes identificados para esta consulta:
@@ -1331,73 +875,41 @@ Con base en la documentación disponible, estos son los requisitos relevantes id
 
 {source_block}{aviso}"""
 
+# -----------------------------------------------------------------------------
+# Generation
+# -----------------------------------------------------------------------------
+
 def generate_answer_with_rag(user_query: str, memory):
     hf_client = get_hf_client()
-
     if hf_client is None:
-        return (
-            "No fue posible generar la respuesta porque falta la configuración "
-            "del servicio de inferencia."
-        )
+        return "No fue posible generar la respuesta porque falta la configuración del servicio de inferencia."
 
-    retrieved_context, retrieved_docs = retrieve_context(
-        user_query,
-        top_k=CONFIG["retrieval_top_k"]
-    )
-
+    retrieved_context, retrieved_docs = retrieve_context(user_query, top_k=CONFIG["retrieval_top_k"])
     support_info = assess_retrieval_support(user_query, retrieved_docs)
     real_source_labels = build_real_source_labels(retrieved_docs)
-
     query_intent = classify_query_intent(user_query)
     allow_general_fallback = should_use_general_fallback(user_query, support_info)
     hard_anchor = has_hard_documentary_anchor(user_query, retrieved_docs, query_intent)
 
-    # -------------------------------------------------------------------------
-    # Special grounded path for requirements queries
-    # -------------------------------------------------------------------------
     if query_intent == "requirements":
         if hard_anchor:
-            answer = build_requirements_answer_from_docs(
-                user_query=user_query,
-                docs=retrieved_docs,
-            )
-            memory.add_turn(user_query, answer)
-            return answer
+            answer = build_requirements_answer_from_docs(user_query, retrieved_docs)
         else:
-            answer = build_conservative_no_support_answer(
-                user_query=user_query,
-                real_source_labels=real_source_labels,
-            )
-            memory.add_turn(user_query, answer)
-            return answer
+            answer = build_conservative_no_support_answer(user_query, real_source_labels)
+        memory.add_turn(user_query, answer)
+        return answer
 
-    # -------------------------------------------------------------------------
-    # Hard grounding rules for procedural and troubleshooting queries
-    # -------------------------------------------------------------------------
     if query_intent in {"procedural", "troubleshooting"} and not hard_anchor:
-        answer = build_conservative_no_support_answer(
-            user_query=user_query,
-            real_source_labels=real_source_labels,
-        )
+        answer = build_conservative_no_support_answer(user_query, real_source_labels)
         memory.add_turn(user_query, answer)
         return answer
 
-    if support_info["support_level"] == "weak" and query_intent != "conceptual":
-        answer = build_conservative_no_support_answer(
-            user_query=user_query,
-            real_source_labels=real_source_labels,
-        )
+    if support_info["support_level"] in {"weak", "none"} and query_intent != "conceptual":
+        answer = build_conservative_no_support_answer(user_query, real_source_labels)
         memory.add_turn(user_query, answer)
         return answer
 
-    # -------------------------------------------------------------------------
-    # Memory control
-    # -------------------------------------------------------------------------
-    if should_use_memory_for_query(user_query, query_intent):
-        memory_text = memory.format_history()
-    else:
-        memory_text = "No previous conversation."
-
+    memory_text = memory.format_history() if should_use_memory_for_query(user_query, query_intent) else "No previous conversation."
     messages = build_rag_messages(
         user_query=user_query,
         retrieved_context=retrieved_context,
@@ -1410,37 +922,26 @@ def generate_answer_with_rag(user_query: str, memory):
     response = hf_client.chat_completion(
         messages=messages,
         max_tokens=LLM_CONFIG["max_tokens"],
-        temperature=LLM_CONFIG["temperature"]
+        temperature=LLM_CONFIG["temperature"],
     )
 
     answer = response.choices[0].message.content.strip()
     answer = clean_user_facing_answer(answer)
-    answer = enforce_real_source_traceability(
-        answer=answer,
-        real_source_labels=real_source_labels,
-        support_info=support_info,
-        user_query=user_query,
-    )
-
+    answer = enforce_real_source_traceability(answer, real_source_labels, support_info, user_query)
     memory.add_turn(user_query, answer)
-
     return answer
 
-def debug_query_diagnostics(user_query: str) -> dict:
-    """
-    Debug helper for deployed Streamlit app.
-    Returns the exact retrieval and grounding view for a query.
-    """
-    retrieved_context, retrieved_docs = retrieve_context(
-        user_query,
-        top_k=CONFIG["retrieval_top_k"]
-    )
 
+# -----------------------------------------------------------------------------
+# Debug helpers
+# -----------------------------------------------------------------------------
+
+def debug_query_diagnostics(user_query: str) -> dict:
+    retrieved_context, retrieved_docs = retrieve_context(user_query, top_k=CONFIG["retrieval_top_k"])
     support_info = assess_retrieval_support(user_query, retrieved_docs)
     query_intent = classify_query_intent(user_query)
     hard_anchor = has_hard_documentary_anchor(user_query, retrieved_docs, query_intent)
     real_source_labels = build_real_source_labels(retrieved_docs)
-
     docs_summary = []
     for doc in retrieved_docs[:4]:
         docs_summary.append({
@@ -1452,7 +953,6 @@ def debug_query_diagnostics(user_query: str) -> dict:
             "document_family": doc.metadata.get("document_family"),
             "priority": doc.metadata.get("priority"),
         })
-
     return {
         "query": user_query,
         "query_intent": query_intent,
@@ -1461,6 +961,7 @@ def debug_query_diagnostics(user_query: str) -> dict:
         "real_source_labels": real_source_labels,
         "retrieved_docs_summary": docs_summary,
     }
+
 
 # -----------------------------------------------------------------------------
 # Escalation logic
