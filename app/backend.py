@@ -977,7 +977,7 @@ def extract_structured_requirements_from_docs(docs: list) -> dict:
     return structured
 
 
-ef build_requirements_answer_from_docs(user_query: str, docs: list) -> str:
+def build_requirements_answer_from_docs(user_query: str, docs: list) -> str:
     """
     Build a grounded, cleaner answer for requirements-oriented queries.
     """
