@@ -652,6 +652,9 @@ Aviso: La base documental actual no ofrece soporte suficientemente claro para da
 # -----------------------------------------------------------------------------
 
 def build_combined_requirement_text(docs: list) -> str:
+    """
+    Combine retrieved requirement pages in page order and normalize whitespace.
+    """
     def page_num(doc):
         try:
             return int(doc.metadata.get("page", 999))
@@ -660,10 +663,13 @@ def build_combined_requirement_text(docs: list) -> str:
 
     docs_sorted = sorted(docs, key=page_num)
 
-    text = "\n".join(
-        doc.page_content for doc in docs_sorted if doc.page_content
-    )
+    parts = []
+    for doc in docs_sorted:
+        content = getattr(doc, "page_content", None)
+        if content:
+            parts.append(str(content))
 
+    text = "\n".join(parts)
     text = text.replace("\r", "\n")
     text = re.sub(r"[ \t]+", " ", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
@@ -690,6 +696,97 @@ def clean_requirement_line(line: str) -> str:
 
     return line.strip(" ;,.-")
 
+def _extract_section(text: str, start_markers: list[str], stop_markers: list[str]) -> str:
+    """
+    Extract text between a start marker and the nearest stop marker.
+    """
+    lower_text = text.lower()
+
+    start_positions = []
+    for marker in start_markers:
+        pos = lower_text.find(marker.lower())
+        if pos != -1:
+            start_positions.append(pos)
+
+    if not start_positions:
+        return ""
+
+    start = min(start_positions)
+
+    stop_positions = []
+    for marker in stop_markers:
+        pos = lower_text.find(marker.lower(), start + 1)
+        if pos != -1:
+            stop_positions.append(pos)
+
+    end = min(stop_positions) if stop_positions else len(text)
+    return text[start:end].strip()
+
+
+def _extract_bullet_list(section_text: str) -> list[str]:
+    """
+    Extract bulleted items from a section, preserving wrapped lines.
+    """
+    if not section_text:
+        return []
+
+    lines = [" ".join(line.strip().split()) for line in section_text.splitlines()]
+    lines = [line for line in lines if line]
+
+    items = []
+    current = None
+
+    for line in lines:
+        if line.startswith("•") or line.startswith("-"):
+            if current:
+                items.append(current.strip("•- ").strip())
+            current = line
+        else:
+            if current:
+                current += " " + line
+
+    if current:
+        items.append(current.strip("•- ").strip())
+
+    # deduplicate preserving order
+    unique = []
+    for item in items:
+        if item and item not in unique:
+            unique.append(item)
+
+    return unique
+
+
+def _clean_req_item(text: str, max_len: int = 180) -> str:
+    text = " ".join(text.strip().split())
+
+    # remove obvious noise
+    noise_patterns = [
+        r"HP SDS MANAGER SYSTEM REQUIREMENTS.*",
+        r"HP SDS – SYSTEM REQUIREMENTS.*",
+        r"© EKM.*",
+        r"COMPANY NUMBER.*",
+    ]
+    for pattern in noise_patterns:
+        text = re.sub(pattern, "", text, flags=re.IGNORECASE).strip()
+
+    # remove leading headings accidentally glued into lines
+    text = re.sub(r"^(Hardware)\s+", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"^(NOTA:)\s*", "NOTA: ", text, flags=re.IGNORECASE)
+
+    if len(text) > max_len:
+        text = text[:max_len].rsplit(" ", 1)[0] + "..."
+
+    return text.strip(" ;,.-")
+
+
+def _join_items(items: list[str], max_items: int = 4, max_len: int = 180) -> str:
+    cleaned = []
+    for item in items[:max_items]:
+        value = _clean_req_item(item, max_len=max_len)
+        if value and value not in cleaned:
+            cleaned.append(value)
+    return "; ".join(cleaned)
 
 def extract_section(text: str, starts: list[str], stops: list[str]) -> str:
     t = text.lower()
@@ -759,108 +856,129 @@ def join_items(items: list[str], max_items: int = 4) -> str:
 
 
 def build_requirements_answer_from_docs(user_query: str, docs: list) -> str:
+    """
+    Build a grounded and readable answer for requirements queries.
+    """
     text = build_combined_requirement_text(docs)
     source_labels = build_real_source_labels(docs)
 
-    env_block = extract_section(
+    # Sections
+    environment_section = _extract_section(
         text,
-        [
+        start_markers=[
             "Los siguientes son los requisitos operativos requeridos",
             "requisitos operativos requeridos para un monitor HP SDS",
         ],
-        [
+        stop_markers=[
             "Los sistemas operativos soportados",
             "Plataformas de virtualización compatibles",
             "Hardware",
         ],
     )
 
-    os_block = extract_section(
+    os_section = _extract_section(
         text,
-        [
+        start_markers=[
             "Los sistemas operativos soportados son los siguientes",
             "Los sistemas operativos soportados",
         ],
-        [
+        stop_markers=[
             "Plataformas de virtualización compatibles",
             "Hardware",
         ],
     )
 
-    hw_block = extract_section(
+    hardware_section = _extract_section(
         text,
-        [
+        start_markers=[
+            "Los requisitos mínimos de hardware para HP SDS Monitor",
             "Los requisitos mínimos de hardware",
             "Hardware",
         ],
-        [
+        stop_markers=[
             "Preparando el entorno",
         ],
     )
 
-    net_block = extract_section(
+    network_section = _extract_section(
         text,
-        [
+        start_markers=[
+            "Para que HP SDS Monitor funcione, se deben cumplir los siguientes criterios",
             "Preparando el entorno",
-            "Para que HP SDS Monitor funcione",
         ],
-        [
+        stop_markers=[
             "1NOTA:",
             "2NOTA:",
             "VeriSign Class 3 Public",
         ],
     )
 
-    env_items = extract_bullets(env_block)
-    os_items = extract_bullets(os_block)
-    hw_items = extract_bullets(hw_block)
-    net_items = extract_bullets(net_block)
+    # Parse bullet lists
+    environment_items = _extract_bullet_list(environment_section)
+    os_items = _extract_bullet_list(os_section)
+    hardware_items = _extract_bullet_list(hardware_section)
+    network_items = _extract_bullet_list(network_section)
 
+    # Virtualization: prefer direct regex because it is usually inline
     virtualization_value = ""
-    m = re.search(
+    virt_match = re.search(
         r"Plataformas de virtualización compatibles[:\s]+([^\n]+)",
         text,
-        re.IGNORECASE
+        flags=re.IGNORECASE
     )
-    if m:
-        virtualization_value = clean_requirement_line(m.group(1))
+    if virt_match:
+        virtualization_value = _clean_req_item(virt_match.group(1), max_len=120)
 
+    # NIC note
     note_value = ""
-    m = re.search(
+    note_match = re.search(
         r"NOTA:\s*(Se admiten los sistemas Windows con varias NIC.*?)(?:\n|$)",
         text,
-        re.IGNORECASE
+        flags=re.IGNORECASE
     )
-    if m:
-        note_value = clean_requirement_line(m.group(1))
+    if note_match:
+        note_value = _clean_req_item(note_match.group(1), max_len=170)
 
     bullets = []
 
-    if env_items:
-        bullets.append(f"- **Prerrequisitos del entorno:** {join_items(env_items, 4)}")
+    # 1) Environment prerequisites
+    environment_text = _join_items(environment_items, max_items=4, max_len=100)
+    if environment_text:
+        bullets.append(f"- **Prerrequisitos del entorno:** {environment_text}")
 
-    if os_items:
-        bullets.append(f"- **Sistemas operativos compatibles:** {join_items(os_items, 8)}")
+    # 2) Operating systems
+    os_text = _join_items(os_items, max_items=8, max_len=70)
+    if os_text:
+        bullets.append(f"- **Sistemas operativos compatibles:** {os_text}")
 
+    # 3) Virtualization
     if virtualization_value:
         bullets.append(f"- **Plataformas de virtualización compatibles:** {virtualization_value}")
 
-    if hw_items:
-        bullets.append(f"- **Requisitos mínimos de hardware:** {join_items(hw_items, 4)}")
+    # 4) Hardware
+    hardware_text = _join_items(hardware_items, max_items=4, max_len=120)
+    if hardware_text:
+        bullets.append(f"- **Requisitos mínimos de hardware:** {hardware_text}")
 
-    if net_items:
-        bullets.append(f"- **Requisitos de red / seguridad:** {join_items(net_items, 4)}")
+    # 5) Network/security
+    network_text = _join_items(network_items, max_items=4, max_len=170)
+    if network_text:
+        bullets.append(f"- **Requisitos de red / seguridad:** {network_text}")
 
     if not bullets:
-        return build_conservative_no_support_answer(user_query, source_labels)
+        return build_conservative_no_support_answer(
+            user_query=user_query,
+            real_source_labels=source_labels,
+        )
 
+    source_heading = "Fuente principal:" if len(source_labels) == 1 else "Fuentes principales:"
     source_block = (
-        compact_source_heading(source_labels)
+        source_heading
         + "\n"
-        + "\n".join(f"- {s}" for s in source_labels[:2])
+        + "\n".join(f"- {label}" for label in source_labels[:2])
     )
 
-    aviso = f"\n\nAviso: {shorten_requirement_item(note_value)}" if note_value else ""
+    aviso = f"\n\nAviso: {note_value}" if note_value else ""
 
     return f"""Respuesta:
 Con base en la documentación disponible, estos son los requisitos relevantes identificados para esta consulta:
@@ -868,8 +986,6 @@ Con base en la documentación disponible, estos son los requisitos relevantes id
 {chr(10).join(bullets)}
 
 {source_block}{aviso}"""
-
-
 
 def compact_source_heading(source_labels: list[str]) -> str:
     return "Fuente(s):"
