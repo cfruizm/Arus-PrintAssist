@@ -939,12 +939,12 @@ def build_requirements_answer_from_docs(user_query: str, docs: list) -> str:
     bullets = []
 
     # 1) Environment prerequisites
-    environment_text = _join_items(environment_items, max_items=4, max_len=100)
+    environment_text = _join_items(environment_items, max_items=4, max_len=700)
     if environment_text:
         bullets.append(f"- **Prerrequisitos del entorno:** {environment_text}")
 
     # 2) Operating systems
-    os_text = _join_items(os_items, max_items=8, max_len=70)
+    os_text = _join_items(os_items, max_items=8, max_len=700)
     if os_text:
         bullets.append(f"- **Sistemas operativos compatibles:** {os_text}")
 
@@ -953,12 +953,12 @@ def build_requirements_answer_from_docs(user_query: str, docs: list) -> str:
         bullets.append(f"- **Plataformas de virtualización compatibles:** {virtualization_value}")
 
     # 4) Hardware
-    hardware_text = _join_items(hardware_items, max_items=4, max_len=120)
+    hardware_text = _join_items(hardware_items, max_items=4, max_len=700)
     if hardware_text:
         bullets.append(f"- **Requisitos mínimos de hardware:** {hardware_text}")
 
     # 5) Network/security
-    network_text = _join_items(network_items, max_items=4, max_len=170)
+    network_text = _join_items(network_items, max_items=4, max_len=700)
     if network_text:
         bullets.append(f"- **Requisitos de red / seguridad:** {network_text}")
 
