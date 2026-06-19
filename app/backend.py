@@ -854,69 +854,134 @@ def join_items(items: list[str], max_items: int = 4) -> str:
 
 def build_requirements_answer_from_docs(user_query: str, docs: list) -> str:
     """
-    Build a grounded and readable answer for requirements queries.
+    Build a grounded and well-structured answer for requirements queries
+    using deterministic extraction from the retrieved PDF text.
     """
     text = build_combined_requirement_text(docs)
     source_labels = build_real_source_labels(docs)
 
-    # Sections
-    environment_section = _extract_section(
-        text,
-        start_markers=[
+    def extract_block(start_patterns: list[str], end_patterns: list[str]) -> str:
+        lower_text = text.lower()
+
+        start_pos = None
+        for pattern in start_patterns:
+            pos = lower_text.find(pattern.lower())
+            if pos != -1:
+                if start_pos is None or pos < start_pos:
+                    start_pos = pos
+
+        if start_pos is None:
+            return ""
+
+        end_pos = len(text)
+        for pattern in end_patterns:
+            pos = lower_text.find(pattern.lower(), start_pos + 1)
+            if pos != -1 and pos < end_pos:
+                end_pos = pos
+
+        return text[start_pos:end_pos].strip()
+
+    def extract_bullets_regex(block: str) -> list[str]:
+        """
+        Extract bullet items robustly, preserving wrapped bullet lines.
+        """
+        if not block:
+            return []
+
+        matches = re.findall(
+            r"(?:^|\n)\s*[•-]\s*(.+?)(?=(?:\n\s*[•-]\s)|\Z)",
+            block,
+            flags=re.DOTALL
+        )
+
+        cleaned = []
+        for item in matches:
+            item = " ".join(item.split()).strip()
+
+            # Remove obvious noise
+            noise_patterns = [
+                "HP SDS MANAGER SYSTEM REQUIREMENTS",
+                "HP SDS – SYSTEM REQUIREMENTS",
+                "© EKM",
+                "COMPANY NUMBER",
+            ]
+            low = item.lower()
+            if any(noise.lower() in low for noise in noise_patterns):
+                continue
+
+            if item and item not in cleaned:
+                cleaned.append(item)
+
+        return cleaned
+
+    def join_items_full(items: list[str], max_items: int = 4) -> str:
+        """
+        Join bullet items without aggressive truncation.
+        """
+        cleaned = []
+        for item in items[:max_items]:
+            value = " ".join(item.split()).strip()
+            if value and value not in cleaned:
+                cleaned.append(value)
+        return "; ".join(cleaned)
+
+    # -------------------------------------------------------------------------
+    # SECTION EXTRACTION
+    # -------------------------------------------------------------------------
+    environment_block = extract_block(
+        start_patterns=[
             "Los siguientes son los requisitos operativos requeridos",
             "requisitos operativos requeridos para un monitor HP SDS",
         ],
-        stop_markers=[
+        end_patterns=[
             "Los sistemas operativos soportados",
             "Plataformas de virtualización compatibles",
             "Hardware",
-        ],
+        ]
     )
 
-    os_section = _extract_section(
-        text,
-        start_markers=[
+    os_block = extract_block(
+        start_patterns=[
             "Los sistemas operativos soportados son los siguientes",
             "Los sistemas operativos soportados",
         ],
-        stop_markers=[
+        end_patterns=[
             "Plataformas de virtualización compatibles",
             "Hardware",
-        ],
+        ]
     )
 
-    hardware_section = _extract_section(
-        text,
-        start_markers=[
+    hardware_block = extract_block(
+        start_patterns=[
             "Los requisitos mínimos de hardware para HP SDS Monitor",
             "Los requisitos mínimos de hardware",
             "Hardware",
         ],
-        stop_markers=[
+        end_patterns=[
             "Preparando el entorno",
-        ],
+        ]
     )
 
-    network_section = _extract_section(
-        text,
-        start_markers=[
+    network_block = extract_block(
+        start_patterns=[
             "Para que HP SDS Monitor funcione, se deben cumplir los siguientes criterios",
             "Preparando el entorno",
         ],
-        stop_markers=[
+        end_patterns=[
+            "VeriSign Class 3 Public",
             "1NOTA:",
             "2NOTA:",
-            "VeriSign Class 3 Public",
-        ],
+        ]
     )
 
-    # Parse bullet lists
-    environment_items = _extract_bullet_list(environment_section)
-    os_items = _extract_bullet_list(os_section)
-    hardware_items = _extract_bullet_list(hardware_section)
-    network_items = _extract_bullet_list(network_section)
+    environment_items = extract_bullets_regex(environment_block)
+    os_items = extract_bullets_regex(os_block)
+    hardware_items = extract_bullets_regex(hardware_block)
+    network_items = extract_bullets_regex(network_block)
 
-    # Virtualization: prefer direct regex because it is usually inline
+    # -------------------------------------------------------------------------
+    # DIRECT EXTRACTIONS
+    # -------------------------------------------------------------------------
     virtualization_value = ""
     virt_match = re.search(
         r"Plataformas de virtualización compatibles[:\s]+([^\n]+)",
@@ -924,9 +989,8 @@ def build_requirements_answer_from_docs(user_query: str, docs: list) -> str:
         flags=re.IGNORECASE
     )
     if virt_match:
-        virtualization_value = _clean_req_item(virt_match.group(1), max_len=120)
+        virtualization_value = " ".join(virt_match.group(1).split()).strip()
 
-    # NIC note
     note_value = ""
     note_match = re.search(
         r"NOTA:\s*(Se admiten los sistemas Windows con varias NIC.*?)(?:\n|$)",
@@ -934,17 +998,17 @@ def build_requirements_answer_from_docs(user_query: str, docs: list) -> str:
         flags=re.IGNORECASE
     )
     if note_match:
-        note_value = _clean_req_item(note_match.group(1), max_len=170)
+        note_value = " ".join(note_match.group(1).split()).strip()
 
     bullets = []
 
     # 1) Environment prerequisites
-    environment_text = _join_items(environment_items, max_items=4, max_len=700)
-    if environment_text:
-        bullets.append(f"- **Prerrequisitos del entorno:** {environment_text}")
+    env_text = join_items_full(environment_items, max_items=4)
+    if env_text:
+        bullets.append(f"- **Prerrequisitos del entorno:** {env_text}")
 
     # 2) Operating systems
-    os_text = _join_items(os_items, max_items=8, max_len=700)
+    os_text = join_items_full(os_items, max_items=8)
     if os_text:
         bullets.append(f"- **Sistemas operativos compatibles:** {os_text}")
 
@@ -953,14 +1017,14 @@ def build_requirements_answer_from_docs(user_query: str, docs: list) -> str:
         bullets.append(f"- **Plataformas de virtualización compatibles:** {virtualization_value}")
 
     # 4) Hardware
-    hardware_text = _join_items(hardware_items, max_items=4, max_len=700)
-    if hardware_text:
-        bullets.append(f"- **Requisitos mínimos de hardware:** {hardware_text}")
+    hw_text = join_items_full(hardware_items, max_items=4)
+    if hw_text:
+        bullets.append(f"- **Requisitos mínimos de hardware:** {hw_text}")
 
-    # 5) Network/security
-    network_text = _join_items(network_items, max_items=4, max_len=700)
-    if network_text:
-        bullets.append(f"- **Requisitos de red / seguridad:** {network_text}")
+    # 5) Network / security
+    net_text = join_items_full(network_items, max_items=4)
+    if net_text:
+        bullets.append(f"- **Requisitos de red / seguridad:** {net_text}")
 
     if not bullets:
         return build_conservative_no_support_answer(
