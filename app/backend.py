@@ -854,51 +854,60 @@ def join_items(items: list[str], max_items: int = 4) -> str:
 
 def build_requirements_answer_from_docs(user_query: str, docs: list) -> str:
     """
-    Build a grounded and well-structured answer for requirements queries
+    Build a grounded, structured answer for requirements queries
     using deterministic extraction from the retrieved PDF text.
     """
     text = build_combined_requirement_text(docs)
     source_labels = build_real_source_labels(docs)
 
-    def extract_block(start_patterns: list[str], end_patterns: list[str]) -> str:
-        lower_text = text.lower()
+    # Normalize text once
+    normalized_text = text.replace("\r", "\n")
+    normalized_text = re.sub(r"[ \t]+", " ", normalized_text)
+    normalized_text = re.sub(r"\n{3,}", "\n\n", normalized_text)
+
+    def find_block(start_markers: list[str], end_markers: list[str]) -> str:
+        lower_text = normalized_text.lower()
 
         start_pos = None
-        for pattern in start_patterns:
-            pos = lower_text.find(pattern.lower())
-            if pos != -1:
-                if start_pos is None or pos < start_pos:
-                    start_pos = pos
+        chosen_marker = None
+        for marker in start_markers:
+            pos = lower_text.find(marker.lower())
+            if pos != -1 and (start_pos is None or pos < start_pos):
+                start_pos = pos
+                chosen_marker = marker
 
         if start_pos is None:
             return ""
 
-        end_pos = len(text)
-        for pattern in end_patterns:
-            pos = lower_text.find(pattern.lower(), start_pos + 1)
+        # Start AFTER the heading
+        start_pos += len(chosen_marker)
+
+        end_pos = len(normalized_text)
+        for marker in end_markers:
+            pos = lower_text.find(marker.lower(), start_pos)
             if pos != -1 and pos < end_pos:
                 end_pos = pos
 
-        return text[start_pos:end_pos].strip()
+        return normalized_text[start_pos:end_pos].strip()
 
-    def extract_bullets_regex(block: str) -> list[str]:
+    def extract_bullets(block: str, strip_note: bool = False) -> list[str]:
         """
-        Extract bullet items robustly, preserving wrapped bullet lines.
+        Extract bulleted items while preserving wrapped lines.
         """
         if not block:
             return []
 
         matches = re.findall(
-            r"(?:^|\n)\s*[•-]\s*(.+?)(?=(?:\n\s*[•-]\s)|\Z)",
+            r"(?:^|\n)\s*[•\-]\s*(.+?)(?=(?:\n\s*[•\-]\s)|\Z)",
             block,
             flags=re.DOTALL
         )
 
-        cleaned = []
+        items = []
         for item in matches:
             item = " ".join(item.split()).strip()
 
-            # Remove obvious noise
+            # Remove obvious document noise
             noise_patterns = [
                 "HP SDS MANAGER SYSTEM REQUIREMENTS",
                 "HP SDS – SYSTEM REQUIREMENTS",
@@ -909,22 +918,148 @@ def build_requirements_answer_from_docs(user_query: str, docs: list) -> str:
             if any(noise.lower() in low for noise in noise_patterns):
                 continue
 
-            if item and item not in cleaned:
-                cleaned.append(item)
+            # Remove accidental note contamination from the item if needed
+            if strip_note and "NOTA:" in item:
+                item = item.split("NOTA:")[0].strip()
 
-        return cleaned
+            if item and item not in items:
+                items.append(item)
 
-    def join_items_full(items: list[str], max_items: int = 4) -> str:
-        """
-        Join bullet items without aggressive truncation.
-        """
+        return items
+
+    def pretty_join(items: list[str], max_items: int = 8) -> str:
         cleaned = []
         for item in items[:max_items]:
-            value = " ".join(item.split()).strip()
-            if value and value not in cleaned:
-                cleaned.append(value)
+            item = " ".join(item.split()).strip(" ;,.-")
+            if item and item not in cleaned:
+                cleaned.append(item)
         return "; ".join(cleaned)
 
+    # -------------------------------------------------------------------------
+    # SECTION EXTRACTION
+    # -------------------------------------------------------------------------
+    environment_block = find_block(
+        start_markers=[
+            "Los siguientes son los requisitos operativos requeridos",
+            "requisitos operativos requeridos para un monitor HP SDS",
+        ],
+        end_markers=[
+            "Los sistemas operativos soportados",
+            "Plataformas de virtualización compatibles",
+            "Hardware",
+        ]
+    )
+
+    os_block = find_block(
+        start_markers=[
+            "Los sistemas operativos soportados son los siguientes",
+            "Los sistemas operativos soportados",
+        ],
+        end_markers=[
+            "Plataformas de virtualización compatibles",
+            "Hardware",
+        ]
+    )
+
+    hardware_block = find_block(
+        start_markers=[
+            "Los requisitos mínimos de hardware para HP SDS Monitor",
+            "Los requisitos mínimos de hardware",
+            "Hardware",
+        ],
+        end_markers=[
+            "Preparando el entorno",
+            "NOTA:",
+        ]
+    )
+
+    network_block = find_block(
+        start_markers=[
+            "Para que HP SDS Monitor funcione, se deben cumplir los siguientes criterios",
+            "Preparando el entorno",
+        ],
+        end_markers=[
+            "VeriSign Class 3 Public",
+            "1NOTA:",
+            "2NOTA:",
+        ]
+    )
+
+    environment_items = extract_bullets(environment_block)
+    os_items = extract_bullets(os_block)
+    hardware_items = extract_bullets(hardware_block, strip_note=True)
+    network_items = extract_bullets(network_block)
+
+    # -------------------------------------------------------------------------
+    # DIRECT VALUES
+    # -------------------------------------------------------------------------
+    virtualization_value = ""
+    virt_match = re.search(
+        r"Plataformas de virtualización compatibles[:\s]+([^\n]+)",
+        normalized_text,
+        flags=re.IGNORECASE
+    )
+    if virt_match:
+        virtualization_value = " ".join(virt_match.group(1).split()).strip()
+
+    note_value = ""
+    note_match = re.search(
+        r"NOTA:\s*(Se admiten los sistemas Windows con varias NIC.*?)(?:\n|$)",
+        normalized_text,
+        flags=re.IGNORECASE
+    )
+    if note_match:
+        note_value = " ".join(note_match.group(1).split()).strip()
+
+    bullets = []
+
+    if environment_items:
+        bullets.append(
+            f"- **Prerrequisitos del entorno:** {pretty_join(environment_items, max_items=4)}"
+        )
+
+    if os_items:
+        bullets.append(
+            f"- **Sistemas operativos compatibles:** {pretty_join(os_items, max_items=8)}"
+        )
+
+    if virtualization_value:
+        bullets.append(
+            f"- **Plataformas de virtualización compatibles:** {virtualization_value}"
+        )
+
+    if hardware_items:
+        bullets.append(
+            f"- **Requisitos mínimos de hardware:** {pretty_join(hardware_items, max_items=4)}"
+        )
+
+    if network_items:
+        bullets.append(
+            f"- **Requisitos de red / seguridad:** {pretty_join(network_items, max_items=4)}"
+        )
+
+    if not bullets:
+        return build_conservative_no_support_answer(
+            user_query=user_query,
+            real_source_labels=source_labels,
+        )
+
+    source_heading = "Fuente principal:" if len(source_labels) == 1 else "Fuentes principales:"
+    source_block = (
+        source_heading
+        + "\n"
+        + "\n".join(f"- {label}" for label in source_labels[:2])
+    )
+
+    aviso = f"\n\nAviso: {note_value}" if note_value else ""
+
+    return f"""Respuesta:
+Con base en la documentación disponible, estos son los requisitos relevantes identificados para esta consulta:
+
+{chr(10).join(bullets)}
+
+{source_block}{aviso}"""
+    
     # -------------------------------------------------------------------------
     # SECTION EXTRACTION
     # -------------------------------------------------------------------------
