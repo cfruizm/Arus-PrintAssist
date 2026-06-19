@@ -88,6 +88,21 @@ with st.sidebar:
         st.success("Backend ready")
     else:
         st.warning("Backend not ready")
+    
+    # Temporary debug panel
+    with st.expander("Debug query diagnostics"):
+        debug_query = st.text_input(
+            "Consulta para depuración",
+            value="¿Que requerimientos son necesarios para instalar HP SDS monitor?"
+        )
+
+        if st.button("Ejecutar diagnóstico"):
+            try:
+                from app.backend import debug_query_diagnostics
+                debug_result = debug_query_diagnostics(debug_query)
+                st.json(debug_result)
+            except Exception as e:
+                st.error(f"No fue posible ejecutar el diagnóstico: {e}")
 
         try:
             from app.backend import get_backend_status
