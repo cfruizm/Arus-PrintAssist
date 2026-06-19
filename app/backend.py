@@ -841,10 +841,8 @@ def extract_bullets(block: str) -> list[str]:
     return unique
 
 
-def shorten_requirement_item(item: str, max_len: int = 170) -> str:
-    item = " ".join(item.strip().split())
-    return item if len(item) <= max_len else item[:max_len].rsplit(" ", 1)[0] + "..."
-
+def shorten_requirement_item(item: str, max_len: int = 700) -> str:    
+    return " ".join(item.strip().split())
 
 def join_items(items: list[str], max_items: int = 4) -> str:
     cleaned = []
@@ -853,7 +851,6 @@ def join_items(items: list[str], max_items: int = 4) -> str:
         if value and value not in cleaned:
             cleaned.append(value)
     return "; ".join(cleaned)
-
 
 def build_requirements_answer_from_docs(user_query: str, docs: list) -> str:
     """
