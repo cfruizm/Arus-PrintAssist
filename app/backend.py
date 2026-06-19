@@ -1064,6 +1064,43 @@ def generate_answer_with_rag(user_query: str, memory):
     memory.add_turn(user_query, answer)
 
     return answer
+
+def debug_query_diagnostics(user_query: str) -> dict:
+    """
+    Debug helper for deployed Streamlit app.
+    Returns the exact retrieval and grounding view for a query.
+    """
+    retrieved_context, retrieved_docs = retrieve_context(
+        user_query,
+        top_k=CONFIG["retrieval_top_k"]
+    )
+
+    support_info = assess_retrieval_support(user_query, retrieved_docs)
+    query_intent = classify_query_intent(user_query)
+    hard_anchor = has_hard_documentary_anchor(user_query, retrieved_docs, query_intent)
+    real_source_labels = build_real_source_labels(retrieved_docs)
+
+    docs_summary = []
+    for doc in retrieved_docs[:4]:
+        docs_summary.append({
+            "title": doc.metadata.get("title"),
+            "source": doc.metadata.get("source"),
+            "vendor": doc.metadata.get("vendor"),
+            "product": doc.metadata.get("product"),
+            "component": doc.metadata.get("component"),
+            "document_family": doc.metadata.get("document_family"),
+            "priority": doc.metadata.get("priority"),
+        })
+
+    return {
+        "query": user_query,
+        "query_intent": query_intent,
+        "support_info": support_info,
+        "hard_anchor": hard_anchor,
+        "real_source_labels": real_source_labels,
+        "retrieved_docs_summary": docs_summary,
+    }
+
 # -----------------------------------------------------------------------------
 # Escalation logic
 # -----------------------------------------------------------------------------
