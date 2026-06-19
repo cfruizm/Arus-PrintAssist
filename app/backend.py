@@ -895,7 +895,8 @@ Fuente(s):
 
 Aviso: La base documental actual no ofrece soporte suficientemente claro para dar un procedimiento preciso."""
 
-def extract_requirement_sentences_from_docs(docs: list, max_sentences: int = 8) -> list:"""
+def extract_requirement_sentences_from_docs(docs: list, max_sentences: int = 8) -> list:
+    """
     Extract requirement-like lines from retrieved requirement documents.
     The goal is to produce grounded, concise answers without relying only on free generation.
     """
