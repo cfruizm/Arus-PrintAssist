@@ -238,56 +238,115 @@ def detect_query_profile(query: str):
 
     return profile
 
-
-def compute_rerank_score(query: str, doc) -> float:
+def compute_rerank_score(query: str, doc, query_intent: str | None = None) -> float:
     text = query.lower()
     content = doc.page_content.lower()
     md = doc.metadata
 
+    if query_intent is None:
+        query_intent = classify_query_intent(query)
+
     score = 0.0
+
+    # ------------------------------------------------------------------
+    # Base: prefer curated / high-priority sources
+    # ------------------------------------------------------------------
     priority = md.get("priority", 3)
     score += max(0, 5 - priority)
 
-    source_type = md.get("source_type", "")
-    if source_type in {"pdf", "troubleshooting", "known_issue"}:
-        score += 2.0
-    elif source_type == "kb_article":
+    source_type = str(md.get("source_type", "")).lower()
+    source_group = str(md.get("source_group", "")).lower()
+    product = str(md.get("product", "")).lower()
+    component = str(md.get("component", "")).lower()
+    family = str(md.get("document_family", "")).lower()
+    vendor = str(md.get("vendor", "")).lower()
+    title = str(md.get("title", "")).lower()
+
+    if source_type == "pdf":
+        score += 2.5
+    elif source_type in {"kb_article", "manual"}:
         score += 1.0
-    elif source_type == "manual":
+    elif source_type in {"troubleshooting", "known_issue"}:
         score += 0.5
 
-    title = str(md.get("title", "")).lower()
-    if "known issues" in title:
-        score -= 1.0
-    if "end user articles" in title or "knowledge base" in title or "troubleshooting articles" in title:
-        score -= 1.5
+    if source_group == "core_support":
+        score += 1.0
 
+    # ------------------------------------------------------------------
+    # Query token overlap
+    # ------------------------------------------------------------------
     query_tokens = [tok for tok in re.findall(r"\w+", text) if len(tok) > 2]
     overlap = sum(1 for tok in query_tokens if tok in content)
     score += overlap * 0.4
 
-    product = str(md.get("product", "")).lower()
-    component = str(md.get("component", "")).lower()
-    family = str(md.get("document_family", "")).lower()
-
-    if any(term in text for term in ["requirements", "requisitos", "requerimientos"]):
+    # ------------------------------------------------------------------
+    # Intent-aware boosts / penalties
+    # ------------------------------------------------------------------
+    if query_intent == "requirements":
+        # Strong preference for requirements-like documents
         if family == "requirements" or component == "requirements":
-            score += 3.0
-        if product == "sds":
+            score += 5.0
+        if source_type == "pdf":
             score += 1.5
-        if "monitor" in text and component in {"requirements", "monitor"}:
+        if source_type == "manual":
             score += 1.0
 
-    if "papercut" in text and md.get("vendor") == "papercut":
+        # Penalize troubleshooting for requirements questions
+        if source_type in {"troubleshooting", "known_issue"}:
+            score -= 3.0
+
+        if any(term in title for term in ["requirements", "requer", "system requirements"]):
+            score += 3.0
+
+        if any(term in content for term in [
+            "windows server", "windows 10", ".net", "vmware", "hyperv", "hyper-v",
+            "ram", "gigabyte", "espacio libre", "icmp echo", "proxy http", "ipv4"
+        ]):
+            score += 2.0
+
+    elif query_intent == "procedural":
+        # Procedures should prefer install/config/admin docs, not troubleshooting
+        if source_type in {"troubleshooting", "known_issue"}:
+            score -= 1.0
+
+        if any(term in title for term in ["install", "instal", "configure", "configur", "setup"]):
+            score += 2.0
+
+        if component in {"installation", "admin", "guide"}:
+            score += 1.0
+
+    elif query_intent == "troubleshooting":
+        if source_type in {"troubleshooting", "known_issue", "kb_article"}:
+            score += 2.0
+        if any(term in title for term in ["troubleshoot", "issue", "error", "problem", "troubleshooting"]):
+            score += 2.0
+
+    elif query_intent == "conceptual":
+        if source_type == "manual":
+            score += 1.5
+        if any(term in title for term in ["overview", "introduction", "manual", "what is"]):
+            score += 1.0
+        if source_type in {"troubleshooting", "known_issue"}:
+            score -= 1.0
+
+    # ------------------------------------------------------------------
+    # Product / vendor affinity
+    # ------------------------------------------------------------------
+    if "papercut" in text and vendor == "papercut":
         score += 2.0
+
+    if any(term in text for term in ["sds", "hp smart device services", "jamc", "monitor"]):
+        if product == "sds":
+            score += 2.0
+
     if any(term in text for term in ["web jet admin", "web jetadmin", "wja"]):
         if product == "web_jetadmin":
             score += 2.0
+
     if "oxp" in text and "oxp" in content:
         score += 1.5
 
     return score
-
 
 def compute_keyword_overlap_ratio(query: str, content: str) -> float:
     query_tokens = [tok for tok in re.findall(r"\w+", query.lower()) if len(tok) > 2]
@@ -431,19 +490,41 @@ def should_use_general_fallback(user_query: str, support_info: dict) -> bool:
 def retrieve_context(query: str, top_k: int = 4):
     vectorstore = get_vectorstore()
     profile = detect_query_profile(query)
+    query_intent = classify_query_intent(query)
+
+    k_initial = profile["k_initial"]
+    k_final = profile["k_final"]
+
+    # For requirements questions, retrieve more context
+    if query_intent == "requirements":
+        k_initial = max(k_initial, 20)
+        k_final = max(k_final, 6)
+
     retriever = vectorstore.as_retriever(
-        search_kwargs={"k": profile["k_initial"], "filter": profile["filter"]}
+        search_kwargs={
+            "k": k_initial,
+            "filter": profile["filter"],
+        }
     )
+
     docs = retriever.invoke(query)
-    ranked_docs = sorted(docs, key=lambda d: compute_rerank_score(query, d), reverse=True)
-    final_docs = ranked_docs[: profile["k_final"]]
+
+    ranked_docs = sorted(
+        docs,
+        key=lambda d: compute_rerank_score(query, d, query_intent=query_intent),
+        reverse=True,
+    )
+
+    final_docs = ranked_docs[:k_final]
+
     context_blocks = []
     for i, doc in enumerate(final_docs, start=1):
         source_label = format_source_label(doc.metadata)
         content = doc.page_content.strip()
         context_blocks.append(f"[Chunk {i}] Source: {source_label}\n{content}")
-    return "\n\n".join(context_blocks), final_docs
 
+    retrieved_context = "\n\n".join(context_blocks)
+    return retrieved_context, final_docs
 
 # -----------------------------------------------------------------------------
 # Prompting + generation
@@ -482,17 +563,34 @@ def build_rag_messages(
 ):
     real_source_labels = real_source_labels or []
     source_block = build_source_block(real_source_labels)
+    query_intent = classify_query_intent(user_query)
 
     if allow_general_fallback:
         fallback_instruction = (
-            "Puedes complementar de forma prudente con orientación general solo si la pregunta es de bajo riesgo y el contexto documental es parcial. "
-            "No expliques al usuario el proceso interno."
+            "Puedes complementar de forma prudente con orientación general solo si la pregunta es de bajo riesgo "
+            "y el contexto documental es parcial. No expliques al usuario el proceso interno."
         )
     else:
         fallback_instruction = (
             "Debes basar la respuesta principalmente en la información documental disponible. "
             "Si la información no es suficiente para responder con precisión, no inventes pasos críticos."
         )
+
+    requirements_instruction = ""
+    if query_intent == "requirements":
+        requirements_instruction = """
+### INSTRUCCIÓN ESPECIAL PARA CONSULTAS DE REQUERIMIENTOS
+- Si la pregunta es sobre requisitos o requerimientos, estructura la respuesta por categorías cuando el contexto lo permita:
+  - Prerrequisitos del entorno
+  - Sistemas operativos compatibles
+  - Plataformas de virtualización compatibles
+  - Requisitos mínimos de hardware
+  - Requisitos de red / seguridad
+- Incluye solo las categorías que realmente aparezcan en el contexto recuperado.
+- No conviertas la respuesta en pasos de instalación.
+- No uses contenido de troubleshooting como si fuera un requisito de instalación.
+- No recortes información útil si está claramente presente en el contexto.
+"""
 
     user_content = f"""
 ### MEMORIA CORTA DE LA CONVERSACIÓN
@@ -527,7 +625,9 @@ Fuente(s):
 - No expliques tu proceso interno.
 - No menciones contexto recuperado, RAG, fallback ni modelo.
 - No inventes nombres de fuente.
-- No cites \"Documentación oficial de ...\" si no aparece exactamente en la lista de fuentes disponibles.
+- No cites "Documentación oficial de ..." si no aparece exactamente en la lista de fuentes disponibles.
+
+{requirements_instruction}
 
 ### INSTRUCCIÓN ADICIONAL
 {fallback_instruction}
@@ -537,7 +637,6 @@ Fuente(s):
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": user_content},
     ]
-
 
 def clean_user_facing_answer(answer: str) -> str:
     text = answer.strip()
@@ -878,34 +977,55 @@ def field_accepts_no_value(field_name: str) -> bool:
 def generate_answer_with_rag(user_query: str, memory):
     hf_client = get_hf_client()
     if hf_client is None:
-        return "No fue posible generar la respuesta porque falta la configuración del servicio de inferencia."
+        return (
+            "No fue posible generar la respuesta porque falta la configuración "
+            "del servicio de inferencia."
+        )
 
-    retrieved_context, retrieved_docs = retrieve_context(user_query, top_k=CONFIG["retrieval_top_k"])
+    retrieved_context, retrieved_docs = retrieve_context(
+        user_query,
+        top_k=CONFIG["retrieval_top_k"]
+    )
+
     support_info = assess_retrieval_support(user_query, retrieved_docs)
     real_source_labels = build_real_source_labels(retrieved_docs)
     query_intent = classify_query_intent(user_query)
     allow_general_fallback = should_use_general_fallback(user_query, support_info)
     hard_anchor = has_hard_documentary_anchor(user_query, retrieved_docs, query_intent)
 
+    # Requirements: use normal RAG if there is real support.
+    # Only fail closed if support is truly weak and there is no anchor.
     if query_intent == "requirements":
-        if hard_anchor:
-            answer = build_requirements_answer_from_docs(user_query, retrieved_docs)
-        else:
-            answer = build_conservative_no_support_answer(user_query, real_source_labels)
-        memory.add_turn(user_query, answer)
-        return answer
+        if support_info["support_level"] in {"weak", "none"} and not hard_anchor:
+            answer = build_conservative_no_support_answer(
+                user_query=user_query,
+                real_source_labels=real_source_labels,
+            )
+            memory.add_turn(user_query, answer)
+            return answer
 
+    # Procedural / troubleshooting remain strict
     if query_intent in {"procedural", "troubleshooting"} and not hard_anchor:
-        answer = build_conservative_no_support_answer(user_query, real_source_labels)
+        answer = build_conservative_no_support_answer(
+            user_query=user_query,
+            real_source_labels=real_source_labels,
+        )
         memory.add_turn(user_query, answer)
         return answer
 
-    if support_info["support_level"] in {"weak", "none"} and query_intent != "conceptual":
-        answer = build_conservative_no_support_answer(user_query, real_source_labels)
+    if support_info["support_level"] in {"weak", "none"} and query_intent not in {"conceptual", "requirements"}:
+        answer = build_conservative_no_support_answer(
+            user_query=user_query,
+            real_source_labels=real_source_labels,
+        )
         memory.add_turn(user_query, answer)
         return answer
 
-    memory_text = memory.format_history() if should_use_memory_for_query(user_query, query_intent) else "No previous conversation."
+    if should_use_memory_for_query(user_query, query_intent):
+        memory_text = memory.format_history()
+    else:
+        memory_text = "No previous conversation."
+
     messages = build_rag_messages(
         user_query=user_query,
         retrieved_context=retrieved_context,
@@ -923,11 +1043,15 @@ def generate_answer_with_rag(user_query: str, memory):
 
     answer = response.choices[0].message.content.strip()
     answer = clean_user_facing_answer(answer)
-    answer = enforce_real_source_traceability(answer, real_source_labels, support_info, user_query)
+    answer = enforce_real_source_traceability(
+        answer=answer,
+        real_source_labels=real_source_labels,
+        support_info=support_info,
+        user_query=user_query,
+    )
+
     memory.add_turn(user_query, answer)
     return answer
-
-
 # -----------------------------------------------------------------------------
 # Debug helpers
 # -----------------------------------------------------------------------------
