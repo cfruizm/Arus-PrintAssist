@@ -239,6 +239,71 @@ def score_title_and_source_matches(user_query: str, metadata: dict) -> float:
 # -----------------------------------------------------------------------------
 # Retrieval helpers
 # -----------------------------------------------------------------------------
+def get_entity_aliases_for_query(user_query: str) -> list[str]:
+    """
+    Return unique aliases detected in the query from both registries.
+    """
+    text = user_query.lower()
+    aliases = []
+
+    for alias in PRODUCT_ALIAS_INDEX.keys():
+        if alias in text and alias not in aliases:
+            aliases.append(alias)
+
+    for alias in PROCESS_ALIAS_INDEX.keys():
+        if alias in text and alias not in aliases:
+            aliases.append(alias)
+
+    return aliases
+
+
+def has_strong_entity_document_match(user_query: str, docs: list) -> bool:
+    """
+    Detect when retrieved docs are clearly aligned with the user's query,
+    even if generic support heuristics classify support as weak.
+
+    This is especially useful for internal operational procedures where
+    metadata may be sparse, but title/source alignment is very strong.
+    """
+    if not docs:
+        return False
+
+    aliases = get_entity_aliases_for_query(user_query)
+    if not aliases:
+        return False
+
+    strong_hits = 0
+
+    for doc in docs[:4]:
+        md = doc.metadata
+        title = str(md.get("title", "")).lower()
+        source = str(md.get("source", "")).lower()
+        vendor = str(md.get("vendor", "")).lower()
+        source_type = str(md.get("source_type", "")).lower()
+
+        alias_match = any(alias in title or alias in source for alias in aliases)
+
+        internal_match = (
+            vendor == "arus_internal"
+            or "da arus" in source
+            or "/da arus/" in source
+            or "da0" in source
+            or "da0" in title
+            or "in0" in source
+            or "in0" in title
+        )
+
+        if alias_match:
+            strong_hits += 2
+
+        if alias_match and internal_match:
+            strong_hits += 2
+
+        if alias_match and source_type in {"pdf", "manual", "kb_article"}:
+            strong_hits += 1
+
+    return strong_hits >= 3
+
 def format_source_label(metadata: dict) -> str:
     source = metadata.get("source", "unknown_source")
     title = metadata.get("title", "")
@@ -1313,11 +1378,16 @@ def generate_answer_with_rag(user_query: str, memory):
     query_intent = classify_query_intent(user_query)
     allow_general_fallback = should_use_general_fallback(user_query, support_info)
     hard_anchor = has_hard_documentary_anchor(user_query, retrieved_docs, query_intent)
+    strong_entity_match = has_strong_entity_document_match(user_query, retrieved_docs)
 
-    # Requirements: use standard RAG if there is real support.
-    # Only fail closed if support is truly weak and there is no anchor.
+    # Requirements: use normal RAG if there is real support.
+    # Only fail closed if support is weak AND there is no solid entity-document match.
     if query_intent == "requirements":
-        if support_info["support_level"] in {"weak", "none"} and not hard_anchor:
+        if (
+            support_info["support_level"] in {"weak", "none"}
+            and not hard_anchor
+            and not strong_entity_match
+        ):
             answer = build_conservative_no_support_answer(
                 user_query=user_query,
                 real_source_labels=real_source_labels,
@@ -1325,16 +1395,23 @@ def generate_answer_with_rag(user_query: str, memory):
             memory.add_turn(user_query, answer)
             return answer
 
-    # Procedural / troubleshooting remain strict
-    if query_intent in {"procedural", "troubleshooting"} and not hard_anchor:
-        answer = build_conservative_no_support_answer(
-            user_query=user_query,
-            real_source_labels=real_source_labels,
-        )
-        memory.add_turn(user_query, answer)
-        return answer
+    # Procedural / troubleshooting:
+    # remain conservative only if there is neither hard anchor nor strong entity-document match.
+    if query_intent in {"procedural", "troubleshooting"}:
+        if not hard_anchor and not strong_entity_match:
+            answer = build_conservative_no_support_answer(
+                user_query=user_query,
+                real_source_labels=real_source_labels,
+            )
+            memory.add_turn(user_query, answer)
+            return answer
 
-    if support_info["support_level"] in {"weak", "none"} and query_intent not in {"conceptual", "requirements"}:
+    # Generic weak support rule, but allow cases where entity-document alignment is strong.
+    if (
+        support_info["support_level"] in {"weak", "none"}
+        and query_intent not in {"conceptual", "requirements"}
+        and not strong_entity_match
+    ):
         answer = build_conservative_no_support_answer(
             user_query=user_query,
             real_source_labels=real_source_labels,
