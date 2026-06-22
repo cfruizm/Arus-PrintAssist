@@ -175,7 +175,8 @@ with st.sidebar:
             else:
                 st.warning("No se encontró la ruta del archivo exportado.")
     with st.expander("Guía de uso del asistente", expanded=False):
-    st.markdown(
+
+st.markdown(
         """
 ### ¿Qué es Arus PrintAssist?
 Arus PrintAssist es un asistente especializado en soporte de primer nivel para servicios de impresión.  
