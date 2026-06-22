@@ -246,16 +246,80 @@ def make_chroma_filter(**kwargs):
         return clauses[0]
     return {"$and": clauses}
 
+def detect_query_entities(user_query: str) -> dict:
+    """
+    Detect product and process entities present in the query text.
+    """
+    text = user_query.lower()
+
+    product_ids = detect_entities_in_text(text, PRODUCT_ALIAS_INDEX)
+    process_ids = detect_entities_in_text(text, PROCESS_ALIAS_INDEX)
+
+    return {
+        "products": product_ids,
+        "processes": process_ids,
+    }
 
 def detect_query_profile(query: str):
+    """
+    Build a retrieval profile using:
+    - query intent
+    - detected product/process entities
+    - generic domain heuristics
+    """
     text = query.lower()
-    profile = {"k_initial": 12, "k_final": CONFIG.get("retrieval_top_k", 4), "filter": None}
+    query_intent = classify_query_intent(query)
+    query_entities = detect_query_entities(query)
+    retrieval_hints = build_entity_retrieval_hints(query_entities)
 
-    if any(term in text for term in ["papercut", "print jobs", "trabajos de impresión", "trabajos de impresion", "find-me", "mobility print"]):
+    profile = {
+        "k_initial": 12,
+        "k_final": CONFIG.get("retrieval_top_k", 4),
+        "filter": None,
+        "query_intent": query_intent,
+        "query_entities": query_entities,
+        "retrieval_hints": retrieval_hints,
+    }
+
+    # ------------------------------------------------------------------
+    # Intent-driven context size
+    # ------------------------------------------------------------------
+    if query_intent == "requirements":
+        profile["k_initial"] = 20
+        profile["k_final"] = 6
+    elif query_intent == "architecture":
+        profile["k_initial"] = 18
+        profile["k_final"] = 6
+    elif query_intent == "conceptual":
+        profile["k_initial"] = 10
+        profile["k_final"] = 4
+    elif query_intent in {"procedural", "troubleshooting"}:
+        profile["k_initial"] = 14
+        profile["k_final"] = 5
+
+    # ------------------------------------------------------------------
+    # Product/entity-aware metadata filter
+    # ------------------------------------------------------------------
+    vendor = retrieval_hints.get("vendor")
+    product = retrieval_hints.get("product")
+    component = retrieval_hints.get("component")
+
+    if vendor or product or component:
+        profile["filter"] = make_chroma_filter(
+            vendor=vendor,
+            product=product,
+            component=component,
+        )
+        return profile
+
+    # ------------------------------------------------------------------
+    # Fallback generic heuristics if no entity hints were detected
+    # ------------------------------------------------------------------
+    if any(term in text for term in ["papercut", "print jobs", "trabajos de impresión", "trabajos de impresion"]):
         profile["filter"] = make_chroma_filter(vendor="papercut")
         return profile
 
-    if any(term in text for term in ["sds", "dca", "sda", "jamc", "hp smart device services"]):
+    if any(term in text for term in ["sds", "hp smart device services", "jamc", "dca"]):
         profile["filter"] = make_chroma_filter(vendor="hp", product="sds")
         return profile
 
@@ -263,13 +327,60 @@ def detect_query_profile(query: str):
         profile["filter"] = make_chroma_filter(vendor="hp", product="web_jetadmin")
         return profile
 
-    if any(term in text for term in ["queue", "cola", "bloqueada", "atascada", "spooler"]):
-        profile["filter"] = make_chroma_filter(priority=1)
+    if any(term in text for term in ["access control", "hp ac", "hac"]):
+        profile["filter"] = make_chroma_filter(vendor="hp", product="hp_access_control")
+        return profile
+
+    if any(term in text for term in ["gav tracking", "gav"]):
+        profile["filter"] = make_chroma_filter(vendor="gav", product="gav_tracking")
+        return profile
+
+    if any(term in text for term in ["epson remote services", "ers"]):
+        profile["filter"] = make_chroma_filter(vendor="epson", product="epson_remote_services")
+        return profile
+
+    if any(term in text for term in ["epson print admin", "epa"]):
+        profile["filter"] = make_chroma_filter(vendor="epson", product="epson_print_admin")
         return profile
 
     return profile
 
+def build_entity_retrieval_hints(query_entities: dict) -> dict:
+    """
+    Build retrieval hints from detected entities.
+    This does NOT bind queries to specific documents.
+    It only enriches retrieval with product/vendor/component hints.
+    """
+    hints = {
+        "vendor": None,
+        "product": None,
+        "component": None,
+    }
+
+    # Prefer product entities first
+    for product_id in query_entities.get("products", []):
+        entity = PRODUCT_ENTITY_REGISTRY.get(product_id)
+        if not entity:
+            continue
+
+        entity_hints = entity.get("retrieval_hints", {})
+        if hints["vendor"] is None and entity_hints.get("vendor"):
+            hints["vendor"] = entity_hints["vendor"]
+        if hints["product"] is None and entity_hints.get("product"):
+            hints["product"] = entity_hints["product"]
+        if hints["component"] is None and entity_hints.get("component"):
+            hints["component"] = entity_hints["component"]
+
+    return hints
+
 def compute_rerank_score(query: str, doc, query_intent: str | None = None) -> float:
+    """
+    Compute a query-aware reranking score using:
+    - source type / priority
+    - document metadata
+    - detected product/process entities
+    - query intent
+    """
     text = query.lower()
     content = doc.page_content.lower()
     metadata = doc.metadata
@@ -277,21 +388,26 @@ def compute_rerank_score(query: str, doc, query_intent: str | None = None) -> fl
     if query_intent is None:
         query_intent = classify_query_intent(query)
 
-    score = 0.0
+    query_entities = detect_query_entities(query)
+    detected_product_ids = query_entities.get("products", [])
+    detected_process_ids = query_entities.get("processes", [])
 
-    # ------------------------------------------------------------------
-    # Base: prefer curated / higher-priority sources
-    # ------------------------------------------------------------------
-    priority = metadata.get("priority", 3)
-    score += max(0.0, 5.0 - float(priority))
+    score = 0.0
 
     source_type = str(metadata.get("source_type", "")).lower()
     source_group = str(metadata.get("source_group", "")).lower()
+    vendor = str(metadata.get("vendor", "")).lower()
     product = str(metadata.get("product", "")).lower()
     component = str(metadata.get("component", "")).lower()
     document_family = str(metadata.get("document_family", "")).lower()
-    vendor = str(metadata.get("vendor", "")).lower()
     title = str(metadata.get("title", "")).lower()
+    source = str(metadata.get("source", "")).lower()
+    priority = metadata.get("priority", 3)
+
+    # ------------------------------------------------------------------
+    # Base score from priority and source type
+    # ------------------------------------------------------------------
+    score += max(0.0, 5.0 - float(priority))
 
     if source_type == "pdf":
         score += 2.5
@@ -313,36 +429,87 @@ def compute_rerank_score(query: str, doc, query_intent: str | None = None) -> fl
     score += overlap * 0.4
 
     # ------------------------------------------------------------------
-    # Intent-aware boosts / penalties
+    # Product/entity-aware alignment
+    # ------------------------------------------------------------------
+    if detected_product_ids:
+        matched_any_product = False
+
+        for product_id in detected_product_ids:
+            entity = PRODUCT_ENTITY_REGISTRY.get(product_id)
+            if not entity:
+                continue
+
+            hints = entity.get("retrieval_hints", {})
+            hint_vendor = str(hints.get("vendor") or "").lower()
+            hint_product = str(hints.get("product") or "").lower()
+            hint_component = str(hints.get("component") or "").lower()
+
+            if hint_vendor and vendor == hint_vendor:
+                score += 2.0
+                matched_any_product = True
+
+            if hint_product and product == hint_product:
+                score += 3.0
+                matched_any_product = True
+
+            if hint_component and component == hint_component:
+                score += 1.5
+                matched_any_product = True
+
+        # Penalize documents from clearly different products when a product was detected
+        if not matched_any_product:
+            score -= 1.5
+
+    # ------------------------------------------------------------------
+    # Process-aware alignment
+    # ------------------------------------------------------------------
+    if detected_process_ids:
+        # Operational / internal process queries should prefer DA Arus / internal support docs
+        if any(process_id in detected_process_ids for process_id in [
+            "control_consumables",
+            "asset_management",
+            "supplies_warranty",
+            "billing",
+            "simp",
+            "scan_to_network_folder",
+        ]):
+            if (
+                vendor == "arus_internal"
+                or "da arus" in source
+                or "/da arus/" in source
+                or "da0" in source
+                or "da0" in title
+            ):
+                score += 4.0
+
+        # Architecture/security process
+        if "security_architecture" in detected_process_ids:
+            if any(term in title for term in ["arquitectura", "security", "nube", "cloud"]):
+                score += 2.5
+            if document_family in {"architecture", "security"}:
+                score += 2.5
+
+    # ------------------------------------------------------------------
+    # Intent-aware adjustments
     # ------------------------------------------------------------------
     if query_intent == "requirements":
-        # Strong preference for requirements-like sources
         if document_family == "requirements" or component == "requirements":
             score += 5.0
         if source_type == "pdf":
             score += 1.5
         if source_type == "manual":
             score += 1.0
-
-        # Penalize troubleshooting for requirements questions
         if source_type in {"troubleshooting", "known_issue"}:
             score -= 3.0
 
         if any(term in title for term in ["requirements", "requer", "system requirements"]):
             score += 3.0
 
-        if any(term in content for term in [
-            "windows server", ".net", "vmware", "hyperv", "ram",
-            "gigabyte", "espacio libre", "icmp echo", "proxy http", "ipv4"
-        ]):
-            score += 2.0
-
     elif query_intent == "procedural":
-        # Procedures should prefer install/config/admin docs over troubleshooting
         if source_type in {"troubleshooting", "known_issue"}:
             score -= 1.0
 
-        if any(term in title for term in ["install", "instal", "configure", "configur", "setup"]):
+        if any(term in title for term in ["install", "instal", "configure", "configur", "setup", "manual", "operación", "operacion"]):
             score += 2.0
 
         if component in {"installation", "admin", "guide"}:
@@ -351,33 +518,17 @@ def compute_rerank_score(query: str, doc, query_intent: str | None = None) -> fl
     elif query_intent == "troubleshooting":
         if source_type in {"troubleshooting", "known_issue", "kb_article"}:
             score += 2.0
+
         if any(term in title for term in ["troubleshoot", "issue", "error", "problem", "troubleshooting"]):
             score += 2.0
 
     elif query_intent == "conceptual":
         if source_type == "manual":
             score += 1.5
-        if any(term in title for term in ["overview", "introduction", "manual", "what is"]):
+        if any(term in title for term in ["overview", "introduction", "manual", "what is", "guía", "guia"]):
             score += 1.0
         if source_type in {"troubleshooting", "known_issue"}:
             score -= 1.0
-
-    # ------------------------------------------------------------------
-    # Product / vendor affinity
-    # ------------------------------------------------------------------
-    if "papercut" in text and vendor == "papercut":
-        score += 2.0
-
-    if any(term in text for term in ["sds", "hp smart device services", "jamc", "monitor"]):
-        if product == "sds":
-            score += 2.0
-
-    if any(term in text for term in ["web jet admin", "web jetadmin", "wja"]):
-        if product == "web_jetadmin":
-            score += 2.0
-
-    if "oxp" in text and "oxp" in content:
-        score += 1.5
 
     return score
 
