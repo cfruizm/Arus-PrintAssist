@@ -188,6 +188,53 @@ def detect_query_entities(user_query: str) -> dict:
         "products": product_ids,
         "processes": process_ids,
     }
+    
+def get_detected_entity_aliases(user_query: str) -> list[str]:
+    """
+    Return all matched aliases present in the query text,
+    from both product and process registries.
+    """
+    text = user_query.lower()
+    aliases = []
+
+    for alias in PRODUCT_ALIAS_INDEX.keys():
+        if alias in text and alias not in aliases:
+            aliases.append(alias)
+
+    for alias in PROCESS_ALIAS_INDEX.keys():
+        if alias in text and alias not in aliases:
+            aliases.append(alias)
+
+    return aliases
+
+
+def score_title_and_source_matches(user_query: str, metadata: dict) -> float:
+    """
+    Boost documents whose title/source strongly match detected entity aliases
+    or important query fragments.
+    """
+    score = 0.0
+    title = str(metadata.get("title", "")).lower()
+    source = str(metadata.get("source", "")).lower()
+
+    detected_aliases = get_detected_entity_aliases(user_query)
+
+    for alias in detected_aliases:
+        if alias in title:
+            score += 4.0
+        if alias in source:
+            score += 3.0
+
+    # Additional phrase-level boost for exact query fragments
+    query_text = user_query.lower().strip()
+
+    if len(query_text) >= 8:
+        if query_text in title:
+            score += 5.0
+        if query_text in source:
+            score += 4.0
+
+    return score
 
 # -----------------------------------------------------------------------------
 # Retrieval helpers
@@ -379,7 +426,8 @@ def compute_rerank_score(query: str, doc, query_intent: str | None = None) -> fl
     - source type / priority
     - document metadata
     - detected product/process entities
-    - query intent
+    - title/source alias alignment
+    - intent
     """
     text = query.lower()
     content = doc.page_content.lower()
@@ -422,11 +470,16 @@ def compute_rerank_score(query: str, doc, query_intent: str | None = None) -> fl
         score += 1.0
 
     # ------------------------------------------------------------------
-    # Query token overlap
+    # Query token overlap in content
     # ------------------------------------------------------------------
     query_tokens = [tok for tok in re.findall(r"\w+", text) if len(tok) > 2]
     overlap = sum(1 for tok in query_tokens if tok in content)
     score += overlap * 0.4
+
+    # ------------------------------------------------------------------
+    # Exact alias / title / source alignment
+    # ------------------------------------------------------------------
+    score += score_title_and_source_matches(query, metadata)
 
     # ------------------------------------------------------------------
     # Product/entity-aware alignment
@@ -449,14 +502,13 @@ def compute_rerank_score(query: str, doc, query_intent: str | None = None) -> fl
                 matched_any_product = True
 
             if hint_product and product == hint_product:
-                score += 3.0
+                score += 3.5
                 matched_any_product = True
 
             if hint_component and component == hint_component:
-                score += 1.5
+                score += 2.0
                 matched_any_product = True
 
-        # Penalize documents from clearly different products when a product was detected
         if not matched_any_product:
             score -= 1.5
 
@@ -464,7 +516,7 @@ def compute_rerank_score(query: str, doc, query_intent: str | None = None) -> fl
     # Process-aware alignment
     # ------------------------------------------------------------------
     if detected_process_ids:
-        # Operational / internal process queries should prefer DA Arus / internal support docs
+        # Prefer DA Arus/internal support material for internal operational processes
         if any(process_id in detected_process_ids for process_id in [
             "control_consumables",
             "asset_management",
@@ -472,6 +524,10 @@ def compute_rerank_score(query: str, doc, query_intent: str | None = None) -> fl
             "billing",
             "simp",
             "scan_to_network_folder",
+            "pin_printing",
+            "firmware_update",
+            "printer_installation_server",
+            "printer_installation_mac",
         ]):
             if (
                 vendor == "arus_internal"
@@ -479,8 +535,10 @@ def compute_rerank_score(query: str, doc, query_intent: str | None = None) -> fl
                 or "/da arus/" in source
                 or "da0" in source
                 or "da0" in title
+                or "in0" in source
+                or "in0" in title
             ):
-                score += 4.0
+                score += 5.0
 
         # Architecture/security process
         if "security_architecture" in detected_process_ids:
@@ -509,8 +567,12 @@ def compute_rerank_score(query: str, doc, query_intent: str | None = None) -> fl
         if source_type in {"troubleshooting", "known_issue"}:
             score -= 1.0
 
-        if any(term in title for term in ["install", "instal", "configure", "configur", "setup", "manual", "operación", "operacion"]):
-            score += 2.0
+        if any(term in title for term in [
+            "install", "instal", "configure", "configur", "setup",
+            "manual", "operación", "operacion", "configurar", "operar",
+            "consultar", "asignar", "trámite", "tramite"
+        ]):
+            score += 2.5
 
         if component in {"installation", "admin", "guide"}:
             score += 1.0
