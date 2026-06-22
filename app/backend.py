@@ -313,6 +313,10 @@ def detect_query_profile(query: str):
     - query intent
     - detected product/process entities
     - generic domain heuristics
+
+    The key design choice:
+    - use hard metadata filters only when the entity maps reliably to index metadata
+    - otherwise prefer broad retrieval + reranking
     """
     text = query.lower()
     query_intent = classify_query_intent(query)
@@ -345,19 +349,55 @@ def detect_query_profile(query: str):
         profile["k_final"] = 5
 
     # ------------------------------------------------------------------
-    # Product/entity-aware metadata filter
+    # Use hard metadata filters only if reliable
     # ------------------------------------------------------------------
     vendor = retrieval_hints.get("vendor")
     product = retrieval_hints.get("product")
     component = retrieval_hints.get("component")
+    hard_filter = retrieval_hints.get("hard_filter", False)
 
-    if vendor or product or component:
+    if hard_filter and (vendor or product or component):
         profile["filter"] = make_chroma_filter(
             vendor=vendor,
             product=product,
             component=component,
         )
         return profile
+
+    # ------------------------------------------------------------------
+    # Fallback generic heuristics only for stable metadata families
+    # ------------------------------------------------------------------
+    if any(term in text for term in ["papercut", "paper cut"]):
+        profile["filter"] = make_chroma_filter(vendor="papercut")
+        return profile
+
+    if any(term in text for term in ["sds", "hp smart device services", "jamc", "dca"]):
+        profile["filter"] = make_chroma_filter(vendor="hp", product="sds")
+        return profile
+
+    if any(term in text for term in ["web jet admin", "web jetadmin", "wja"]):
+        profile["filter"] = make_chroma_filter(vendor="hp", product="web_jetadmin")
+        return profile
+
+    if any(term in text for term in ["access control", "hp ac", "hac"]):
+        profile["filter"] = make_chroma_filter(vendor="hp", product="hp_access_control")
+        return profile
+
+    if any(term in text for term in ["gav tracking", "gav"]):
+        profile["filter"] = make_chroma_filter(vendor="gav", product="gav_tracking")
+        return profile
+
+    if any(term in text for term in ["epson remote services", "ers"]):
+        profile["filter"] = make_chroma_filter(vendor="epson", product="epson_remote_services")
+        return profile
+
+    if any(term in text for term in ["epson print admin", "epa"]):
+        profile["filter"] = make_chroma_filter(vendor="epson", product="epson_print_admin")
+        return profile
+
+    # For internal/operational questions (DA Arus / Print Evolve / MFPsecure / SIMP),
+    # do not constrain retrieval with metadata filters.
+    return profile
 
     # ------------------------------------------------------------------
     # Fallback generic heuristics if no entity hints were detected
@@ -395,28 +435,64 @@ def detect_query_profile(query: str):
 def build_entity_retrieval_hints(query_entities: dict) -> dict:
     """
     Build retrieval hints from detected entities.
-    This does NOT bind queries to specific documents.
-    It only enriches retrieval with product/vendor/component hints.
+
+    Important:
+    - hard_filter = True only when the entity has reliable metadata alignment
+      with the vectorstore (e.g. HP SDS, WJA, GAV, HAC).
+    - hard_filter = False for internal/support/DA Arus style entities or when
+      the entity concept does not map cleanly to vectorstore product metadata.
     """
     hints = {
         "vendor": None,
         "product": None,
         "component": None,
+        "hard_filter": False,
     }
 
-    # Prefer product entities first
     for product_id in query_entities.get("products", []):
         entity = PRODUCT_ENTITY_REGISTRY.get(product_id)
         if not entity:
             continue
 
         entity_hints = entity.get("retrieval_hints", {})
-        if hints["vendor"] is None and entity_hints.get("vendor"):
-            hints["vendor"] = entity_hints["vendor"]
-        if hints["product"] is None and entity_hints.get("product"):
-            hints["product"] = entity_hints["product"]
-        if hints["component"] is None and entity_hints.get("component"):
-            hints["component"] = entity_hints["component"]
+        hint_vendor = entity_hints.get("vendor")
+        hint_product = entity_hints.get("product")
+        hint_component = entity_hints.get("component")
+
+        if hints["vendor"] is None and hint_vendor:
+            hints["vendor"] = hint_vendor
+        if hints["product"] is None and hint_product:
+            hints["product"] = hint_product
+        if hints["component"] is None and hint_component:
+            hints["component"] = hint_component
+
+        # Use hard filters only for entities whose metadata is likely
+        # to exist consistently in the vectorstore.
+        if product_id in {
+            "hp_sds",
+            "hp_sds_monitor",
+            "hp_sds_dca",
+            "jamc",
+            "hp_web_jetadmin",
+            "hp_access_control",
+            "gav_tracking",
+            "papercut_mf",
+            "papercut_hive",
+            "papercut_ng",
+            "epson_remote_services",
+            "epson_print_admin",
+        }:
+            hints["hard_filter"] = True
+
+        # Internal/operational tools should not force a hard metadata filter.
+        if product_id in {
+            "print_evolve",
+            "mfpsecure",
+            "mipa_agent",
+            "dashboard_simp",
+            "da_arus",
+        }:
+            hints["hard_filter"] = False
 
     return hints
 
