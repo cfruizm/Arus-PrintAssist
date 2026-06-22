@@ -81,8 +81,7 @@ if "chat_messages" not in st.session_state:
             "role": "assistant",
             "content": (
                 "Hola, soy Arus PrintAssist. "
-                "Puedo ayudarte con documentación técnica, troubleshooting básico "
-                "y recopilación de información para escalamiento."
+                "¿Con que puedo ayudarte hoy? "
             ),
         }
     ]
