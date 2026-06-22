@@ -361,7 +361,7 @@ PRODUCT_ENTITY_REGISTRY = {
         "aliases": [
             "print evolve",
         ],
-        "vendor": "Print Evolve",
+        "vendor": "LRS",
         "entity_type": "software_platform",
         "domain_area": "print_management",
         "in_scope": True,
@@ -371,6 +371,7 @@ PRODUCT_ENTITY_REGISTRY = {
         "related_entities": [
             "simp",
             "pin_printing",
+            "da_arus",
         ],
         "common_intents": [
             "conceptual",
@@ -378,7 +379,7 @@ PRODUCT_ENTITY_REGISTRY = {
             "troubleshooting",
         ],
         "notes": (
-            "Hay documentación operativa interna asociada en DA Arus."
+            "Frecuente en operación interna, PIN y procedimientos de mesa de ayuda."
         ),
         "retrieval_hints": {
             "vendor": None,
@@ -386,7 +387,71 @@ PRODUCT_ENTITY_REGISTRY = {
             "component": None,
         },
     },
-
+    
+    "dashboard_simp": {
+        "canonical_name": "Dashboard SIMP",
+        "aliases": [
+            "dashboard simp",
+            "dashboard control operacion simp",
+            "dashboard control operación simp",
+        ],
+        "vendor": "Arus",
+        "entity_type": "internal_operational_tool",
+        "domain_area": "managed_print_services",
+        "in_scope": True,
+        "description": (
+            "Tablero o dashboard interno asociado a la operación de los servicios de impresión."
+        ),
+        "related_entities": [
+            "simp",
+            "da_arus",
+        ],
+        "common_intents": [
+            "conceptual",
+            "procedural",
+            "operational",
+        ],
+        "notes": "",
+        "retrieval_hints": {
+            "vendor": "arus_internal",
+            "product": "sanitized_support_assets",
+            "component": "internal_support_asset",
+        },
+    },
+    
+    "mfpsecure": {
+        "canonical_name": "MFPsecure",
+        "aliases": [
+            "mfpsecure",
+            "mfp secure",
+        ],
+        "vendor": "LRS",
+        "entity_type": "software_platform",
+        "domain_area": "print_security",
+        "in_scope": True,
+        "description": (
+            "Herramienta asociada a operación/seguridad de dispositivos multifuncionales."
+        ),
+        "related_entities": [
+            "da_arus",
+            "embedded_devices",
+            "papercut_mf",
+        ],
+        "common_intents": [
+            "conceptual",
+            "procedural",
+            "troubleshooting",
+        ],
+        "notes": (
+            "Frecuente en documentación operativa interna DA Arus."
+        ),
+        "retrieval_hints": {
+            "vendor": "arus_internal",
+            "product": "sanitized_support_assets",
+            "component": "internal_support_asset",
+        },
+    },
+    
     "hp_printers": {
         "canonical_name": "Impresoras HP",
         "aliases": [
@@ -600,7 +665,6 @@ PRODUCT_ENTITY_REGISTRY = {
         },
     },
 }
-
 
 PROCESS_ENTITY_REGISTRY = {
     "control_consumables": {
