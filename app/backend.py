@@ -16,6 +16,14 @@ from langchain_huggingface import HuggingFaceEmbeddings
 from app.config import CONFIG, LLM_CONFIG, RUNTIME_DIR
 from app.session_state import ChatSessionState, RollingConversationMemory
 
+from app.domain_registry import (
+    PRODUCT_ENTITY_REGISTRY,
+    PROCESS_ENTITY_REGISTRY,
+    PRODUCT_ALIAS_INDEX,
+    PROCESS_ALIAS_INDEX,
+    detect_entities_in_text,
+)
+
 
 # -----------------------------------------------------------------------------
 # Incident state
@@ -153,10 +161,33 @@ OUT_OF_SCOPE_RESPONSE = (
 
 def is_in_scope_message(user_message: str) -> bool:
     text = user_message.lower()
+
+    detected_products = detect_entities_in_text(text, PRODUCT_ALIAS_INDEX)
+    detected_processes = detect_entities_in_text(text, PROCESS_ALIAS_INDEX)
+
+    if detected_products or detected_processes:
+        return True
+
+    # Fallback to generic scope keywords
     domain_match = any(k in text for k in PRINT_SCOPE_KEYWORDS)
     support_match = any(k in text for k in SUPPORT_FLOW_KEYWORDS)
+
     return domain_match or support_match
 
+# -----------------------------------------------------------------------------
+# Query Entities helpers
+# -----------------------------------------------------------------------------
+    
+def detect_query_entities(user_query: str) -> dict:
+    text = user_query.lower()
+
+    product_ids = detect_entities_in_text(text, PRODUCT_ALIAS_INDEX)
+    process_ids = detect_entities_in_text(text, PROCESS_ALIAS_INDEX)
+
+    return {
+        "products": product_ids,
+        "processes": process_ids,
+    }
 
 # -----------------------------------------------------------------------------
 # Retrieval helpers
