@@ -74,6 +74,17 @@ if "chat_messages" not in st.session_state:
         }
     ]
 
+# ---------------------------------------------------------------------------
+st.markdown(
+    """
+**Arus PrintAssist** puede ayudarte con documentación técnica, troubleshooting básico, procedimientos del servicio de impresión y recopilación de información para escalamiento.
+
+**Ten en cuenta:**
+- Responde con base en la documentación disponible.
+- Puede dar respuestas parciales si una consulta no está bien cubierta por la base documental.
+- En casos críticos o ambiguos, se recomienda validar la información o escalar el caso.
+"""
+)
 
 # -----------------------------------------------------------------------------
 # Sidebar
@@ -163,7 +174,41 @@ with st.sidebar:
                     st.error(f"No fue posible preparar la descarga del archivo: {e}")
             else:
                 st.warning("No se encontró la ruta del archivo exportado.")
+    with st.expander("Guía de uso del asistente", expanded=False):
+    st.markdown(
+        """
+### ¿Qué es Arus PrintAssist?
+Arus PrintAssist es un asistente especializado en soporte de primer nivel para servicios de impresión.  
+Puede ayudarte con consultas sobre software de impresión, herramientas del servicio, procedimientos operativos, troubleshooting básico y recopilación de información para escalamiento.
 
+### ¿Qué puede hacer?
+- Responder preguntas conceptuales sobre herramientas y soluciones del servicio de impresión.
+- Consultar requerimientos, componentes y características de algunos productos soportados.
+- Orientar procedimientos operativos y configuraciones básicas cuando exista soporte documental.
+- Brindar apoyo en troubleshooting inicial de incidentes relacionados con impresión.
+- Guiar la recolección de información para escalamiento de casos.
+- Responder usando la base documental disponible e indicar las fuentes consultadas.
+
+### Limitaciones
+- Las respuestas se generan con base en la documentación cargada en la base de conocimiento.
+- Si la documentación disponible no cubre bien una consulta, la respuesta puede ser parcial, incompleta o conservadora.
+- El asistente no reemplaza la validación técnica humana en casos críticos, ambiguos o de alto impacto.
+- Algunas respuestas pueden contener errores, omisiones o interpretaciones imperfectas de la documentación.
+
+### Ejemplos de preguntas recomendadas
+- ¿Qué es HP Web Jetadmin?
+- ¿Qué requerimientos son necesarios para instalar HP SDS Monitor?
+- ¿Cómo reiniciar manualmente el servicio de HP Web Jetadmin?
+- ¿Qué debo hacer si los trabajos desaparecen en PaperCut MF?
+- ¿Cuáles son los componentes de la solución HP Access Control?
+- ¿Cómo realizar el trámite de garantía de los suministros de impresión?
+- ¿Qué debo tener en cuenta para una arquitectura de seguridad en nube de GAV Tracking?
+
+### Aviso
+Este asistente puede cometer errores u omisiones.  
+Si la consulta implica configuraciones críticas, procedimientos de alto impacto, cambios en seguridad o decisiones operativas sensibles, se recomienda validar la respuesta con documentación adicional o escalar el caso cuando corresponda.
+"""
+    )
 # -----------------------------------------------------------------------------
 # Render chat history
 # -----------------------------------------------------------------------------
