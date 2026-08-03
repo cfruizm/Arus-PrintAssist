@@ -232,7 +232,7 @@ with st.sidebar:
             st.write("Offset:", BACKEND_IMPORT_ERROR.offset)
             st.write("Mensaje:", BACKEND_IMPORT_ERROR.msg)
             if BACKEND_IMPORT_ERROR.text:
-            st.code(BACKEND_IMPORT_ERROR.text, language="python")
+                st.code(BACKEND_IMPORT_ERROR.text, language="python")
         
         st.sidebar.divider()
         st.sidebar.subheader("Debug técnico")
