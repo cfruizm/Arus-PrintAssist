@@ -1778,6 +1778,7 @@ def answer_is_sources_only(answer: str) -> bool:
 # -----------------------------------------------------------------------------
 def generate_answer_with_rag(user_query: str, memory):
     hf_client = get_hf_client()
+
     if hf_client is None:
         return (
             "No fue posible generar la respuesta porque falta la configuración "
@@ -1835,17 +1836,6 @@ def generate_answer_with_rag(user_query: str, memory):
         memory.add_turn(user_query, answer)
         return answer
 
-    if answer_is_sources_only(answer):
-        answer = (
-            "Respuesta:\n"
-            "- No logré generar una respuesta técnica completa con el modelo actual. "
-            "Sin embargo, sí se recuperaron fuentes documentales relevantes para la consulta. "
-            "Revisa las fuentes listadas y vuelve a intentar la pregunta con más detalle.\n\n"
-            "Fuente(s):\n"
-            f"{build_source_block(real_source_labels)}\n\n"
-            "Aviso: La generación del modelo fue incompleta, aunque el retrieval documental sí encontró fuentes."
-        )
-    
     if should_use_memory_for_query(user_query, query_intent):
         memory_text = memory.format_history()
     else:
@@ -1866,17 +1856,7 @@ def generate_answer_with_rag(user_query: str, memory):
             max_tokens=LLM_CONFIG["max_tokens"],
             temperature=LLM_CONFIG["temperature"],
         )
-    
-        st.session_state["last_llm_diagnostics"] = {
-            "llm_call_ok": True,
-            "model": get_effective_llm_model(),
-            "provider": get_effective_hf_provider(),
-            "temperature": LLM_CONFIG.get("temperature"),
-            "max_tokens": LLM_CONFIG.get("max_tokens"),
-            "error": None,
-            "timestamp": datetime.now().isoformat(),
-        }
-    
+
     except BadRequestError as e:
         st.session_state["last_llm_diagnostics"] = {
             "llm_call_ok": False,
@@ -1888,7 +1868,7 @@ def generate_answer_with_rag(user_query: str, memory):
             "timestamp": datetime.now().isoformat(),
         }
         return build_llm_unavailable_answer(e)
-    
+
     except HfHubHTTPError as e:
         st.session_state["last_llm_diagnostics"] = {
             "llm_call_ok": False,
@@ -1900,12 +1880,12 @@ def generate_answer_with_rag(user_query: str, memory):
             "timestamp": datetime.now().isoformat(),
         }
         return build_llm_unavailable_answer(e)
-    
+
     except Exception as e:
         st.session_state["last_llm_diagnostics"] = {
             "llm_call_ok": False,
-            "model": LLM_CONFIG.get("model_name"),
-            "provider": st.secrets.get("HF_PROVIDER", LLM_CONFIG.get("provider", None)),
+            "model": get_effective_llm_model(),
+            "provider": get_effective_hf_provider(),
             "temperature": LLM_CONFIG.get("temperature"),
             "max_tokens": LLM_CONFIG.get("max_tokens"),
             "error": str(e),
@@ -1928,12 +1908,10 @@ def generate_answer_with_rag(user_query: str, memory):
         "has_fuentes_section": "fuente" in raw_answer.lower(),
         "error": None,
         "timestamp": datetime.now().isoformat(),
-        "raw_answer_length": len(raw_answer),
-        "raw_answer_preview": raw_answer[:1000],
-        "has_respuesta_section": "respuesta:" in raw_answer.lower(),
-        "has_fuentes_section": "fuente" in raw_answer.lower(),
     }
+
     answer = clean_user_facing_answer(answer)
+
     answer = enforce_real_source_traceability(
         answer=answer,
         real_source_labels=real_source_labels,
@@ -1941,7 +1919,23 @@ def generate_answer_with_rag(user_query: str, memory):
         user_query=user_query,
     )
 
+    if answer_is_sources_only(answer):
+        answer = (
+            "Respuesta:\n"
+            "- No logré generar una respuesta técnica completa con el modelo actual. "
+            "Sin embargo, sí se recuperaron fuentes documentales relevantes para la consulta. "
+            "Revisa las fuentes listadas y vuelve a intentar la pregunta con más detalle.\n\n"
+            "Fuente(s):\n"
+            f"{build_source_block(real_source_labels)}\n\n"
+            "Aviso: La generación del modelo fue incompleta, aunque el retrieval documental sí encontró fuentes."
+        )
+
+        st.session_state["last_llm_diagnostics"]["malformed_answer_detected"] = True
+    else:
+        st.session_state["last_llm_diagnostics"]["malformed_answer_detected"] = False
+
     memory.add_turn(user_query, answer)
+
     return answer
     
 # -----------------------------------------------------------------------------
