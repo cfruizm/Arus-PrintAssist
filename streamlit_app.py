@@ -224,6 +224,16 @@ with st.sidebar:
     if DEBUG_UI and BACKEND_IMPORT_ERROR is not None:
         st.error("Error importando app.backend")
         st.exception(BACKEND_IMPORT_ERROR)
+        
+        if isinstance(BACKEND_IMPORT_ERROR, SyntaxError):
+            st.subheader("Detalle del SyntaxError")
+            st.write("Archivo:", BACKEND_IMPORT_ERROR.filename)
+            st.write("Línea:", BACKEND_IMPORT_ERROR.lineno)
+            st.write("Offset:", BACKEND_IMPORT_ERROR.offset)
+            st.write("Mensaje:", BACKEND_IMPORT_ERROR.msg)
+            if BACKEND_IMPORT_ERROR.text:
+            st.code(BACKEND_IMPORT_ERROR.text, language="python")
+        
         st.sidebar.divider()
         st.sidebar.subheader("Debug técnico")
     
