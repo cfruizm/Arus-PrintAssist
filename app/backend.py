@@ -1754,6 +1754,24 @@ def build_llm_unavailable_answer(error: Exception | None = None) -> str:
         "- Base de conocimiento actual sin respuesta generada por el modelo.\n\n"
         "Aviso: Revisa la configuración del modelo o proveedor de inferencia antes de intentar nuevamente."
     )
+def answer_is_sources_only(answer: str) -> bool:
+        text = answer.strip().lower()
+    
+        if not text:
+            return True
+    
+        has_response = "respuesta:" in text
+        has_sources = "fuente" in text
+    
+        # If it has sources but no real response section, treat as bad generation.
+        if has_sources and not has_response:
+            return True
+    
+        # Very short answers are usually malformed.
+        if len(text) < 80:
+            return True
+    
+        return False
 
 # -----------------------------------------------------------------------------
 # Generation
@@ -1897,25 +1915,6 @@ def generate_answer_with_rag(user_query: str, memory):
 
     answer = response.choices[0].message.content.strip()
     raw_answer = answer
-
-    def answer_is_sources_only(answer: str) -> bool:
-        text = answer.strip().lower()
-    
-        if not text:
-            return True
-    
-        has_response = "respuesta:" in text
-        has_sources = "fuente" in text
-    
-        # If it has sources but no real response section, treat as bad generation.
-        if has_sources and not has_response:
-            return True
-    
-        # Very short answers are usually malformed.
-        if len(text) < 80:
-            return True
-    
-        return False
 
     st.session_state["last_llm_diagnostics"] = {
         "llm_call_ok": True,
