@@ -737,7 +737,7 @@ def should_keep_ranked_doc(
     Decide whether a reranked document is relevant enough to be sent
     to the final LLM context.
 
-    This reduces source contamination after broad retrieval.
+    This function is intentionally strict by intent to reduce source contamination.
     """
     text = query.lower()
     content = doc.page_content.lower()
@@ -757,33 +757,105 @@ def should_keep_ranked_doc(
 
     relative_score = score / top_score
 
-    # Keep very strong documents.
-    if score >= 10:
-        return True
+    legal_noise_terms = [
+        "aviso legal",
+        "información de uso interno",
+        "informacion de uso interno",
+        "información restringida",
+        "informacion restringida",
+        "confidencial",
+        "uso exclusivo",
+        "divulgación, reenvío, copia",
+        "divulgacion, reenvio, copia",
+        "estrictamente prohibida",
+    ]
 
-    # PaperCut-focused queries should keep PaperCut-related evidence.
+    is_legal_or_cover_noise = any(term in content[:1200] for term in legal_noise_terms)
+
+    useful_papercut_terms = [
+        "trabajos de impresión",
+        "trabajos de impresion",
+        "registro de trabajos",
+        "usuarios",
+        "papercut mf",
+        "liberar",
+        "liberación",
+        "liberacion",
+        "cola",
+        "print jobs",
+        "held jobs",
+        "release jobs",
+    ]
+
+    useful_sds_requirement_terms = [
+        "requirements",
+        "requisitos",
+        "prerrequisitos",
+        "system requirements",
+        "minimum requirements",
+        "sistema operativo",
+        "operating system",
+        "windows server",
+        "windows 10",
+        "virtualización",
+        "virtualizacion",
+        "vmware",
+        "hyperv",
+        "hardware",
+        "red",
+        "network",
+    ]
+
+    useful_warranty_terms = [
+        "garantía",
+        "garantia",
+        "garantías",
+        "garantias",
+        "warranty",
+        "suministro",
+        "suministros",
+        "consumible",
+        "consumibles",
+        "proveedor",
+        "proveedores",
+        "reemplazo",
+        "rma",
+        "trámite de garantías",
+        "tramite de garantias",
+    ]
+
+    useful_escalation_terms = [
+        "escalar",
+        "escalamiento",
+        "nivel 2",
+        "nivel 3",
+        "incidente",
+        "ticket",
+        "caso",
+        "proveedor",
+        "fabricante",
+        "informar al área",
+        "informar al area",
+        "mesa de ayuda",
+    ]
+
+    # PaperCut-focused queries.
     if "papercut" in text:
         has_papercut = "papercut" in title_source or "papercut" in content
+        has_useful_papercut_content = any(term in content for term in useful_papercut_terms)
 
-        if has_papercut and score >= 4:
+        if is_legal_or_cover_noise and not has_useful_papercut_content:
+            return False
+
+        if has_papercut and has_useful_papercut_content and score >= 4:
             return True
 
-        has_job_evidence = any(term in content for term in [
-            "trabajos retenidos",
-            "liberar trabajos",
-            "print jobs",
-            "held jobs",
-            "release jobs",
-            "cola de impresión",
-            "cola de impresion",
-        ])
-
-        if has_job_evidence and score >= 5 and relative_score >= 0.35:
+        if has_papercut and score >= 8 and relative_score >= 0.55:
             return True
 
         return False
 
-    # SDS requirements: prefer real SDS and requirements/install docs.
+    # SDS requirements.
     if any(term in text for term in [
         "sds",
         "smart device services",
@@ -797,76 +869,60 @@ def should_keep_ranked_doc(
             "jamc",
         ])
 
+        has_requirement_signal = any(term in title_source or term in content for term in useful_sds_requirement_terms)
+
         if query_intent == "requirements":
-            has_requirement_signal = any(term in title_source or term in content for term in [
-                "requirements",
-                "requisitos",
-                "prerrequisitos",
-                "system requirements",
-                "minimum requirements",
-                "compatibilidad",
-                "compatible",
-                "sistema operativo",
-                "operating system",
-            ])
+            # For requirements, reject brochure/general docs unless they clearly contain requirement signals.
+            if "brochure" in title_source or "brochure" in source:
+                return has_sds and has_requirement_signal and score >= 8
 
             if has_sds and has_requirement_signal and score >= 5:
                 return True
 
-            if has_sds and score >= 8:
+            if has_sds and "instalar monitor sds" in title_source and score >= 8:
                 return True
 
             return False
 
         return has_sds and score >= 4
 
-    # Warranty queries: keep warranty/supplies docs, reject generic print docs.
+    # Warranty queries.
     if query_intent == "warranty":
-        has_warranty_signal = any(term in title_source or term in content for term in [
-            "garantía",
-            "garantia",
-            "warranty",
-            "suministro",
-            "suministros",
-            "consumible",
-            "consumibles",
-            "rma",
-            "reemplazo",
-        ])
+        has_warranty_signal = any(term in title_source or term in content for term in useful_warranty_terms)
 
-        if has_warranty_signal and score >= 4:
+        # Strongly prefer the actual warranty document.
+        if "garantía" in title_source or "garantia" in title_source:
+            return score >= 3
+
+        # Reject HP WJA and generic printer manuals for warranty questions.
+        if "web jetadmin" in title_source or product == "web_jetadmin":
+            return False
+
+        if "mantprev" in title_source or "mantenimiento preventivo" in title_source:
+            return False
+
+        if has_warranty_signal and score >= 4 and relative_score >= 0.30:
             return True
 
         return False
 
-    # Escalation queries: keep only docs that mention escalation-like actions.
+    # Escalation queries.
     if query_intent == "escalation":
-        has_escalation_signal = any(term in title_source or term in content for term in [
-            "escalar",
-            "escalamiento",
-            "nivel 2",
-            "nivel 3",
-            "incidente",
-            "ticket",
-            "caso",
-            "proveedor",
-            "fabricante",
-            "informar al área",
-            "informar al area",
-            "mesa de ayuda",
-        ])
+        has_escalation_signal = any(term in title_source or term in content for term in useful_escalation_terms)
 
         if has_escalation_signal and score >= 3:
             return True
 
         return score >= 5 and relative_score >= 0.6
 
-    # Generic fallback: remove very weak tail documents.
+    # Generic fallback: remove legal-only chunks and weak tail documents.
+    if is_legal_or_cover_noise:
+        return False
+
     if score >= 4 and relative_score >= 0.35:
         return True
 
     return False
-
 def compute_keyword_overlap_ratio(query: str, content: str) -> float:
     query_tokens = [tok for tok in re.findall(r"\w+", query.lower()) if len(tok) > 2]
     if not query_tokens:
@@ -1125,9 +1181,13 @@ def retrieve_context(query: str, top_k: int = 4):
         )
     ]
     
-    # If the filter is too strict, fall back to the top reranked docs.
+    # If the filter is too strict, fall back only to the strongest 2 reranked docs.
+    # This avoids reintroducing low-quality contaminated context.
     if not filtered_ranked_docs:
-        filtered_ranked_docs = [doc for doc, score in ranked_docs_with_scores]
+        filtered_ranked_docs = [
+            doc
+            for doc, score in ranked_docs_with_scores[:2]
+        ]
     
     ranked_docs = filtered_ranked_docs
 
