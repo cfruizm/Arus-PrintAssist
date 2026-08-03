@@ -70,7 +70,7 @@ CONFIG = {
 
     # Safer retrieval behavior for Streamlit Cloud prototype.
     "enable_filter_fallback": True,
-    "max_docs_per_source": 2,
+    "max_docs_per_source": 3,
 
     "pdf_dir": str(PDF_DIR),
     "runtime_dir": str(RUNTIME_DIR),
