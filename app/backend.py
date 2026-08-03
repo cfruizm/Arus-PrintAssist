@@ -1805,11 +1805,51 @@ def generate_answer_with_rag(user_query: str, memory):
             max_tokens=LLM_CONFIG["max_tokens"],
             temperature=LLM_CONFIG["temperature"],
         )
+    
+        st.session_state["last_llm_diagnostics"] = {
+            "llm_call_ok": True,
+            "model": LLM_CONFIG.get("model_name"),
+            "provider": st.secrets.get("HF_PROVIDER", LLM_CONFIG.get("provider", None)),
+            "temperature": LLM_CONFIG.get("temperature"),
+            "max_tokens": LLM_CONFIG.get("max_tokens"),
+            "error": None,
+            "timestamp": datetime.now().isoformat(),
+        }
+    
     except BadRequestError as e:
+        st.session_state["last_llm_diagnostics"] = {
+            "llm_call_ok": False,
+            "model": LLM_CONFIG.get("model_name"),
+            "provider": st.secrets.get("HF_PROVIDER", LLM_CONFIG.get("provider", None)),
+            "temperature": LLM_CONFIG.get("temperature"),
+            "max_tokens": LLM_CONFIG.get("max_tokens"),
+            "error": str(e),
+            "timestamp": datetime.now().isoformat(),
+        }
         return build_llm_unavailable_answer(e)
+    
     except HfHubHTTPError as e:
+        st.session_state["last_llm_diagnostics"] = {
+            "llm_call_ok": False,
+            "model": LLM_CONFIG.get("model_name"),
+            "provider": st.secrets.get("HF_PROVIDER", LLM_CONFIG.get("provider", None)),
+            "temperature": LLM_CONFIG.get("temperature"),
+            "max_tokens": LLM_CONFIG.get("max_tokens"),
+            "error": str(e),
+            "timestamp": datetime.now().isoformat(),
+        }
         return build_llm_unavailable_answer(e)
+    
     except Exception as e:
+        st.session_state["last_llm_diagnostics"] = {
+            "llm_call_ok": False,
+            "model": LLM_CONFIG.get("model_name"),
+            "provider": st.secrets.get("HF_PROVIDER", LLM_CONFIG.get("provider", None)),
+            "temperature": LLM_CONFIG.get("temperature"),
+            "max_tokens": LLM_CONFIG.get("max_tokens"),
+            "error": str(e),
+            "timestamp": datetime.now().isoformat(),
+        }
         return build_llm_unavailable_answer(e)
 
     answer = response.choices[0].message.content.strip()
