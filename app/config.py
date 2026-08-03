@@ -39,7 +39,39 @@ CONFIG = {
     "vectorstore_dir": str(VECTORSTORE_DIR),
     "chunk_size": 800,
     "chunk_overlap": 150,
+
+    # Backward-compatible default
     "retrieval_top_k": 4,
+
+    # Candidate retrieval by intent.
+    # These are intentionally higher than final top-k because we rerank after retrieval.
+    "retrieval_top_k_by_intent": {
+        "default": 12,
+        "requirements": 18,
+        "architecture": 16,
+        "conceptual": 12,
+        "procedural": 16,
+        "troubleshooting": 22,
+        "escalation": 12,
+        "warranty": 18,
+    },
+
+    # Final context size sent to the LLM.
+    "retrieval_final_top_k_by_intent": {
+        "default": 4,
+        "requirements": 6,
+        "architecture": 6,
+        "conceptual": 4,
+        "procedural": 5,
+        "troubleshooting": 6,
+        "escalation": 4,
+        "warranty": 5,
+    },
+
+    # Safer retrieval behavior for Streamlit Cloud prototype.
+    "enable_filter_fallback": True,
+    "max_docs_per_source": 2,
+
     "pdf_dir": str(PDF_DIR),
     "runtime_dir": str(RUNTIME_DIR),
 }
