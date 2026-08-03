@@ -1308,6 +1308,25 @@ def build_rag_messages(
     source_block = build_source_block(real_source_labels)
     query_intent = classify_query_intent(user_query)
 
+    intent_instruction = ""
+
+    if query_intent == "troubleshooting":
+        intent_instruction = """
+
+    
+    #### INSTRUCCIÓN ESPECIAL PARA TROUBLESHOOTING
+    
+    La respuesta debe tener este enfoque:
+    - No inventes causas que no estén soportadas por el contexto.
+    - Si la documentación no identifica una causa única, dilo explícitamente.
+    - Indica qué validaciones permite hacer la documentación recuperada.
+    - Responde con esta estructura dentro de la sección Respuesta:
+      - Diagnóstico documental
+      - Validaciones iniciales
+      - Acciones recomendadas
+      - Cuándo escalar
+    """
+
     if allow_general_fallback:
         fallback_instruction = (
             "Puedes complementar de forma prudente con orientación general solo si la pregunta es de bajo riesgo "
@@ -1351,16 +1370,24 @@ def build_rag_messages(
 ### NIVEL DE SOPORTE DOCUMENTAL
 {support_level}
 
-### FORMATO DE RESPUESTA
-Responde usando exactamente esta estructura:
+#### INSTRUCCIÓN ADICIONAL POR INTENCIÓN
+{intent_instruction}
+
+#### FORMATO DE RESPUESTA OBLIGATORIO
+
+Debes responder siempre con estas dos secciones, en este orden:
 
 Respuesta:
-- Da una respuesta clara, útil y orientada a resolver la necesidad del usuario.
+- Escribe una respuesta técnica clara y útil.
+- No omitas esta sección.
+- No respondas únicamente con fuentes.
+- Si la información documental es limitada, explica qué sí se puede validar con las fuentes disponibles y qué no se puede concluir.
 
 Fuente(s):
 - Incluye únicamente fuentes de la lista de fuentes disponibles para citar.
-- Si la respuesta no tiene suficiente respaldo documental directo, escribe:
-- Base de conocimiento actual sin coincidencias documentales suficientes
+- No inventes fuentes.
+- Si no hay fuentes suficientes, escribe:
+  - Base de conocimiento actual sin coincidencias documentales suficientes
 
 ### REGLAS DE ESTILO
 - No menciones limitaciones salvo que sea realmente necesario.
@@ -1790,6 +1817,17 @@ def generate_answer_with_rag(user_query: str, memory):
         memory.add_turn(user_query, answer)
         return answer
 
+    if answer_is_sources_only(answer):
+        answer = (
+            "Respuesta:\n"
+            "- No logré generar una respuesta técnica completa con el modelo actual. "
+            "Sin embargo, sí se recuperaron fuentes documentales relevantes para la consulta. "
+            "Revisa las fuentes listadas y vuelve a intentar la pregunta con más detalle.\n\n"
+            "Fuente(s):\n"
+            f"{build_source_block(real_source_labels)}\n\n"
+            "Aviso: La generación del modelo fue incompleta, aunque el retrieval documental sí encontró fuentes."
+        )
+    
     if should_use_memory_for_query(user_query, query_intent):
         memory_text = memory.format_history()
     else:
@@ -1858,6 +1896,44 @@ def generate_answer_with_rag(user_query: str, memory):
         return build_llm_unavailable_answer(e)
 
     answer = response.choices[0].message.content.strip()
+    raw_answer = answer
+
+    def answer_is_sources_only(answer: str) -> bool:
+        text = answer.strip().lower()
+    
+        if not text:
+            return True
+    
+        has_response = "respuesta:" in text
+        has_sources = "fuente" in text
+    
+        # If it has sources but no real response section, treat as bad generation.
+        if has_sources and not has_response:
+            return True
+    
+        # Very short answers are usually malformed.
+        if len(text) < 80:
+            return True
+    
+        return False
+
+    st.session_state["last_llm_diagnostics"] = {
+        "llm_call_ok": True,
+        "model": get_effective_llm_model(),
+        "provider": get_effective_hf_provider(),
+        "temperature": LLM_CONFIG.get("temperature"),
+        "max_tokens": LLM_CONFIG.get("max_tokens"),
+        "raw_answer_length": len(raw_answer),
+        "raw_answer_preview": raw_answer[:1000],
+        "has_respuesta_section": "respuesta:" in raw_answer.lower(),
+        "has_fuentes_section": "fuente" in raw_answer.lower(),
+        "error": None,
+        "timestamp": datetime.now().isoformat(),
+        "raw_answer_length": len(raw_answer),
+        "raw_answer_preview": raw_answer[:1000],
+        "has_respuesta_section": "respuesta:" in raw_answer.lower(),
+        "has_fuentes_section": "fuente" in raw_answer.lower(),
+    }
     answer = clean_user_facing_answer(answer)
     answer = enforce_real_source_traceability(
         answer=answer,
