@@ -78,6 +78,7 @@ CONFIG = {
 
 LLM_CONFIG = {
     "model_name": "Qwen/Qwen2.5-7B-Instruct",
+    "provider": None,
     "temperature": 0.2,
     "max_tokens": 500,
 }
