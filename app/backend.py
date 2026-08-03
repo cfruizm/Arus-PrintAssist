@@ -1884,7 +1884,7 @@ def get_effective_disable_thinking() -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "y", "si", "sí"}
 
 
-def prepare_messages_for_no_think(messages: list[dict]) -> list[str]:
+def prepare_messages_for_no_think(messages: list[dict]) -> list:
     """Add a direct-answer instruction to reduce hidden/thinking token usage
     in Qwen 3.x style models.
     """
@@ -1897,7 +1897,7 @@ def prepare_messages_for_no_think(messages: list[dict]) -> list[str]:
         return prepared
 
     for idx in range(len(prepared) - 1, -1, -1):
-        if prepared[idx]..get("role") == "user":
+        if prepared[idx].get("role") == "user":
             prepared[idx]["content"] = (
                 str(prepared[idx].get("content", ""))
                 + "\n\n"
