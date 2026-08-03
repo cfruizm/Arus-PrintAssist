@@ -772,15 +772,18 @@ def should_keep_ranked_doc(
 
     is_legal_or_cover_noise = any(term in content[:1200] for term in legal_noise_terms)
 
-    useful_papercut_terms = [
+    operational_papercut_terms = [
         "trabajos de impresión",
         "trabajos de impresion",
         "registro de trabajos",
+        "registro de trabajos de cada usuario",
+        "información de los usuarios",
+        "informacion de los usuarios",
         "usuarios",
-        "papercut mf",
         "liberar",
         "liberación",
         "liberacion",
+        "trabajos retenidos",
         "cola",
         "print jobs",
         "held jobs",
@@ -842,17 +845,27 @@ def should_keep_ranked_doc(
     # PaperCut-focused queries.
     if "papercut" in text:
         has_papercut = "papercut" in title_source or "papercut" in content
-        has_useful_papercut_content = any(term in content for term in useful_papercut_terms)
-
-        if is_legal_or_cover_noise and not has_useful_papercut_content:
+        has_operational_papercut_content = any(
+            term in content for term in operational_papercut_terms
+        )
+    
+        # Reject cover/legal chunks even if they mention PaperCut MF.
+        if is_legal_or_cover_noise and not has_operational_papercut_content:
             return False
-
-        if has_papercut and has_useful_papercut_content and score >= 4:
+    
+        # Keep real operational PaperCut content.
+        if has_papercut and has_operational_papercut_content and score >= 4:
             return True
-
-        if has_papercut and score >= 8 and relative_score >= 0.55:
+    
+        # Fallback for strong PaperCut chunks, but only if they are not legal/cover noise.
+        if (
+            has_papercut
+            and not is_legal_or_cover_noise
+            and score >= 8
+            and relative_score >= 0.55
+        ):
             return True
-
+    
         return False
 
     # SDS requirements.
@@ -872,18 +885,22 @@ def should_keep_ranked_doc(
         has_requirement_signal = any(term in title_source or term in content for term in useful_sds_requirement_terms)
 
         if query_intent == "requirements":
-            # For requirements, reject brochure/general docs unless they clearly contain requirement signals.
-            if "brochure" in title_source or "brochure" in source:
-                return has_sds and has_requirement_signal and score >= 8
-
+            # For requirements, reject brochure/general marketing docs.
+            if (
+                "brochure" in title_source
+                or "brochure" in source
+                or document_family == "brochure"
+            ):
+                return False
+        
             if has_sds and has_requirement_signal and score >= 5:
                 return True
-
+        
             if has_sds and "instalar monitor sds" in title_source and score >= 8:
                 return True
-
+        
             return False
-
+            
         return has_sds and score >= 4
 
     # Warranty queries.
