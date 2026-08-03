@@ -374,61 +374,69 @@ def detect_query_entities(user_query: str) -> dict:
 
 def detect_query_profile(query: str):
     """
-    Build a retrieval profile using:
-    - query intent
-    - detected product/process entities
-    - generic domain heuristics
+    Build a retrieval profile using query intent and lightweight hints.
 
-    The key design choice:
-    - use hard metadata filters only when the entity maps reliably to index metadata
-    - otherwise prefer broad retrieval + reranking
+    Important:
+    - Do not apply hard metadata filters by default.
+    - Hard filters caused empty retrieval for PaperCut MF and HP SDS when
+      metadata did not match exactly.
+    - Prefer broad retrieval + reranking.
     """
     text = query.lower()
     query_intent = classify_query_intent(query)
-    query_entities = detect_query_entities(query)
-    retrieval_hints = build_entity_retrieval_hints(query_entities)
+
+    initial_map = CONFIG.get("retrieval_top_k_by_intent", {})
+    final_map = CONFIG.get("retrieval_final_top_k_by_intent", {})
 
     profile = {
-        "k_initial": 12,
-        "k_final": CONFIG.get("retrieval_top_k", 4),
+        "intent": query_intent,
+        "k_initial": initial_map.get(query_intent, initial_map.get("default", 12)),
+        "k_final": final_map.get(query_intent, final_map.get("default", 4)),
         "filter": None,
-        "query_intent": query_intent,
-        "query_entities": query_entities,
-        "retrieval_hints": retrieval_hints,
+        "must_terms": [],
+        "avoid_terms": [],
+        "preferred_terms": [],
     }
 
-    # ------------------------------------------------------------------
-    # Intent-driven context size
-    # ------------------------------------------------------------------
-    if query_intent == "requirements":
-        profile["k_initial"] = 20
-        profile["k_final"] = 6
-    elif query_intent == "architecture":
-        profile["k_initial"] = 18
-        profile["k_final"] = 6
-    elif query_intent == "conceptual":
-        profile["k_initial"] = 10
-        profile["k_final"] = 4
-    elif query_intent in {"procedural", "troubleshooting"}:
-        profile["k_initial"] = 14
-        profile["k_final"] = 5
+    if "papercut" in text:
+        profile["preferred_terms"].extend([
+            "papercut", "papercut mf", "print jobs", "jobs",
+            "release", "hold", "held", "find-me", "mobility print",
+            "trabajos", "liberación", "liberacion",
+        ])
 
-    # ------------------------------------------------------------------
-    # Use hard metadata filters only if reliable
-    # ------------------------------------------------------------------
-    vendor = retrieval_hints.get("vendor")
-    product = retrieval_hints.get("product")
-    component = retrieval_hints.get("component")
-    hard_filter = retrieval_hints.get("hard_filter", False)
+    if any(term in text for term in ["sds", "hp smart device services", "dca", "sda", "jamc"]):
+        profile["preferred_terms"].extend([
+            "sds", "smart device services", "hp smart device services",
+            "monitor", "dca", "sda", "jamc",
+            "requirements", "requisitos", "prerrequisitos",
+        ])
 
-    if hard_filter and (vendor or product or component):
-        profile["filter"] = make_chroma_filter(
-            vendor=vendor,
-            product=product,
-            component=component,
-        )
-        return profile
+    if any(term in text for term in ["cola", "queue", "spooler", "bloqueada", "atascada", "no imprime"]):
+        profile["preferred_terms"].extend([
+            "cola", "queue", "spooler", "print queue",
+            "bloqueada", "atascada", "stuck", "held",
+        ])
 
+    if query_intent == "warranty":
+        profile["preferred_terms"].extend([
+            "garantía", "garantia", "warranty", "rma",
+            "suministro", "suministros", "consumible", "consumibles",
+            "reemplazo",
+        ])
+        profile["avoid_terms"].extend([
+            "dashboard", "control operacion", "control operación",
+            "pin", "autogestion", "autogestión",
+        ])
+
+    if query_intent == "escalation":
+        profile["preferred_terms"].extend([
+            "escalar", "escalamiento", "nivel 2", "nivel 3",
+            "incidente", "ticket", "caso", "proveedor", "fabricante",
+        ])
+
+    return profile
+`
     # ------------------------------------------------------------------
     # Fallback generic heuristics only for stable metadata families
     # ------------------------------------------------------------------
@@ -563,175 +571,159 @@ def build_entity_retrieval_hints(query_entities: dict) -> dict:
 
 def compute_rerank_score(query: str, doc, query_intent: str | None = None) -> float:
     """
-    Compute a query-aware reranking score using:
-    - source type / priority
-    - document metadata
-    - detected product/process entities
-    - title/source alias alignment
-    - intent
+    Query-aware heuristic reranking.
+
+    Goals:
+    - Recover PaperCut/SDS documents even when metadata filters are imperfect.
+    - Reduce source contamination.
+    - Promote exact title/source/product matches.
+    - Keep priority useful, but not dominant.
     """
     text = query.lower()
     content = doc.page_content.lower()
-    metadata = doc.metadata
+    metadata = doc.metadata or {}
 
-    if query_intent is None:
-        query_intent = classify_query_intent(query)
+    query_intent = query_intent or classify_query_intent(query)
 
-    query_entities = detect_query_entities(query)
-    detected_product_ids = query_entities.get("products", [])
-    detected_process_ids = query_entities.get("processes", [])
-
-    score = 0.0
-
-    source_type = str(metadata.get("source_type", "")).lower()
-    source_group = str(metadata.get("source_group", "")).lower()
+    title = str(metadata.get("title", "")).lower()
+    source = str(metadata.get("source", "")).lower()
     vendor = str(metadata.get("vendor", "")).lower()
     product = str(metadata.get("product", "")).lower()
     component = str(metadata.get("component", "")).lower()
     document_family = str(metadata.get("document_family", "")).lower()
-    title = str(metadata.get("title", "")).lower()
-    source = str(metadata.get("source", "")).lower()
-    priority = metadata.get("priority", 3)
+    source_type = str(metadata.get("source_type", "")).lower()
 
-    # ------------------------------------------------------------------
-    # Base score from priority and source type
-    # ------------------------------------------------------------------
-    score += max(0.0, 5.0 - float(priority))
+    title_source = f"{title} {source} {vendor} {product} {component} {document_family}"
 
-    if source_type == "pdf":
-        score += 2.5
-    elif source_type == "manual":
-        score += 1.5
-    elif source_type == "kb_article":
-        score += 1.0
-    elif source_type in {"troubleshooting", "known_issue"}:
-        score += 0.4
+    score = 0.0
 
-    if source_group == "core_support":
-        score += 1.0
+    # Priority should help, but not dominate semantic relevance.
+    try:
+        priority = int(metadata.get("priority", 3))
+    except Exception:
+        priority = 3
+    score += max(0, 4 - priority) * 0.6
 
-    # ------------------------------------------------------------------
-    # Query token overlap in content
-    # ------------------------------------------------------------------
-    query_tokens = [tok for tok in re.findall(r"\w+", text) if len(tok) > 2]
+    # Source type signal.
+    if source_type in {"pdf", "troubleshooting", "known_issue"}:
+        score += 0.8
+    elif source_type in {"kb_article", "manual", "guide"}:
+        score += 0.5
+
+    # Keyword overlap.
+    query_tokens = [
+        tok for tok in re.findall(r"\w+", text)
+        if len(tok) > 2
+    ]
     overlap = sum(1 for tok in query_tokens if tok in content)
-    score += overlap * 0.4
+    score += overlap * 0.25
 
-    # ------------------------------------------------------------------
-    # Exact alias / title / source alignment
-    # ------------------------------------------------------------------
-    score += score_title_and_source_matches(query, metadata)
+    # Title/source exact-ish matching has high value.
+    for tok in query_tokens:
+        if tok in title_source:
+            score += 0.45
 
-    # ------------------------------------------------------------------
-    # Product/entity-aware alignment
-    # ------------------------------------------------------------------
-    if detected_product_ids:
-        matched_any_product = False
-
-        for product_id in detected_product_ids:
-            entity = PRODUCT_ENTITY_REGISTRY.get(product_id)
-            if not entity:
-                continue
-
-            hints = entity.get("retrieval_hints", {})
-            hint_vendor = str(hints.get("vendor") or "").lower()
-            hint_product = str(hints.get("product") or "").lower()
-            hint_component = str(hints.get("component") or "").lower()
-
-            if hint_vendor and vendor == hint_vendor:
-                score += 2.0
-                matched_any_product = True
-
-            if hint_product and product == hint_product:
-                score += 3.5
-                matched_any_product = True
-
-            if hint_component and component == hint_component:
-                score += 2.0
-                matched_any_product = True
-
-        if not matched_any_product:
-            score -= 1.5
-
-    # ------------------------------------------------------------------
-    # Process-aware alignment
-    # ------------------------------------------------------------------
-    if detected_process_ids:
-        # Prefer DA Arus/internal support material for internal operational processes
-        if any(process_id in detected_process_ids for process_id in [
-            "control_consumables",
-            "asset_management",
-            "supplies_warranty",
-            "billing",
-            "simp",
-            "scan_to_network_folder",
-            "pin_printing",
-            "firmware_update",
-            "printer_installation_server",
-            "printer_installation_mac",
-        ]):
-            if (
-                vendor == "arus_internal"
-                or "da arus" in source
-                or "/da arus/" in source
-                or "da0" in source
-                or "da0" in title
-                or "in0" in source
-                or "in0" in title
-            ):
-                score += 5.0
-
-        # Architecture/security process
-        if "security_architecture" in detected_process_ids:
-            if any(term in title for term in ["arquitectura", "security", "nube", "cloud"]):
-                score += 2.5
-            if document_family in {"architecture", "security"}:
-                score += 2.5
-
-    # ------------------------------------------------------------------
-    # Intent-aware adjustments
-    # ------------------------------------------------------------------
-    if query_intent == "requirements":
-        if document_family == "requirements" or component == "requirements":
+    # PaperCut-specific boost.
+    if "papercut" in text:
+        if "papercut" in title_source:
             score += 5.0
-        if source_type == "pdf":
-            score += 1.5
-        if source_type == "manual":
-            score += 1.0
-        if source_type in {"troubleshooting", "known_issue"}:
-            score -= 3.0
+        if "papercut" in content:
+            score += 2.0
 
-        if any(term in title for term in ["requirements", "requer", "system requirements"]):
+        if any(t in text for t in ["desaparecen", "desaparece", "disappearing", "missing", "trabajos"]):
+            if any(t in content for t in [
+                "print job", "print jobs", "job", "jobs",
+                "held", "hold", "release", "released",
+                "trabajo", "trabajos", "liberar", "liberación", "liberacion",
+                "desaparece", "desaparecen",
+            ]):
+                score += 3.5
+
+        # Penalize unrelated internal docs if they do not mention PaperCut.
+        if "papercut" not in title_source and "papercut" not in content:
+            score -= 4.0
+
+    # HP SDS / requirements boost.
+    if any(t in text for t in ["sds", "smart device services", "hp smart device services"]):
+        if any(t in title_source for t in ["sds", "smart device services"]):
+            score += 5.0
+        if any(t in content for t in ["sds", "smart device services"]):
+            score += 2.0
+
+        if query_intent == "requirements":
+            if any(t in content for t in [
+                "requirements", "requisitos", "prerrequisitos",
+                "system requirements", "minimum requirements",
+                "compatible", "compatibilidad",
+                "operating system", "sistema operativo",
+                "hardware", "network", "red",
+            ]):
+                score += 3.0
+
+    # Queue / spooler troubleshooting boost.
+    if any(t in text for t in ["cola", "queue", "spooler", "bloqueada", "atascada"]):
+        if any(t in title_source for t in ["cola", "queue", "spooler"]):
             score += 3.0
+        if any(t in content for t in [
+            "cola", "queue", "spooler", "print queue",
+            "bloqueada", "atascada", "stuck",
+            "detiene", "stopped", "reiniciar", "restart",
+        ]):
+            score += 2.0
 
-    elif query_intent == "procedural":
-        if source_type in {"troubleshooting", "known_issue"}:
-            score -= 1.0
+    # Warranty / supplies boost and contamination control.
+    if query_intent == "warranty":
+        if any(t in title_source for t in [
+            "garantía", "garantia", "warranty",
+            "suministro", "suministros",
+            "consumible", "consumibles",
+        ]):
+            score += 6.0
 
-        if any(term in title for term in [
-            "install", "instal", "configure", "configur", "setup",
-            "manual", "operación", "operacion", "configurar", "operar",
-            "consultar", "asignar", "trámite", "tramite"
+        if any(t in content for t in [
+            "garantía", "garantia", "warranty",
+            "suministro", "suministros",
+            "consumible", "consumibles",
+            "reemplazo", "rma",
+        ]):
+            score += 2.0
+
+        if any(t in title_source for t in [
+            "dashboard", "control operacion", "control operación",
+            "pin", "autogestion", "autogestión",
+        ]):
+            score -= 5.0
+
+    # Escalation boost.
+    if query_intent == "escalation":
+        if any(t in content for t in [
+            "escalar", "escalamiento", "nivel 2", "nivel 3",
+            "incidente", "ticket", "caso", "proveedor", "fabricante",
         ]):
             score += 2.5
 
-        if component in {"installation", "admin", "guide"}:
-            score += 1.0
-
-    elif query_intent == "troubleshooting":
-        if source_type in {"troubleshooting", "known_issue", "kb_article"}:
-            score += 2.0
-
-        if any(term in title for term in ["troubleshoot", "issue", "error", "problem", "troubleshooting"]):
-            score += 2.0
-
-    elif query_intent == "conceptual":
-        if source_type == "manual":
-            score += 1.5
-        if any(term in title for term in ["overview", "introduction", "manual", "what is", "guía", "guia"]):
-            score += 1.0
-        if source_type in {"troubleshooting", "known_issue"}:
+    # Penalize cover/legal/confidential-only chunks.
+    legal_noise_terms = [
+        "aviso legal",
+        "información restringida",
+        "informacion restringida",
+        "confidencial",
+        "uso exclusivo",
+    ]
+    if any(t in content[:800] for t in legal_noise_terms):
+        meaningful_terms = overlap
+        if meaningful_terms <= 1:
+            score -= 3.0
+        else:
             score -= 1.0
+
+    # Generic noisy docs.
+    if "known issues" in title and query_intent != "troubleshooting":
+        score -= 1.5
+    if "end user articles" in title:
+        score -= 1.0
+    if "knowledge base" in title and "papercut" not in text:
+        score -= 1.0
 
     return score
 
@@ -765,37 +757,93 @@ def assess_retrieval_support(query: str, docs: list) -> dict[str, Any]:
         "avg_overlap": round(avg_overlap, 3),
     }
 
-
 def classify_query_intent(user_query: str) -> str:
     text = user_query.lower()
+
     requirements_patterns = [
-        "qué requerimientos", "que requerimientos", "qué requisitos", "que requisitos",
-        "requerimientos necesarios", "requisitos necesarios", "system requirements",
-        "minimum requirements", "requisitos mínimos", "requisitos minimos",
+        "qué requerimientos", "que requerimientos",
+        "qué requisitos", "que requisitos",
+        "requerimientos necesarios", "requisitos necesarios",
+        "system requirements", "minimum requirements",
+        "requisitos mínimos", "requisitos minimos",
+        "prerrequisitos", "prerequisites",
+        "compatibilidad", "compatible",
     ]
-    procedural_patterns = [
-        "cómo instalar", "como instalar", "cómo agregar", "como agregar", "cómo incorporar",
-        "como incorporar", "cómo configurar", "como configurar", "cómo habilitar", "como habilitar",
-        "cómo crear", "como crear",
-    ]
+
     troubleshooting_patterns = [
-        "qué hacer si", "que hacer si", "error", "falla", "cola", "atasco", "offline",
-        "desaparecen trabajos", "disappearing", "stuck", "not held", "cannot add", "no puedo", "no deja",
+        "qué hacer si", "que hacer si",
+        "qué debo hacer si", "que debo hacer si",
+        "debo hacer si",
+        "error", "falla", "fallando",
+        "cola", "queue", "spooler",
+        "bloqueada", "bloqueado", "atascada", "atascado", "atasco",
+        "offline", "no imprime", "no deja imprimir",
+        "desaparecen trabajos", "trabajos desaparecen",
+        "desaparece", "desaparecen", "desaparecido",
+        "disappearing", "disappear", "missing jobs",
+        "stuck", "not held", "cannot add", "no puedo", "no deja",
     ]
+
+    warranty_patterns = [
+        "garantía", "garantia", "warranty",
+        "rma", "reemplazo", "suministro", "suministros",
+        "consumible", "consumibles",
+    ]
+
+    escalation_patterns = [
+        "escalar", "escalamiento", "nivel 2", "nivel 3",
+        "abrir caso", "caso proveedor", "fabricante",
+        "cuándo debo escalar", "cuando debo escalar",
+    ]
+
+    architecture_patterns = [
+        "arquitectura", "componentes", "integración", "integracion",
+        "diagrama", "flujo", "gav tracking",
+    ]
+
+    procedural_patterns = [
+        "cómo instalar", "como instalar",
+        "cómo agregar", "como agregar",
+        "cómo incorporar", "como incorporar",
+        "cómo configurar", "como configurar",
+        "cómo habilitar", "como habilitar",
+        "cómo crear", "como crear",
+        "cómo realizar", "como realizar",
+        "procedimiento", "pasos", "trámite", "tramite",
+    ]
+
     conceptual_patterns = [
-        "qué es", "que es", "para qué sirve", "para que sirve", "cómo funciona", "como funciona",
-        "qué hace", "que hace", "explica", "diferencia entre",
+        "qué es", "que es",
+        "para qué sirve", "para que sirve",
+        "cómo funciona", "como funciona",
+        "qué hace", "que hace",
+        "explica", "diferencia entre",
     ]
+
+    # Order matters: warranty/escalation/troubleshooting must be detected
+    # before generic procedural phrases like "cómo realizar".
+    if any(p in text for p in warranty_patterns):
+        return "warranty"
+
+    if any(p in text for p in escalation_patterns):
+        return "escalation"
+
     if any(p in text for p in requirements_patterns):
         return "requirements"
-    if any(p in text for p in procedural_patterns):
-        return "procedural"
+
     if any(p in text for p in troubleshooting_patterns):
         return "troubleshooting"
+
+    if any(p in text for p in architecture_patterns):
+        return "architecture"
+
     if any(p in text for p in conceptual_patterns):
         return "conceptual"
-    return "procedural"
 
+    if any(p in text for p in procedural_patterns):
+        return "procedural"
+
+    return "default"
 
 def has_hard_documentary_anchor(user_query: str, docs: list, query_intent: str) -> bool:
     if not docs:
@@ -879,39 +927,82 @@ def retrieve_context(query: str, top_k: int = 4):
     profile = detect_query_profile(query)
     query_intent = classify_query_intent(query)
 
-    k_initial = profile["k_initial"]
-    k_final = profile["k_final"]
+    k_initial = profile.get("k_initial", top_k)
+    k_final = profile.get("k_final", top_k)
+    metadata_filter = profile.get("filter")
 
-    # For requirements questions, retrieve more context
-    if query_intent == "requirements":
-        k_initial = max(k_initial, 20)
-        k_final = max(k_final, 6)
+    def run_retrieval(filter_value=None):
+        search_kwargs = {"k": k_initial}
+        if filter_value:
+            search_kwargs["filter"] = filter_value
 
-    retriever = vectorstore.as_retriever(
-        search_kwargs={
-            "k": k_initial,
-            "filter": profile["filter"],
-        }
-    )
+        retriever = vectorstore.as_retriever(search_kwargs=search_kwargs)
+        return retriever.invoke(query)
 
-    docs = retriever.invoke(query)
+    docs = []
+
+    # First attempt: use profile filter only if present.
+    if metadata_filter:
+        try:
+            docs = run_retrieval(metadata_filter)
+        except Exception:
+            docs = []
+
+    # Fallback: broad retrieval. This is critical for PaperCut/SDS cases
+    # where metadata filters may be too strict.
+    if not docs and CONFIG.get("enable_filter_fallback", True):
+        docs = run_retrieval(None)
+
+    # If no filter was defined, run broad retrieval directly.
+    if not metadata_filter:
+        docs = run_retrieval(None)
+
+    if not docs:
+        return "", []
 
     ranked_docs = sorted(
         docs,
-        key=lambda d: compute_rerank_score(query, d, query_intent=query_intent),
+        key=lambda d: compute_rerank_score(query, d, query_intent),
         reverse=True,
     )
 
-    final_docs = ranked_docs[:k_final]
+    # Source diversity: avoid sending 4 chunks from the same PDF when possible.
+    max_docs_per_source = CONFIG.get("max_docs_per_source", 2)
+    selected_docs = []
+    source_counts = defaultdict(int)
+
+    for doc in ranked_docs:
+        source_key = str(doc.metadata.get("source", "unknown_source"))
+        if source_counts[source_key] >= max_docs_per_source:
+            continue
+
+        selected_docs.append(doc)
+        source_counts[source_key] += 1
+
+        if len(selected_docs) >= k_final:
+            break
+
+    # If diversity was too restrictive, fill remaining slots.
+    if len(selected_docs) < k_final:
+        selected_ids = {id(doc) for doc in selected_docs}
+        for doc in ranked_docs:
+            if id(doc) in selected_ids:
+                continue
+            selected_docs.append(doc)
+            if len(selected_docs) >= k_final:
+                break
 
     context_blocks = []
-    for i, doc in enumerate(final_docs, start=1):
+
+    for i, doc in enumerate(selected_docs, start=1):
         source_label = format_source_label(doc.metadata)
         content = doc.page_content.strip()
-        context_blocks.append(f"[Chunk {i}] Source: {source_label}\n{content}")
 
-    retrieved_context = "\n\n".join(context_blocks)
-    return retrieved_context, final_docs
+        context_blocks.append(
+            f"[Chunk {i}] Source: {source_label}\n{content}"
+        )
+
+    return "\n\n".join(context_blocks), selected_docs
 
 # -----------------------------------------------------------------------------
 # Prompting + generation
@@ -1455,13 +1546,23 @@ def generate_answer_with_rag(user_query: str, memory):
 # Debug helpers
 # -----------------------------------------------------------------------------
 def debug_query_diagnostics(user_query: str) -> dict[str, Any]:
-    retrieved_context, retrieved_docs = retrieve_context(user_query, top_k=CONFIG["retrieval_top_k"])
+    retrieved_context, retrieved_docs = retrieve_context(
+        user_query,
+        top_k=CONFIG["retrieval_top_k"],
+    )
+
     support_info = assess_retrieval_support(user_query, retrieved_docs)
     query_intent = classify_query_intent(user_query)
-    hard_anchor = has_hard_documentary_anchor(user_query, retrieved_docs, query_intent)
+    hard_anchor = has_hard_documentary_anchor(
+        user_query,
+        retrieved_docs,
+        query_intent,
+    )
     real_source_labels = build_real_source_labels(retrieved_docs)
+
     docs_summary = []
-    for doc in retrieved_docs[:4]:
+    for doc in retrieved_docs:
+        score = compute_rerank_score(user_query, doc, query_intent)
         docs_summary.append(
             {
                 "title": doc.metadata.get("title"),
@@ -1470,15 +1571,22 @@ def debug_query_diagnostics(user_query: str) -> dict[str, Any]:
                 "product": doc.metadata.get("product"),
                 "component": doc.metadata.get("component"),
                 "document_family": doc.metadata.get("document_family"),
+                "source_group": doc.metadata.get("source_group"),
                 "priority": doc.metadata.get("priority"),
+                "page": doc.metadata.get("page"),
+                "page_label": doc.metadata.get("page_label"),
+                "rerank_score": round(score, 3),
+                "content_preview": doc.page_content[:350],
             }
         )
+
     return {
         "query": user_query,
         "query_intent": query_intent,
         "support_info": support_info,
         "hard_anchor": hard_anchor,
         "real_source_labels": real_source_labels,
+        "retrieved_count": len(retrieved_docs),
         "retrieved_docs_summary": docs_summary,
     }
 
