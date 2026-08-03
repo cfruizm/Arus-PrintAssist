@@ -1296,6 +1296,257 @@ Debes seguir estrictamente estas reglas:
 - La respuesta debe priorizar utilidad práctica y trazabilidad real.
 """
 
+def build_intent_instruction(
+    query_intent: str,
+    support_level: str,
+    has_sources: bool,
+    hard_anchor: bool = False,
+    strong_entity_match: bool = False,
+) -> str:
+    """
+    Build global response-policy instructions by query intent.
+
+    This function must stay product-agnostic.
+    Product/entity detection should influence retrieval and reranking,
+    not create rigid product-specific answer flows.
+    """
+
+    grounding_policy = f"""
+#### POLÍTICA GLOBAL DE GROUNDING
+
+Nivel de soporte documental detectado: {support_level}
+Hay fuentes recuperadas: {has_sources}
+Hay anclaje documental fuerte: {hard_anchor}
+Hay coincidencia fuerte entidad-documento: {strong_entity_match}
+
+Reglas globales:
+- Responde únicamente con base en la documentación recuperada.
+- No inventes causas, pasos, compatibilidades, versiones, SLA, proveedores ni flujos.
+- Si las fuentes son parciales, explica qué sí está soportado y qué no se puede concluir.
+- Si hay fuentes recuperadas, no digas "no se encontraron coincidencias". En su lugar, indica que la documentación recuperada es limitada o no identifica una causa/procedimiento completo.
+- Diferencia claramente entre:
+  - información explícitamente documentada,
+  - validaciones posibles,
+  - límites de la documentación,
+  - criterios prudentes de escalamiento.
+- No menciones RAG, retrieval, chunks, embeddings, modelo ni arquitectura interna.
+"""
+
+    if query_intent == "troubleshooting":
+        return grounding_policy + """
+#### POLÍTICA PARA TROUBLESHOOTING
+
+Objetivo:
+Orientar diagnóstico inicial de soporte N1 sin inventar causa raíz.
+
+La sección Respuesta debe usar exactamente esta estructura:
+
+### Diagnóstico documental
+Explica qué permite concluir la documentación recuperada.
+Si no hay causa raíz explícita, escribe:
+"La documentación recuperada no identifica una causa raíz específica, pero sí permite realizar validaciones iniciales."
+
+### Validaciones iniciales
+Lista validaciones concretas soportadas por las fuentes.
+No agregues validaciones genéricas que no aparezcan directa o indirectamente en el contexto.
+
+### Acciones recomendadas
+Lista acciones N1 soportadas por la documentación.
+Si no hay procedimiento de resolución documentado, indícalo claramente.
+
+### Cuándo escalar
+Recomienda escalamiento cuando:
+- no exista procedimiento documentado suficiente,
+- el síntoma persista después de las validaciones soportadas,
+- falte evidencia para confirmar el diagnóstico,
+- exista impacto operativo relevante.
+
+Restricciones:
+- No presentes una validación como solución garantizada.
+- No atribuyas causas técnicas si la fuente solo permite consultar, revisar o validar.
+- No uses expresiones como "problemas de conexión", "permisos", "logs del servidor", "configuración del usuario" o similares salvo que estén soportadas por el contexto.
+"""
+
+    if query_intent == "requirements":
+        return grounding_policy + """
+#### POLÍTICA PARA REQUERIMIENTOS
+
+Objetivo:
+Responder requisitos técnicos sin mezclar pasos de instalación.
+
+La sección Respuesta debe organizarse por categorías cuando la documentación lo permita:
+
+### Prerrequisitos del entorno
+Incluye condiciones previas explícitas.
+
+### Sistemas operativos compatibles
+Lista únicamente sistemas operativos presentes en las fuentes.
+
+### Plataformas compatibles
+Incluye virtualización, nube, servidor u otras plataformas solo si aparecen en fuentes.
+
+### Requisitos mínimos de hardware
+Incluye CPU, memoria, disco u otros valores solo si están documentados.
+
+### Requisitos de red o seguridad
+Incluye puertos, conectividad, ICMP, firewall, credenciales, certificados o permisos únicamente si aparecen en fuentes.
+
+### Límites o notas
+Incluye advertencias, excepciones o notas relevantes.
+
+Restricciones:
+- No conviertas la respuesta en procedimiento de instalación.
+- No mezcles brochure, descripción comercial o arquitectura general como si fueran requisitos.
+- Si una categoría no está documentada, omítela.
+- Si las fuentes se contradicen, indícalo.
+"""
+
+    if query_intent == "procedural":
+        return grounding_policy + """
+#### POLÍTICA PARA PROCEDIMIENTOS
+
+Objetivo:
+Guiar procedimientos operativos usando solo pasos documentados.
+
+La sección Respuesta debe usar esta estructura:
+
+### Objetivo del procedimiento
+Resume para qué sirve el procedimiento documentado.
+
+### Pasos soportados por la documentación
+Lista los pasos en orden lógico según las fuentes.
+No completes pasos faltantes con conocimiento general.
+
+### Validaciones posteriores
+Incluye verificaciones de resultado solo si están soportadas por las fuentes.
+
+### Precauciones o límites
+Indica si el procedimiento está incompleto, aplica solo a ciertos escenarios o requiere validación adicional.
+
+Restricciones:
+- No inventes pantallas, menús, botones, versiones o rutas.
+- Si no hay pasos suficientes, dilo y recomienda validar documentación adicional o escalar.
+"""
+
+    if query_intent == "conceptual":
+        return grounding_policy + """
+#### POLÍTICA PARA CONSULTAS CONCEPTUALES
+
+Objetivo:
+Explicar conceptos, productos, componentes o funciones de forma clara y acotada.
+
+La sección Respuesta debe usar esta estructura cuando aplique:
+
+### Definición
+Explica qué es el producto, herramienta, proceso o componente.
+
+### Para qué sirve
+Explica su propósito operativo según las fuentes.
+
+### Componentes o funciones principales
+Incluye componentes, módulos o capacidades documentadas.
+
+### Límites según documentación disponible
+Indica lo que la documentación no permite afirmar.
+
+Restricciones:
+- Puedes usar lenguaje simple, pero no excedas el alcance documental.
+- No conviertas una consulta conceptual en procedimiento si el usuario no lo pidió.
+"""
+
+    if query_intent == "warranty":
+        return grounding_policy + """
+#### POLÍTICA PARA GARANTÍAS
+
+Objetivo:
+Orientar trámites de garantía sin inventar SLA, proveedores, causales ni RMA.
+
+La sección Respuesta debe usar esta estructura:
+
+### Alcance del trámite
+Explica qué cubre el documento o proceso recuperado.
+
+### Información requerida
+Lista datos, evidencias o condiciones solicitadas por las fuentes.
+
+### Pasos documentados
+Lista pasos presentes en la documentación, sin completarlos con supuestos.
+
+### Cuándo validar o escalar
+Indica cuándo validar con proveedor, responsable interno o nivel superior si la fuente no define el flujo completo.
+
+Restricciones:
+- No mezcles mantenimiento preventivo, configuración o administración de impresión con garantía, salvo que la fuente lo conecte explícitamente.
+- No inventes tiempos de atención, causales, formatos o responsables.
+"""
+
+    if query_intent == "escalation":
+        return grounding_policy + """
+#### POLÍTICA PARA ESCALAMIENTO
+
+Objetivo:
+Ayudar a estructurar información para escalamiento técnico sin inventar diagnóstico.
+
+La sección Respuesta debe usar esta estructura:
+
+### Información mínima para escalar
+Resume los datos necesarios del caso: software, síntoma, acciones realizadas, equipo, usuario, ubicación, impacto y evidencia.
+
+### Evidencia recomendada
+Indica evidencias útiles según la documentación o el contexto disponible.
+
+### Resumen sugerido
+Construye un resumen claro y accionable si hay datos suficientes.
+
+### Campos faltantes
+Pide solo la información que falte.
+No vuelvas a pedir datos que el usuario ya entregó.
+
+Restricciones:
+- No inventes causa raíz.
+- No inventes prioridad o severidad si no hay datos de impacto.
+- Si no hay fuente documental suficiente, aclara que el resumen se basa en la información entregada por el usuario.
+"""
+
+    if query_intent == "architecture":
+        return grounding_policy + """
+#### POLÍTICA PARA ARQUITECTURA
+
+Objetivo:
+Explicar arquitectura, componentes, integraciones o flujos técnicos de forma trazable.
+
+La sección Respuesta debe usar esta estructura:
+
+### Componentes identificados
+Lista componentes explícitamente documentados.
+
+### Flujo o interacción
+Describe cómo interactúan solo si la documentación lo soporta.
+
+### Dependencias o requisitos
+Incluye dependencias técnicas documentadas.
+
+### Límites de la documentación
+Indica puntos no cubiertos por las fuentes.
+
+Restricciones:
+- No inventes diagramas, componentes, protocolos o dependencias.
+- No mezcles arquitectura con procedimiento salvo que el usuario lo pida.
+"""
+
+    return grounding_policy + """
+#### POLÍTICA GENERAL DE RESPUESTA
+
+Objetivo:
+Responder de forma útil, conservadora y trazable.
+
+La sección Respuesta debe:
+- Contestar la pregunta del usuario con base en las fuentes disponibles.
+- Explicar límites si el soporte documental es parcial.
+- Evitar afirmaciones no respaldadas.
+- Recomendar validación o escalamiento cuando la documentación no sea suficiente.
+"""
+
 def build_rag_messages(
     user_query: str,
     retrieved_context: str,
@@ -1303,10 +1554,20 @@ def build_rag_messages(
     support_level: str = "strong",
     allow_general_fallback: bool = False,
     real_source_labels: list[str] | None = None,
+    hard_anchor: bool = False,
+    strong_entity_match: bool = False,
 ):
     real_source_labels = real_source_labels or []
     source_block = build_source_block(real_source_labels)
     query_intent = classify_query_intent(user_query)
+    has_sources = bool(real_source_labels)
+    intent_instruction = build_intent_instruction(
+        query_intent=query_intent,
+        support_level=support_level,
+        has_sources=has_sources,
+        hard_anchor=hard_anchor,
+        strong_entity_match=strong_entity_match,
+    )
 
     intent_instruction = ""
 
@@ -1371,6 +1632,9 @@ def build_rag_messages(
 {support_level}
 
 #### INSTRUCCIÓN ADICIONAL POR INTENCIÓN
+{intent_instruction}
+
+#### POLÍTICA DE RESPUESTA POR INTENCIÓN
 {intent_instruction}
 
 #### FORMATO DE RESPUESTA OBLIGATORIO
@@ -2025,6 +2289,8 @@ def generate_answer_with_rag(user_query: str, memory):
         support_level=support_info["support_level"],
         allow_general_fallback=allow_general_fallback,
         real_source_labels=real_source_labels,
+        hard_anchor=hard_anchor,
+        strong_entity_match=strong_entity_match,
     )
 
     try:
