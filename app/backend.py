@@ -750,6 +750,90 @@ def compute_rerank_score(query: str, doc, query_intent: str | None = None) -> fl
         score -= 1.0
 
     return score
+
+def is_tangential_source_for_query(query: str, doc) -> bool:
+    """
+    Detect whether a source is likely tangential to the user's query.
+
+    This is product-agnostic. It prevents the model from using procedures
+    from adjacent but different processes, such as PIN, warranty, installation,
+    maintenance or portals, when the query is about troubleshooting.
+    """
+    text = query.lower()
+    content = doc.page_content.lower()
+    metadata = doc.metadata or {}
+
+    title = str(metadata.get("title", "")).lower()
+    source = str(metadata.get("source", "")).lower()
+    document_family = str(metadata.get("document_family", "")).lower()
+    component = str(metadata.get("component", "")).lower()
+
+    source_text = f"{title} {source} {document_family} {component} {content[:1200]}"
+
+    query_intent = classify_query_intent(query)
+
+    tangential_process_terms = [
+        "pin",
+        "autogestion",
+        "autogestión",
+        "portal",
+        "credenciales",
+        "garantía",
+        "garantia",
+        "warranty",
+        "mantenimiento preventivo",
+        "facturación",
+        "facturacion",
+        "instalación",
+        "instalacion",
+        "brochure",
+    ]
+
+    symptom_terms = [
+        "error",
+        "falla",
+        "no imprime",
+        "cola",
+        "bloqueada",
+        "atascada",
+        "desaparece",
+        "desaparecen",
+        "trabajos",
+        "offline",
+        "retenidos",
+        "liberar",
+    ]
+
+    # For troubleshooting, reject sources centered on unrelated processes
+    # unless they also mention the symptom/problem terms.
+    if query_intent == "troubleshooting":
+        source_has_tangential_process = any(term in source_text for term in tangential_process_terms)
+        source_has_symptom_alignment = any(term in source_text for term in symptom_terms)
+
+        if source_has_tangential_process and not source_has_symptom_alignment:
+            return True
+
+        # If the query is about a specific symptom and the source is mostly about PIN/autogestion,
+        # reject unless the source also directly discusses that symptom.
+        if any(term in text for term in ["desaparece", "desaparecen", "trabajos"]) and any(
+            term in source_text for term in ["pin", "autogestion", "autogestión"]
+        ):
+            if not any(term in source_text for term in ["trabajos", "cola", "retenidos", "liberar"]):
+                return True
+
+    # For requirements, reject marketing/general docs when real requirements docs exist.
+    if query_intent == "requirements":
+        if "brochure" in source_text:
+            return True
+
+    # For warranty, reject non-warranty operational/admin docs.
+    if query_intent == "warranty":
+        warranty_terms = ["garantía", "garantia", "warranty", "suministro", "suministros"]
+        if not any(term in source_text for term in warranty_terms):
+            return True
+
+    return False
+
 def should_keep_ranked_doc(
     query: str,
     doc,
@@ -1231,6 +1315,16 @@ def retrieve_context(query: str, top_k: int = 4):
         ]
     
     ranked_docs = filtered_ranked_docs
+    ranked_docs = filtered_ranked_docs
+    ranked_docs = deduplicate_ranked_docs(ranked_docs)
+    
+    ranked_docs = [
+        doc for doc in ranked_docs
+        if not is_tangential_source_for_query(query, doc)
+    ]
+    
+    if not ranked_docs:
+        ranked_docs = deduplicate_ranked_docs(filtered_ranked_docs)
 
     # Source diversity: avoid sending 4 chunks from the same PDF when possible.
     max_docs_per_source = CONFIG.get("max_docs_per_source", 2)
@@ -1330,6 +1424,17 @@ Reglas globales:
   - límites de la documentación,
   - criterios prudentes de escalamiento.
 - No menciones RAG, retrieval, chunks, embeddings, modelo ni arquitectura interna.
+
+#### POLÍTICA DE CONSISTENCIA ENTIDAD-CONTEXTO
+
+Reglas obligatorias:
+- Si la pregunta menciona una herramienta, producto, proceso o síntoma específico, usa solo información que esté claramente relacionada con esa herramienta, producto, proceso o síntoma.
+- No transfieras procedimientos entre productos parecidos o relacionados.
+- No uses pasos de una fuente secundaria si esa fuente trata otro producto, otro proceso o un escenario distinto.
+- Puedes citar una fuente tangencial solo si aporta una validación directamente aplicable a la pregunta.
+- Si una fuente habla de PIN, autogestión, portal, credenciales, instalación, garantía, mantenimiento, facturación u otro proceso distinto al preguntado, no la uses para proponer acciones, salvo que el usuario pregunte explícitamente por ese proceso.
+- No uses una fuente de PaperCut Hive para explicar PaperCut MF, ni una fuente de instalación para explicar troubleshooting, ni una fuente de garantía para explicar operación, salvo conexión explícita en el contexto.
+- Si una fuente secundaria no está directamente alineada con la pregunta, puedes omitirla en la respuesta aunque esté disponible en la lista de fuentes.
 """
 
     if query_intent == "troubleshooting":
@@ -1387,6 +1492,10 @@ Reglas globales:
     - No completes el troubleshooting con conocimiento general.
     - No agregues pasos que no estén en el contexto.
     - Si una acción no aparece en la documentación, no la incluyas.
+    - No uses procedimientos de autogestión, PIN, portales, credenciales, instalación, garantía, mantenimiento o administración si la pregunta es sobre un síntoma de troubleshooting y la fuente no conecta explícitamente ese procedimiento con el síntoma.
+    - Si una fuente solo menciona un producto relacionado pero no el síntoma, úsala únicamente como referencia secundaria o no la uses.
+    - La sección "Acciones recomendadas" debe contener solo acciones directamente soportadas por el contexto y alineadas con el síntoma consultado.
+    - La sección "Cuándo escalar" no debe nombrar responsables específicos salvo que el documento los indique como responsables del escalamiento para ese tipo de caso.
     """
 
     if query_intent == "requirements":
