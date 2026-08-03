@@ -103,7 +103,21 @@ def get_hf_client():
     hf_token = st.secrets.get("HF_TOKEN", None)
     if not hf_token:
         return None
-    return InferenceClient(model=LLM_CONFIG["model_name"], token=hf_token)
+
+    provider = st.secrets.get("HF_PROVIDER", LLM_CONFIG.get("provider", None))
+
+    if provider:
+        return InferenceClient(
+            model=LLM_CONFIG["model_name"],
+            provider=provider,
+            token=hf_token,
+        )
+
+    return InferenceClient(
+        model=LLM_CONFIG["model_name"],
+        token=hf_token,
+    )
+
 
 
 def backend_is_ready() -> bool:
@@ -2229,8 +2243,11 @@ def get_backend_status():
         "vectorstore_ok": False,
         "embedding_ok": False,
         "hf_client_ok": False,
+        "llm_model": LLM_CONFIG.get("model_name"),
+        "hf_provider": st.secrets.get("HF_PROVIDER", LLM_CONFIG.get("provider", None)),
         "error": None,
     }
+
     try:
         _ = get_embedding_model()
         status["embedding_ok"] = True
@@ -2239,16 +2256,21 @@ def get_backend_status():
         return status
 
     try:
-        vs = get_vectorstore()
+        _ = get_vectorstore()
         status["vectorstore_ok"] = True
-        try:
-            status["vectorstore_count"] = vs._collection.count()
-        except Exception:
-            pass
     except Exception as e:
-        status["error"] = f"Vector store error: {e}"
+        status["error"] = f"Vectorstore error: {e}"
         return status
 
+    try:
+        hf_client = get_hf_client()
+        status["hf_client_ok"] = hf_client is not None
+        if hf_client is None:
+            status["error"] = "HF_TOKEN is missing or HF client could not be initialized."
+    except Exception as e:
+        status["error"] = f"HF client error: {e}"
+
+    return status
     try:
         hf_client = get_hf_client()
         status["hf_client_ok"] = hf_client is not None
