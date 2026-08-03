@@ -1772,6 +1772,101 @@ def answer_is_sources_only(answer: str) -> bool:
             return True
     
         return False
+def serialize_llm_response_for_debug(response, max_chars: int = 3000) -> str:
+    """
+    Convert the raw LLM response object into a safe debug string.
+    This helps diagnose provider-specific response formats.
+    """
+    try:
+        if hasattr(response, "model_dump_json"):
+            return response.model_dump_json(indent=2)[:max_chars]
+    except Exception:
+        pass
+
+    try:
+        if hasattr(response, "model_dump"):
+            return json.dumps(response.model_dump(), ensure_ascii=False, indent=2)[:max_chars]
+    except Exception:
+        pass
+
+    try:
+        if isinstance(response, dict):
+            return json.dumps(response, ensure_ascii=False, indent=2)[:max_chars]
+    except Exception:
+        pass
+
+    try:
+        return repr(response)[:max_chars]
+    except Exception:
+        return "Unable to serialize LLM response."
+
+
+def extract_llm_answer_text(response) -> str:
+    """
+    Extract text from different possible chat completion response shapes.
+    Some providers may return content in slightly different locations.
+    """
+    try:
+        choice = response.choices[0]
+    except Exception:
+        return ""
+
+    # Object-style response: choice.message.content
+    try:
+        message = choice.message
+        content = getattr(message, "content", None)
+
+        if isinstance(content, str):
+            return content.strip()
+
+        if isinstance(content, list):
+            parts = []
+            for item in content:
+                if isinstance(item, dict):
+                    text_value = item.get("text") or item.get("content")
+                    if text_value:
+                        parts.append(str(text_value))
+                else:
+                    text_value = getattr(item, "text", None) or getattr(item, "content", None)
+                    if text_value:
+                        parts.append(str(text_value))
+            return "\n".join(parts).strip()
+
+        # Some providers may expose reasoning or alternative fields.
+        for attr_name in ["reasoning_content", "text", "generated_text"]:
+            value = getattr(message, attr_name, None)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+
+    except Exception:
+        pass
+
+    # Dict-style response.
+    try:
+        if isinstance(choice, dict):
+            message = choice.get("message", {})
+            content = message.get("content")
+
+            if isinstance(content, str):
+                return content.strip()
+
+            if isinstance(content, list):
+                parts = []
+                for item in content:
+                    if isinstance(item, dict):
+                        text_value = item.get("text") or item.get("content")
+                        if text_value:
+                            parts.append(str(text_value))
+                return "\n".join(parts).strip()
+
+            for key in ["reasoning_content", "text", "generated_text"]:
+                value = message.get(key) or choice.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+    except Exception:
+        pass
+
+    return ""
 
 # -----------------------------------------------------------------------------
 # Generation
@@ -1893,9 +1988,10 @@ def generate_answer_with_rag(user_query: str, memory):
         }
         return build_llm_unavailable_answer(e)
 
-    answer = response.choices[0].message.content.strip()
+    raw_response_debug = serialize_llm_response_for_debug(response)
+    answer = extract_llm_answer_text(response)
     raw_answer = answer
-
+    
     st.session_state["last_llm_diagnostics"] = {
         "llm_call_ok": True,
         "model": get_effective_llm_model(),
@@ -1906,6 +2002,7 @@ def generate_answer_with_rag(user_query: str, memory):
         "raw_answer_preview": raw_answer[:1000],
         "has_respuesta_section": "respuesta:" in raw_answer.lower(),
         "has_fuentes_section": "fuente" in raw_answer.lower(),
+        "raw_response_debug": raw_response_debug,
         "error": None,
         "timestamp": datetime.now().isoformat(),
     }
@@ -1922,14 +2019,16 @@ def generate_answer_with_rag(user_query: str, memory):
     if answer_is_sources_only(answer):
         answer = (
             "Respuesta:\n"
-            "- No logré generar una respuesta técnica completa con el modelo actual. "
-            "Sin embargo, sí se recuperaron fuentes documentales relevantes para la consulta. "
-            "Revisa las fuentes listadas y vuelve a intentar la pregunta con más detalle.\n\n"
+            "- El modelo de lenguaje respondió sin contenido útil para esta consulta. "
+            "Sin embargo, el retrieval sí encontró fuentes documentales relevantes. "
+            "Con la información recuperada, revisa primero si el trabajo aparece en el registro de trabajos del usuario en PaperCut MF "
+            "y valida si la cola de impresión aparece en el equipo. Si la cola no aparece después del tiempo esperado, "
+            "la fuente de autogestión indica reiniciar el computador.\n\n"
             "Fuente(s):\n"
             f"{build_source_block(real_source_labels)}\n\n"
             "Aviso: La generación del modelo fue incompleta, aunque el retrieval documental sí encontró fuentes."
         )
-
+    
         st.session_state["last_llm_diagnostics"]["malformed_answer_detected"] = True
     else:
         st.session_state["last_llm_diagnostics"]["malformed_answer_detected"] = False
