@@ -436,7 +436,7 @@ def detect_query_profile(query: str):
         ])
 
     return profile
-`
+    
     # ------------------------------------------------------------------
     # Fallback generic heuristics only for stable metadata families
     # ------------------------------------------------------------------
