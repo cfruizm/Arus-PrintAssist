@@ -1867,6 +1867,88 @@ def extract_llm_answer_text(response) -> str:
         pass
 
     return ""
+    
+def get_effective_max_tokens() -> int:
+    try:
+        return int(st.secrets.get("HF_MAX_TOKENS", LLM_CONFIG.get("max_tokens", 900)))
+    except Exception:
+        return int(LLM_CONFIG.get("max_tokens", 900))
+
+
+def get_effective_disable_thinking() -> bool:
+    value = st.secrets.get("HF_DISABLE_THINKING", True)
+
+    if isinstance(value, bool):
+        return value
+
+    return str(value).strip().lower() in {"1", "true", "yes", "y", "si", "sí"}
+
+
+def prepare_messages_for_no_think(messages: list[dict]) -> list"""
+    Add a direct-answer instruction to reduce hidden/thinking token usage
+    in Qwen 3.x style models.
+    """
+    prepared = []
+
+    for msg in messages:
+        prepared.append(dict(msg))
+
+    if not prepared:
+        return prepared
+
+    for idx in range(len(prepared) - 1, -1, -1):
+        if prepared[idx]..get("role") == "user":
+            prepared[idx]["content"] = (
+                str(prepared[idx].get("content", ""))
+                + "\n\n"
+                + "INSTRUCCIÓN DE GENERACIÓN:\n"
+                + "- /no_think\n"
+                + "- Responde directamente en español.\n"
+                + "- No generes razonamiento interno.\n"
+                + "- No dejes la respuesta vacía.\n"
+                + "- Debes producir contenido visible bajo la sección Respuesta.\n"
+            )
+            break
+
+    return prepared
+
+
+def call_hf_chat_completion(hf_client, messages: list[dict]):
+    """
+    Centralized Hugging Face chat completion call.
+
+    For Qwen 3.x / 3.6 models, try to disable thinking through provider-compatible
+    extra parameters and also add /no_think instruction in the user message.
+    """
+    max_tokens = get_effective_max_tokens()
+    disable_thinking = get_effective_disable_thinking()
+
+    effective_messages = messages
+
+    if disable_thinking:
+        effective_messages = prepare_messages_for_no_think(messages)
+
+    call_kwargs = {
+        "messages": effective_messages,
+        "max_tokens": max_tokens,
+        "temperature": LLM_CONFIG["temperature"],
+    }
+
+    if disable_thinking:
+        call_kwargs["extra_body"] = {
+            "enable_thinking": False,
+            "chat_template_kwargs": {
+                "enable_thinking": False
+            }
+        }
+
+    try:
+        return hf_client.chat_completion(**call_kwargs)
+    except TypeError:
+        # Some providers/versions of huggingface_hub may not accept extra_body.
+        # Retry without extra_body but keep the /no_think instruction in the prompt.
+        call_kwargs.pop("extra_body", None)
+        return hf_client.chat_completion(**call_kwargs)
 
 # -----------------------------------------------------------------------------
 # Generation
@@ -1946,11 +2028,10 @@ def generate_answer_with_rag(user_query: str, memory):
     )
 
     try:
-        response = hf_client.chat_completion(
-            messages=messages,
-            max_tokens=LLM_CONFIG["max_tokens"],
-            temperature=LLM_CONFIG["temperature"],
-        )
+        response = call_hf_chat_completion(
+        hf_client=hf_client,
+        messages=messages,
+    )
 
     except BadRequestError as e:
         st.session_state["last_llm_diagnostics"] = {
@@ -1992,12 +2073,31 @@ def generate_answer_with_rag(user_query: str, memory):
     answer = extract_llm_answer_text(response)
     raw_answer = answer
     
+    finish_reason = None
+    usage_info = None
+    
+    try:
+        finish_reason = response.choices[0].finish_reason
+    except Exception:
+        finish_reason = None
+    
+    try:
+        if hasattr(response, "usage"):
+            usage_info = response.usage
+            if hasattr(usage_info, "model_dump"):
+                usage_info = usage_info.model_dump()
+    except Exception:
+        usage_info = None
+    
     st.session_state["last_llm_diagnostics"] = {
         "llm_call_ok": True,
         "model": get_effective_llm_model(),
         "provider": get_effective_hf_provider(),
         "temperature": LLM_CONFIG.get("temperature"),
-        "max_tokens": LLM_CONFIG.get("max_tokens"),
+        "max_tokens": get_effective_max_tokens(),
+        "disable_thinking": get_effective_disable_thinking(),
+        "finish_reason": finish_reason,
+        "usage": usage_info,
         "raw_answer_length": len(raw_answer),
         "raw_answer_preview": raw_answer[:1000],
         "has_respuesta_section": "respuesta:" in raw_answer.lower(),
