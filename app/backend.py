@@ -1242,6 +1242,37 @@ def should_use_general_fallback(user_query: str, support_info: dict) -> bool:
         return False
     return support_info["support_level"] != "strong"
 
+def deduplicate_ranked_docs(docs: list) -> list:
+    """
+    Remove duplicated or near-duplicated chunks from the final context.
+
+    Duplicates are detected using:
+    - source
+    - page or page_label
+    - normalized content preview
+    """
+    unique_docs = []
+    seen_keys = set()
+
+    for doc in docs:
+        metadata = doc.metadata or {}
+
+        source = str(metadata.get("source", "unknown_source"))
+        page = str(metadata.get("page", metadata.get("page_label", "unknown_page")))
+
+        normalized_preview = " ".join(
+            str(doc.page_content).lower().split()
+        )[:300]
+
+        key = (source, page, normalized_preview)
+
+        if key in seen_keys:
+            continue
+
+        seen_keys.add(key)
+        unique_docs.append(doc)
+
+    return unique_docs
 
 def retrieve_context(query: str, top_k: int = 4):
     vectorstore = get_vectorstore()
