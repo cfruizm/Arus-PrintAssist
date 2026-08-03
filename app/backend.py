@@ -10,6 +10,11 @@ from typing import Any
 
 import streamlit as st
 from huggingface_hub import InferenceClient
+try:
+    from huggingface_hub.errors import BadRequestError, HfHubHTTPError
+except Exception:
+    BadRequestError = Exception
+    HfHubHTTPError = Exception
 from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
 
@@ -1689,6 +1694,20 @@ def compact_source_heading(source_labels: list[str]) -> str:
 def field_accepts_no_value(field_name: str) -> bool:
     return field_name in {"software_version", "contract_client_location", "evidence", "impact_type"}
 
+def build_llm_unavailable_answer(error: Exception | None = None) -> str:
+    """
+    User-facing response when the LLM provider is not available.
+    Avoid exposing internal stack traces or secrets.
+    """
+    return (
+        "Respuesta:\n"
+        "- En este momento el servicio de generación de respuestas no está disponible. "
+        "La base documental y el retrieval pueden estar funcionando, pero el modelo de lenguaje "
+        "configurado no pudo responder.\n\n"
+        "Fuente(s):\n"
+        "- Base de conocimiento actual sin respuesta generada por el modelo.\n\n"
+        "Aviso: Revisa la configuración del modelo o proveedor de inferencia antes de intentar nuevamente."
+    )
 
 # -----------------------------------------------------------------------------
 # Generation
@@ -1766,11 +1785,18 @@ def generate_answer_with_rag(user_query: str, memory):
         real_source_labels=real_source_labels,
     )
 
-    response = hf_client.chat_completion(
-        messages=messages,
-        max_tokens=LLM_CONFIG["max_tokens"],
-        temperature=LLM_CONFIG["temperature"],
-    )
+    try:
+        response = hf_client.chat_completion(
+            messages=messages,
+            max_tokens=LLM_CONFIG["max_tokens"],
+            temperature=LLM_CONFIG["temperature"],
+        )
+    except BadRequestError as e:
+        return build_llm_unavailable_answer(e)
+    except HfHubHTTPError as e:
+        return build_llm_unavailable_answer(e)
+    except Exception as e:
+        return build_llm_unavailable_answer(e)
 
     answer = response.choices[0].message.content.strip()
     answer = clean_user_facing_answer(answer)
