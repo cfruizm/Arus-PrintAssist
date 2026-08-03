@@ -23,6 +23,8 @@ DEBUG_UI = True
 # Backend imports
 # -----------------------------------------------------------------------------
 # The fallback keeps the app loadable while the backend module is still incomplete.
+BACKEND_IMPORT_ERROR = None
+
 try:
     from app.backend import (
         create_chat_session_state,
@@ -33,11 +35,14 @@ try:
         get_backend_status,
         debug_query_diagnostics,
     )
-except Exception:
+except Exception as e:
+    BACKEND_IMPORT_ERROR = e
+
     create_chat_session_state = None
     route_user_message = None
     finalize_escalation_case = None
     reset_chat_session_state = None
+    backend_is_ready = None
     get_backend_status = None
     debug_query_diagnostics = None
 
@@ -216,7 +221,9 @@ with st.sidebar:
     # Temporary debug panel
     # -----------------------------------------------------------------------------
     
-    if DEBUG_UI:
+    if DEBUG_UI and BACKEND_IMPORT_ERROR is not None:
+        st.error("Error importando app.backend")
+        st.exception(BACKEND_IMPORT_ERROR)
         st.sidebar.divider()
         st.sidebar.subheader("Debug técnico")
     
