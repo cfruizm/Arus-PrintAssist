@@ -1885,7 +1885,7 @@ def get_effective_disable_thinking() -> bool:
 
 
 def prepare_messages_for_no_think(messages: list[dict]) -> list[str]:
-    Add a direct-answer instruction to reduce hidden/thinking token usage
+    """Add a direct-answer instruction to reduce hidden/thinking token usage
     in Qwen 3.x style models.
     """
     prepared = []
