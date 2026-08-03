@@ -17,7 +17,7 @@ from app.session_state import ChatSessionState
 # Optional debug mode
 # -----------------------------------------------------------------------------
 # Keep this False in normal user-facing deployments.
-DEBUG_UI = False
+DEBUG_UI = True
 
 # -----------------------------------------------------------------------------
 # Backend imports
@@ -203,12 +203,74 @@ with st.sidebar:
             else:
                 st.warning("No se encontró la ruta del archivo exportado.")
 
+
     # Only show a warning if the backend is unavailable
     if not backend_is_ready():
         st.warning(
             "El servicio de respuestas no está disponible temporalmente. "
             "Intenta nuevamente más tarde."
         )
+
+    ####
+    # -----------------------------------------------------------------------------
+    # Temporary debug panel
+    # -----------------------------------------------------------------------------
+    
+    if DEBUG_UI:
+        st.sidebar.divider()
+        st.sidebar.subheader("Debug técnico")
+    
+        if get_backend_status is not None:
+            if st.sidebar.button("Ver estado backend"):
+                try:
+                    status = get_backend_status()
+                    st.sidebar.json(status)
+                except Exception as e:
+                    st.sidebar.error(f"Error consultando backend: {e}")
+    
+        if st.sidebar.button("Inspeccionar vectorstore"):
+            try:
+                from app.backend import get_vectorstore
+    
+                vectorstore = get_vectorstore()
+                collection = vectorstore._collection
+    
+                st.subheader("Inspección de vectorstore")
+                st.write("Collection name:", collection.name)
+                st.write("Document count:", collection.count())
+    
+                peek = collection.peek(5)
+    
+                st.write("IDs:")
+                st.json(peek.get("ids", []))
+    
+                st.write("Metadatas:")
+                st.json(peek.get("metadatas", []))
+    
+                st.write("Documents preview:")
+                for i, doc in enumerate(peek.get("documents", []), start=1):
+                    st.markdown(f"**Documento {i}**")
+                    st.code(doc[:1000])
+    
+            except Exception as e:
+                st.error(f"Error inspeccionando vectorstore: {e}")
+    
+        debug_query = st.sidebar.text_area(
+            "Consulta para debug retrieval",
+            value="¿Qué hago si la cola de impresión está bloqueada?",
+            height=120,
+        )
+    
+        if st.sidebar.button("Ejecutar debug retrieval"):
+            if debug_query_diagnostics is None:
+                st.error("debug_query_diagnostics no está disponible.")
+            else:
+                try:
+                    result = debug_query_diagnostics(debug_query)
+                    st.subheader("Resultado debug retrieval")
+                    st.json(result)
+                except Exception as e:
+                    st.error(f"Error ejecutando debug retrieval: {e}")
 
     # Optional technical diagnostics (hidden in normal production mode)
     if DEBUG_UI:
