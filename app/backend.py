@@ -1315,7 +1315,6 @@ def retrieve_context(query: str, top_k: int = 4):
         ]
     
     ranked_docs = filtered_ranked_docs
-    ranked_docs = filtered_ranked_docs
     ranked_docs = deduplicate_ranked_docs(ranked_docs)
     
     ranked_docs = [
