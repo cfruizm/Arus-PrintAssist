@@ -104,21 +104,20 @@ def get_hf_client():
     if not hf_token:
         return None
 
-    provider = st.secrets.get("HF_PROVIDER", LLM_CONFIG.get("provider", None))
+    model_name = get_effective_llm_model()
+    provider = get_effective_hf_provider()
 
     if provider:
         return InferenceClient(
-            model=LLM_CONFIG["model_name"],
+            model=model_name,
             provider=provider,
             token=hf_token,
         )
 
     return InferenceClient(
-        model=LLM_CONFIG["model_name"],
+        model=model_name,
         token=hf_token,
     )
-
-
 
 def backend_is_ready() -> bool:
     try:
@@ -128,6 +127,12 @@ def backend_is_ready() -> bool:
     except Exception:
         return False
 
+def get_effective_llm_model() -> str:
+    return st.secrets.get("HF_MODEL", LLM_CONFIG.get("model_name"))
+
+
+def get_effective_hf_provider():
+    return st.secrets.get("HF_PROVIDER", LLM_CONFIG.get("provider", None))
 
 # -----------------------------------------------------------------------------
 # Session helpers
@@ -1808,8 +1813,8 @@ def generate_answer_with_rag(user_query: str, memory):
     
         st.session_state["last_llm_diagnostics"] = {
             "llm_call_ok": True,
-            "model": LLM_CONFIG.get("model_name"),
-            "provider": st.secrets.get("HF_PROVIDER", LLM_CONFIG.get("provider", None)),
+            "model": get_effective_llm_model(),
+            "provider": get_effective_hf_provider(),
             "temperature": LLM_CONFIG.get("temperature"),
             "max_tokens": LLM_CONFIG.get("max_tokens"),
             "error": None,
@@ -1819,8 +1824,8 @@ def generate_answer_with_rag(user_query: str, memory):
     except BadRequestError as e:
         st.session_state["last_llm_diagnostics"] = {
             "llm_call_ok": False,
-            "model": LLM_CONFIG.get("model_name"),
-            "provider": st.secrets.get("HF_PROVIDER", LLM_CONFIG.get("provider", None)),
+            "model": get_effective_llm_model(),
+            "provider": get_effective_hf_provider(),
             "temperature": LLM_CONFIG.get("temperature"),
             "max_tokens": LLM_CONFIG.get("max_tokens"),
             "error": str(e),
@@ -1831,8 +1836,8 @@ def generate_answer_with_rag(user_query: str, memory):
     except HfHubHTTPError as e:
         st.session_state["last_llm_diagnostics"] = {
             "llm_call_ok": False,
-            "model": LLM_CONFIG.get("model_name"),
-            "provider": st.secrets.get("HF_PROVIDER", LLM_CONFIG.get("provider", None)),
+            "model": get_effective_llm_model(),
+            "provider": get_effective_hf_provider(),
             "temperature": LLM_CONFIG.get("temperature"),
             "max_tokens": LLM_CONFIG.get("max_tokens"),
             "error": str(e),
@@ -2283,8 +2288,8 @@ def get_backend_status():
         "vectorstore_ok": False,
         "embedding_ok": False,
         "hf_client_ok": False,
-        "llm_model": LLM_CONFIG.get("model_name"),
-        "hf_provider": st.secrets.get("HF_PROVIDER", LLM_CONFIG.get("provider", None)),
+        "llm_model": get_effective_llm_model(),
+        "hf_provider": get_effective_hf_provider(),
         "error": None,
     }
 
