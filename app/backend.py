@@ -726,6 +726,146 @@ def compute_rerank_score(query: str, doc, query_intent: str | None = None) -> fl
         score -= 1.0
 
     return score
+def should_keep_ranked_doc(
+    query: str,
+    doc,
+    score: float,
+    top_score: float,
+    query_intent: str,
+) -> bool:
+    """
+    Decide whether a reranked document is relevant enough to be sent
+    to the final LLM context.
+
+    This reduces source contamination after broad retrieval.
+    """
+    text = query.lower()
+    content = doc.page_content.lower()
+    metadata = doc.metadata or {}
+
+    title = str(metadata.get("title", "")).lower()
+    source = str(metadata.get("source", "")).lower()
+    vendor = str(metadata.get("vendor", "")).lower()
+    product = str(metadata.get("product", "")).lower()
+    component = str(metadata.get("component", "")).lower()
+    document_family = str(metadata.get("document_family", "")).lower()
+
+    title_source = f"{title} {source} {vendor} {product} {component} {document_family}"
+
+    if top_score <= 0:
+        return score > 0
+
+    relative_score = score / top_score
+
+    # Keep very strong documents.
+    if score >= 10:
+        return True
+
+    # PaperCut-focused queries should keep PaperCut-related evidence.
+    if "papercut" in text:
+        has_papercut = "papercut" in title_source or "papercut" in content
+
+        if has_papercut and score >= 4:
+            return True
+
+        has_job_evidence = any(term in content for term in [
+            "trabajos retenidos",
+            "liberar trabajos",
+            "print jobs",
+            "held jobs",
+            "release jobs",
+            "cola de impresión",
+            "cola de impresion",
+        ])
+
+        if has_job_evidence and score >= 5 and relative_score >= 0.35:
+            return True
+
+        return False
+
+    # SDS requirements: prefer real SDS and requirements/install docs.
+    if any(term in text for term in [
+        "sds",
+        "smart device services",
+        "hp smart device services",
+    ]):
+        has_sds = any(term in title_source or term in content for term in [
+            "sds",
+            "smart device services",
+            "dca",
+            "sda",
+            "jamc",
+        ])
+
+        if query_intent == "requirements":
+            has_requirement_signal = any(term in title_source or term in content for term in [
+                "requirements",
+                "requisitos",
+                "prerrequisitos",
+                "system requirements",
+                "minimum requirements",
+                "compatibilidad",
+                "compatible",
+                "sistema operativo",
+                "operating system",
+            ])
+
+            if has_sds and has_requirement_signal and score >= 5:
+                return True
+
+            if has_sds and score >= 8:
+                return True
+
+            return False
+
+        return has_sds and score >= 4
+
+    # Warranty queries: keep warranty/supplies docs, reject generic print docs.
+    if query_intent == "warranty":
+        has_warranty_signal = any(term in title_source or term in content for term in [
+            "garantía",
+            "garantia",
+            "warranty",
+            "suministro",
+            "suministros",
+            "consumible",
+            "consumibles",
+            "rma",
+            "reemplazo",
+        ])
+
+        if has_warranty_signal and score >= 4:
+            return True
+
+        return False
+
+    # Escalation queries: keep only docs that mention escalation-like actions.
+    if query_intent == "escalation":
+        has_escalation_signal = any(term in title_source or term in content for term in [
+            "escalar",
+            "escalamiento",
+            "nivel 2",
+            "nivel 3",
+            "incidente",
+            "ticket",
+            "caso",
+            "proveedor",
+            "fabricante",
+            "informar al área",
+            "informar al area",
+            "mesa de ayuda",
+        ])
+
+        if has_escalation_signal and score >= 3:
+            return True
+
+        return score >= 5 and relative_score >= 0.6
+
+    # Generic fallback: remove very weak tail documents.
+    if score >= 4 and relative_score >= 0.35:
+        return True
+
+    return False
 
 def compute_keyword_overlap_ratio(query: str, content: str) -> float:
     query_tokens = [tok for tok in re.findall(r"\w+", query.lower()) if len(tok) > 2]
@@ -960,11 +1100,36 @@ def retrieve_context(query: str, top_k: int = 4):
     if not docs:
         return "", []
 
-    ranked_docs = sorted(
-        docs,
-        key=lambda d: compute_rerank_score(query, d, query_intent),
+    ranked_docs_with_scores = []
+
+    for doc in docs:
+        score = compute_rerank_score(query, doc, query_intent)
+        ranked_docs_with_scores.append((doc, score))
+    
+    ranked_docs_with_scores.sort(
+        key=lambda item: item[1],
         reverse=True,
     )
+    
+    top_score = ranked_docs_with_scores[0][1] if ranked_docs_with_scores else 0.0
+    
+    filtered_ranked_docs = [
+        doc
+        for doc, score in ranked_docs_with_scores
+        if should_keep_ranked_doc(
+            query=query,
+            doc=doc,
+            score=score,
+            top_score=top_score,
+            query_intent=query_intent,
+        )
+    ]
+    
+    # If the filter is too strict, fall back to the top reranked docs.
+    if not filtered_ranked_docs:
+        filtered_ranked_docs = [doc for doc, score in ranked_docs_with_scores]
+    
+    ranked_docs = filtered_ranked_docs
 
     # Source diversity: avoid sending 4 chunks from the same PDF when possible.
     max_docs_per_source = CONFIG.get("max_docs_per_source", 2)
