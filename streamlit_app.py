@@ -288,7 +288,9 @@ with st.sidebar:
                     st.json(result)
                 except Exception as e:
                     st.error(f"Error ejecutando debug retrieval: {e}")
-
+    if "last_llm_diagnostics" in st.session_state:
+        st.sidebar.markdown("### Última llamada LLM")
+        st.sidebar.json(st.session_state["last_llm_diagnostics"])
     # Optional technical diagnostics (hidden in normal production mode)
     if DEBUG_UI:
         with st.expander("Diagnóstico técnico", expanded=False):
