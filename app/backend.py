@@ -837,49 +837,49 @@ def compute_rerank_score(query: str, doc, query_intent: str | None = None) -> fl
     score = 0.0
     score += compute_generic_entity_alignment_score(query, metadata, content)
 
-        # Global conceptual-query boost.
-        # For "qué es / what is" style questions, prefer introduction, overview,
-        # definition and purpose chunks over admin/detail-only chunks.
-        if query_intent == "conceptual":
-            conceptual_overview_terms = [
-                "introduction",
-                "introducción",
-                "introduccion",
-                "overview",
-                "descripción general",
-                "descripcion general",
-                "definition",
-                "definición",
-                "definicion",
-                "purpose",
-                "propósito",
-                "proposito",
-                "what is",
-                "qué es",
-                "que es",
-                "solution",
-                "solución",
-                "solucion",
-                "allows an organization",
-                "permite",
-                "componentes",
-                "components",
-            ]
-    
-            if any(term in content[:1600] for term in conceptual_overview_terms):
-                score += 3.5
-    
-            # Prefer early meaningful intro pages over deep admin/reference pages.
-            try:
-                page_number = int(str(metadata.get("page", 999)))
-            except Exception:
-                page_number = 999
-    
-            if page_number <= 30 and any(
-                term in content[:1600]
-                for term in conceptual_overview_terms
-            ):
-                score += 1.5
+    # Global conceptual-query boost.
+    # For "qué es / what is" style questions, prefer introduction, overview,
+    # definition and purpose chunks over admin/detail-only chunks.
+    if query_intent == "conceptual":
+        conceptual_overview_terms = [
+            "introduction",
+            "introducción",
+            "introduccion",
+            "overview",
+            "descripción general",
+            "descripcion general",
+            "definition",
+            "definición",
+            "definicion",
+            "purpose",
+            "propósito",
+            "proposito",
+            "what is",
+            "qué es",
+            "que es",
+            "solution",
+            "solución",
+            "solucion",
+            "allows an organization",
+            "permite",
+            "componentes",
+            "components",
+        ]
+
+        if any(term in content[:1600] for term in conceptual_overview_terms):
+            score += 3.5
+
+        # Prefer early meaningful intro pages over deep admin/reference pages.
+        try:
+            page_number = int(str(metadata.get("page", 999)))
+        except Exception:
+            page_number = 999
+
+        if page_number <= 30 and any(
+            term in content[:1600]
+            for term in conceptual_overview_terms
+        ):
+            score += 1.5
 
     # Priority should help, but not dominate semantic relevance.
     try:
