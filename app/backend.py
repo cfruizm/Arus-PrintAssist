@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import time
 import re
 from collections import defaultdict
 from datetime import datetime
@@ -202,16 +203,6 @@ def is_in_scope_message(user_message: str) -> bool:
 # Query Entities helpers
 # -----------------------------------------------------------------------------
     
-def detect_query_entities(user_query: str) -> dict:
-    text = user_query.lower()
-
-    product_ids = detect_entities_in_text(text, PRODUCT_ALIAS_INDEX)
-    process_ids = detect_entities_in_text(text, PROCESS_ALIAS_INDEX)
-
-    return {
-        "products": product_ids,
-        "processes": process_ids,
-    }
     
 def get_detected_entity_aliases(user_query: str) -> list[str]:
     """
@@ -1918,6 +1909,7 @@ Usa encabezados Markdown cuando ayuden a la comprensión.
 No uses referencias internas como [Chunk 1], [Chunk 2] o similares.
 """
     
+
 def build_rag_messages(
     user_query: str,
     retrieved_context: str,
@@ -1931,8 +1923,8 @@ def build_rag_messages(
     real_source_labels = real_source_labels or []
     source_block = build_source_block(real_source_labels)
     query_intent = classify_query_intent(user_query)
-    response_format_contract = build_response_format_contract(query_intent)
     has_sources = bool(real_source_labels)
+
     intent_instruction = build_intent_instruction(
         query_intent=query_intent,
         support_level=support_level,
@@ -1940,25 +1932,7 @@ def build_rag_messages(
         hard_anchor=hard_anchor,
         strong_entity_match=strong_entity_match,
     )
-
-    intent_instruction = ""
-
-    if query_intent == "troubleshooting":
-        intent_instruction = """
-
-    
-    #### INSTRUCCIÓN ESPECIAL PARA TROUBLESHOOTING
-    
-    La respuesta debe tener este enfoque:
-    - No inventes causas que no estén soportadas por el contexto.
-    - Si la documentación no identifica una causa única, dilo explícitamente.
-    - Indica qué validaciones permite hacer la documentación recuperada.
-    - Responde con esta estructura dentro de la sección Respuesta:
-      - Diagnóstico documental
-      - Validaciones iniciales
-      - Acciones recomendadas
-      - Cuándo escalar
-    """
+    response_format_contract = build_response_format_contract(query_intent)
 
     if allow_general_fallback:
         fallback_instruction = (
@@ -1970,22 +1944,6 @@ def build_rag_messages(
             "Debes basar la respuesta principalmente en la información documental disponible. "
             "Si la información no es suficiente para responder con precisión, no inventes pasos críticos."
         )
-
-    requirements_instruction = ""
-    if query_intent == "requirements":
-        requirements_instruction = """
-### INSTRUCCIÓN ESPECIAL PARA CONSULTAS DE REQUERIMIENTOS
-- Si la pregunta es sobre requisitos o requerimientos, estructura la respuesta por categorías cuando el contexto lo permita:
-  - Prerrequisitos del entorno
-  - Sistemas operativos compatibles
-  - Plataformas de virtualización compatibles
-  - Requisitos mínimos de hardware
-  - Requisitos de red / seguridad
-- Incluye solo las categorías que realmente aparezcan en el contexto recuperado.
-- No conviertas la respuesta en pasos de instalación.
-- No uses contenido de troubleshooting como si fuera un requisito de instalación.
-- No recortes información útil si está claramente presente en el contexto.
-"""
 
     user_content = f"""
 ### MEMORIA CORTA DE LA CONVERSACIÓN
@@ -2000,32 +1958,29 @@ def build_rag_messages(
 ### PREGUNTA DEL USUARIO
 {user_query}
 
-#### INTENCIÓN DETECTADA
+### INTENCIÓN DETECTADA
 {query_intent}
 
 ### NIVEL DE SOPORTE DOCUMENTAL
 {support_level}
 
-#### POLÍTICA DE RESPUESTA POR INTENCIÓN
+### POLÍTICA DE RESPUESTA POR INTENCIÓN
 {intent_instruction}
 
-#### CONTRATO DE FORMATO VISIBLE
+### CONTRATO DE FORMATO VISIBLE
 {response_format_contract}
 
-#### FORMATO DE RESPUESTA OBLIGATORIO
-
+### FORMATO DE RESPUESTA OBLIGATORIO
 Debes responder siempre con estas dos secciones principales, en este orden:
 
 Respuesta:
-- Usa encabezados Markdown con "###".
-- No uses los encabezados como bullets.
-- No escribas encabezados en la misma línea del contenido.
+- Usa encabezados Markdown con "###" dentro de la sección Respuesta, según el contrato de formato visible.
+- No uses encabezados como bullets.
+- No escribas encabezados y contenido en la misma línea.
 - Cada encabezado debe tener su propio párrafo.
-- Usa únicamente el formato indicado por la política de intención.
-- No mezcles formatos entre intenciones. Por ejemplo:
-  - Si la intención es warranty, no uses "Diagnóstico documental" salvo que la política de warranty lo indique.
-  - Si la intención es requirements, no uses pasos de instalación.
-  - Si la intención es troubleshooting, no uses formato de garantía o requisitos.
+- Usa únicamente el formato indicado por la intención detectada.
+- No mezcles formatos entre intenciones.
+- No uses referencias internas como [Chunk 1], [Chunk 2], etc.
 - No agregues causas, validaciones ni acciones que no estén soportadas por la información documental disponible.
 - Si una recomendación no está explícitamente documentada, no la incluyas.
 
@@ -2037,17 +1992,13 @@ Fuente(s):
   - Base de conocimiento actual sin coincidencias documentales suficientes
 
 ### REGLAS DE ESTILO
-- No menciones limitaciones salvo que sea realmente necesario.
-- Si hace falta advertir algo importante, añade solo una línea final como: Aviso: ...
+- Responde en español.
+- Usa tono profesional, claro y orientado a soporte N1.
 - No expliques tu proceso interno.
-- No menciones contexto recuperado, RAG, fallback ni modelo.
+- No menciones contexto recuperado, RAG, fallback, chunks, embeddings ni modelo.
 - No inventes nombres de fuente.
 - No cites "Documentación oficial de ..." si no aparece exactamente en la lista de fuentes disponibles.
-
-{requirements_instruction}
-
-#### INSTRUCCIÓN ADICIONAL POR INTENCIÓN
-{intent_instruction}
+- Si hace falta advertir algo importante, añade solo una línea final como: Aviso: ...
 
 ### INSTRUCCIÓN ADICIONAL
 {fallback_instruction}
@@ -2518,21 +2469,6 @@ def extract_llm_answer_text(response) -> str:
 
     return ""
     
-def get_effective_max_tokens() -> int:
-    """
-    Resolve max_tokens from Streamlit secrets first, then fallback to LLM_CONFIG.
-    This avoids hardcoded max_tokens from config.py during model tests.
-    """
-    try:
-        value = st.secrets.get("HF_MAX_TOKENS", None)
-
-        if value is not None:
-            return int(value)
-
-        return int(LLM_CONFIG.get("max_tokens", 600))
-
-    except Exception:
-        return 600
 
 def get_effective_disable_thinking() -> bool:
     value = st.secrets.get("HF_DISABLE_THINKING", True)
@@ -2542,18 +2478,6 @@ def get_effective_disable_thinking() -> bool:
 
     return str(value).strip().lower() in {"1", "true", "yes", "y", "si", "sí"}
 
-def get_effective_max_tokens_source() -> str:
-    """
-    Show whether max_tokens came from Streamlit secrets or config fallback.
-    Useful for debugging deployment configuration.
-    """
-    try:
-        if st.secrets.get("HF_MAX_TOKENS", None) is not None:
-            return "streamlit_secrets.HF_MAX_TOKENS"
-    except Exception:
-        pass
-
-    return "LLM_CONFIG.max_tokens_or_default"
 
 def prepare_messages_for_no_think(messages: list[dict]) -> list:
     """Add a direct-answer instruction to reduce hidden/thinking token usage
@@ -2584,20 +2508,16 @@ def prepare_messages_for_no_think(messages: list[dict]) -> list:
     return prepared
 
 
+
 def call_hf_chat_completion(hf_client, messages: list[dict]):
     """
     Centralized Hugging Face chat completion call.
-
-    For Qwen 3.x / 3.6 models, try to disable thinking through provider-compatible
-    extra parameters and also add /no_think instruction in the user message.
+    Adds /no_think support for Qwen-style models and a short retry for temporary provider overload.
     """
     max_tokens = get_effective_max_tokens()
     disable_thinking = get_effective_disable_thinking()
 
-    effective_messages = messages
-
-    if disable_thinking:
-        effective_messages = prepare_messages_for_no_think(messages)
+    effective_messages = prepare_messages_for_no_think(messages) if disable_thinking else messages
 
     call_kwargs = {
         "messages": effective_messages,
@@ -2608,18 +2528,33 @@ def call_hf_chat_completion(hf_client, messages: list[dict]):
     if disable_thinking:
         call_kwargs["extra_body"] = {
             "enable_thinking": False,
-            "chat_template_kwargs": {
-                "enable_thinking": False
-            }
+            "chat_template_kwargs": {"enable_thinking": False},
         }
 
-    try:
-        return hf_client.chat_completion(**call_kwargs)
-    except TypeError:
-        # Some providers/versions of huggingface_hub may not accept extra_body.
-        # Retry without extra_body but keep the /no_think instruction in the prompt.
-        call_kwargs.pop("extra_body", None)
-        return hf_client.chat_completion(**call_kwargs)
+    last_error = None
+    for attempt in range(3):
+        try:
+            return hf_client.chat_completion(**call_kwargs)
+        except TypeError:
+            call_kwargs.pop("extra_body", None)
+            return hf_client.chat_completion(**call_kwargs)
+        except Exception as e:
+            last_error = e
+            error_text = str(e).lower()
+            is_busy = (
+                "429" in error_text
+                or "too many requests" in error_text
+                or "engine_overloaded" in error_text
+                or "model busy" in error_text
+                or "504 gateway" in error_text
+                or "gateway time-out" in error_text
+            )
+            if is_busy and attempt < 2:
+                time.sleep(2 * (attempt + 1))
+                continue
+            raise
+
+    raise last_error
 def get_effective_max_tokens() -> int:
     """
     Resolve max_tokens from Streamlit secrets first, then fallback to LLM_CONFIG.
@@ -2718,6 +2653,7 @@ def remove_internal_chunk_references(answer: str) -> str:
 # -----------------------------------------------------------------------------
 # Generation
 # -----------------------------------------------------------------------------
+
 def generate_answer_with_rag(user_query: str, memory):
     hf_client = get_hf_client()
 
@@ -2740,7 +2676,6 @@ def generate_answer_with_rag(user_query: str, memory):
     strong_entity_match = has_strong_entity_document_match(user_query, retrieved_docs)
 
     # Requirements: use normal RAG if there is real support.
-    # Only fail closed if support is weak AND there is no solid entity-document match.
     if query_intent == "requirements":
         if (
             support_info["support_level"] in {"weak", "none"}
@@ -2754,9 +2689,7 @@ def generate_answer_with_rag(user_query: str, memory):
             memory.add_turn(user_query, answer)
             return answer
 
-    # Procedural / troubleshooting:
-    # fail closed only when support is weak/none AND there is no documentary anchor.
-    # If support is partial or strong, allow the LLM to answer with caution.
+    # Procedural / troubleshooting: fail closed only when support is weak/none.
     if query_intent in {"procedural", "troubleshooting"}:
         if (
             support_info["support_level"] in {"weak", "none"}
@@ -2801,75 +2734,29 @@ def generate_answer_with_rag(user_query: str, memory):
 
     try:
         response = call_hf_chat_completion(
-        hf_client=hf_client,
-        messages=messages,
-    )
-
+            hf_client=hf_client,
+            messages=messages,
+        )
     except BadRequestError as e:
-        update_last_llm_diagnostics(
-            llm_call_ok=False,
-            error=e,
-        )
+        update_last_llm_diagnostics(llm_call_ok=False, error=e)
         return build_llm_unavailable_answer(e)
-
     except HfHubHTTPError as e:
-        update_last_llm_diagnostics(
-            llm_call_ok=False,
-            error=e,
-        )
+        update_last_llm_diagnostics(llm_call_ok=False, error=e)
         return build_llm_unavailable_answer(e)
-
     except Exception as e:
-        update_last_llm_diagnostics(
-            llm_call_ok=False,
-            error=e,
-        )
+        update_last_llm_diagnostics(llm_call_ok=False, error=e)
         return build_llm_unavailable_answer(e)
 
     raw_response_debug = serialize_llm_response_for_debug(response)
     answer = extract_llm_answer_text(response)
     raw_answer = answer
-    
+
     update_last_llm_diagnostics(
         llm_call_ok=True,
         raw_answer=raw_answer,
         raw_response_debug=raw_response_debug,
         response=response,
     )
-    
-    finish_reason = None
-    usage_info = None
-    
-    try:
-        finish_reason = response.choices[0].finish_reason
-    except Exception:
-        finish_reason = None
-    
-    try:
-        if hasattr(response, "usage"):
-            usage_info = response.usage
-            if hasattr(usage_info, "model_dump"):
-                usage_info = usage_info.model_dump()
-    except Exception:
-        usage_info = None
-    
-    st.session_state["last_llm_diagnostics"] = {
-        "llm_call_ok": True,
-        "model": get_effective_llm_model(),
-        "provider": get_effective_hf_provider(),
-        "temperature": LLM_CONFIG.get("temperature"),
-        "max_tokens": get_effective_max_tokens(),
-        "disable_thinking": get_effective_disable_thinking(),
-        "finish_reason": finish_reason,
-        "usage": usage_info,
-        "raw_answer_length": len(raw_answer),
-        "raw_answer_preview": raw_answer[:1000],
-        "has_respuesta_section": "respuesta:" in raw_answer.lower(),
-        "has_fuentes_section": "fuente" in raw_answer.lower(),
-        "raw_response_debug": raw_response_debug,
-        "error": None,
-        "timestamp": datetime.now().isoformat(),
-    }
 
     answer = clean_user_facing_answer(answer)
     answer = remove_internal_chunk_references(answer)
@@ -2884,22 +2771,18 @@ def generate_answer_with_rag(user_query: str, memory):
     if answer_is_sources_only(answer):
         answer = (
             "Respuesta:\n"
-            "- El modelo de lenguaje respondió sin contenido útil para esta consulta. "
-            "Sin embargo, el retrieval sí encontró fuentes documentales relevantes. "
-            "Con la información recuperada, revisa primero si el trabajo aparece en el registro de trabajos del usuario en PaperCut MF "
-            "y valida si la cola de impresión aparece en el equipo. Si la cola no aparece después del tiempo esperado, "
-            "la fuente de autogestión indica reiniciar el computador.\n\n"
+            "El modelo de lenguaje respondió sin contenido útil para esta consulta. "
+            "Sin embargo, sí se recuperaron fuentes documentales relacionadas. "
+            "Revisa las fuentes listadas y valida el caso con documentación adicional o con el siguiente nivel de soporte si el impacto lo requiere.\n\n"
             "Fuente(s):\n"
             f"{build_source_block(real_source_labels)}\n\n"
             "Aviso: La generación del modelo fue incompleta, aunque el retrieval documental sí encontró fuentes."
         )
-    
         st.session_state["last_llm_diagnostics"]["malformed_answer_detected"] = True
     else:
         st.session_state["last_llm_diagnostics"]["malformed_answer_detected"] = False
 
     memory.add_turn(user_query, answer)
-
     return answer
     
 # -----------------------------------------------------------------------------
@@ -3316,6 +3199,7 @@ def route_user_message(user_message: str, session_state: ChatSessionState):
     return handle_normal_message(user_message, session_state)
 
 
+
 def get_backend_status():
     status = {
         "vectorstore_ok": False,
@@ -3325,6 +3209,7 @@ def get_backend_status():
         "hf_provider": get_effective_hf_provider(),
         "llm_max_tokens": get_effective_max_tokens(),
         "llm_max_tokens_source": get_effective_max_tokens_source(),
+        "llm_disable_thinking": get_effective_disable_thinking(),
         "error": None,
     }
 
@@ -3349,13 +3234,5 @@ def get_backend_status():
             status["error"] = "HF_TOKEN is missing or HF client could not be initialized."
     except Exception as e:
         status["error"] = f"HF client error: {e}"
-
-    return status
-    try:
-        hf_client = get_hf_client()
-        status["hf_client_ok"] = hf_client is not None
-    except Exception as e:
-        status["error"] = f"HF client error: {e}"
-        return status
 
     return status
