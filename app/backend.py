@@ -387,6 +387,172 @@ def detect_query_entities(user_query: str) -> dict:
         "processes": process_ids,
     }
 
+
+
+# -----------------------------------------------------------------------------
+# Generic entity-aware retrieval helpers
+# -----------------------------------------------------------------------------
+@st.cache_resource
+def get_vectorstore_metadata_value_counts() -> dict[str, dict[str, int]]:
+    """
+    Count stable metadata values already present in Chroma.
+    This lets the retriever apply safe metadata filters only when the requested
+    entity has a real matching product/vendor/component in the vectorstore.
+    """
+    counts: dict[str, dict[str, int]] = {
+        "vendor": defaultdict(int),
+        "product": defaultdict(int),
+        "component": defaultdict(int),
+        "collection_name": defaultdict(int),
+        "folder_origin": defaultdict(int),
+    }
+
+    try:
+        collection = get_vectorstore()._collection
+        data = collection.get(include=["metadatas"], limit=20000)
+        for metadata in data.get("metadatas", []) or []:
+            metadata = metadata or {}
+            for field in counts:
+                value = metadata.get(field)
+                if value is not None and str(value).strip():
+                    counts[field][str(value).lower()] += 1
+    except Exception:
+        pass
+
+    return {field: dict(values) for field, values in counts.items()}
+
+
+def get_detected_product_entities_with_registry(user_query: str) -> list[tuple[str, dict]]:
+    query_entities = detect_query_entities(user_query)
+    product_ids = query_entities.get("products", []) or []
+    return [
+        (product_id, PRODUCT_ENTITY_REGISTRY[product_id])
+        for product_id in product_ids
+        if product_id in PRODUCT_ENTITY_REGISTRY
+    ]
+
+
+def build_safe_metadata_filter_for_entities(user_query: str):
+    """
+    Build a safe Chroma metadata filter from domain_registry retrieval_hints.
+    This is global: it works for any entity whose metadata is actually present
+    in Chroma, instead of hardcoding per-product rules.
+
+    It intentionally avoids filters for sparse or missing metadata because those
+    caused empty retrieval for some products earlier.
+    """
+    counts = get_vectorstore_metadata_value_counts()
+    product_counts = counts.get("product", {})
+    vendor_counts = counts.get("vendor", {})
+
+    for product_id, registry_item in get_detected_product_entities_with_registry(user_query):
+        hints = registry_item.get("retrieval_hints", {}) or {}
+        product_hint = hints.get("product")
+        vendor_hint = hints.get("vendor")
+        component_hint = hints.get("component")
+
+        if not product_hint:
+            continue
+
+        product_key = str(product_hint).lower()
+        vendor_key = str(vendor_hint).lower() if vendor_hint else None
+
+        # Apply product filter only when the product metadata exists in Chroma.
+        if product_counts.get(product_key, 0) >= 3:
+            filter_kwargs = {"product": product_hint}
+
+            # Add vendor only when that vendor is present; this makes the filter
+            # more precise without risking empty results due to casing/sparsity.
+            if vendor_hint and vendor_counts.get(vendor_key, 0) >= 3:
+                filter_kwargs["vendor"] = str(vendor_hint).lower()
+
+            # Component filters are useful only when the metadata actually exists.
+            if component_hint:
+                component_counts = counts.get("component", {})
+                if component_counts.get(str(component_hint).lower(), 0) >= 3:
+                    filter_kwargs["component"] = component_hint
+
+            return make_chroma_filter(**filter_kwargs)
+
+    return None
+
+
+def get_entity_preferred_terms(user_query: str) -> list[str]:
+    """
+    Return canonical names and aliases for detected entities.
+    Used by retrieval profile and reranking across all products/domains.
+    """
+    terms: list[str] = []
+    for _, registry_item in get_detected_product_entities_with_registry(user_query):
+        canonical_name = registry_item.get("canonical_name")
+        if canonical_name:
+            terms.append(str(canonical_name).lower())
+        terms.extend(str(alias).lower() for alias in registry_item.get("aliases", []) or [])
+
+        hints = registry_item.get("retrieval_hints", {}) or {}
+        for value in hints.values():
+            if value:
+                terms.append(str(value).lower())
+
+    # Stable de-duplication preserving order.
+    seen = set()
+    unique_terms = []
+    for term in terms:
+        term = term.strip()
+        if term and term not in seen:
+            seen.add(term)
+            unique_terms.append(term)
+    return unique_terms
+
+
+def compute_generic_entity_alignment_score(user_query: str, metadata: dict, content: str) -> float:
+    """
+    Generic entity-aware reranking boost used for all registered products.
+    It rewards exact product metadata matches and title/source/alias matches.
+    """
+    score = 0.0
+    metadata = metadata or {}
+    content = (content or "").lower()
+
+    title = str(metadata.get("title", "")).lower()
+    source = str(metadata.get("source", "")).lower()
+    vendor = str(metadata.get("vendor", "")).lower()
+    product = str(metadata.get("product", "")).lower()
+    component = str(metadata.get("component", "")).lower()
+    collection_name = str(metadata.get("collection_name", "")).lower()
+    folder_origin = str(metadata.get("folder_origin", "")).lower()
+    title_source = " ".join([title, source, vendor, product, component, collection_name, folder_origin])
+
+    for product_id, registry_item in get_detected_product_entities_with_registry(user_query):
+        hints = registry_item.get("retrieval_hints", {}) or {}
+        hint_product = str(hints.get("product", "")).lower()
+        hint_vendor = str(hints.get("vendor", "")).lower()
+        hint_component = str(hints.get("component", "")).lower()
+        aliases = [str(a).lower() for a in registry_item.get("aliases", []) or []]
+        canonical = str(registry_item.get("canonical_name", "")).lower()
+        terms = [canonical] + aliases + [hint_product, hint_component]
+        terms = [t for t in terms if t]
+
+        if hint_product and product == hint_product:
+            score += 8.0
+        if hint_vendor and vendor == hint_vendor:
+            score += 1.0
+        if hint_component and component == hint_component:
+            score += 2.5
+
+        if any(term in title_source for term in terms):
+            score += 4.0
+        if any(term in content[:1800] for term in terms):
+            score += 1.5
+
+        # Penalize documents from a different stable product when the query has
+        # a clearly detected product and the document does not mention that entity.
+        if hint_product and product and product != hint_product:
+            if not any(term in title_source or term in content[:1800] for term in terms):
+                score -= 4.0
+
+    return score
+
 def detect_query_profile(query: str):
     """
     Build a retrieval profile using query intent and lightweight hints.
@@ -449,6 +615,16 @@ def detect_query_profile(query: str):
             "escalar", "escalamiento", "nivel 2", "nivel 3",
             "incidente", "ticket", "caso", "proveedor", "fabricante",
         ])
+
+    entity_terms = get_entity_preferred_terms(query)
+    if entity_terms:
+        profile["preferred_terms"].extend(entity_terms)
+
+    safe_filter = build_safe_metadata_filter_for_entities(query)
+    if safe_filter is not None:
+        profile["filter"] = safe_filter
+        profile["k_initial"] = max(profile.get("k_initial", 12), 18)
+        profile["k_final"] = max(profile.get("k_final", 4), 4)
 
     return profile
     
@@ -611,6 +787,7 @@ def compute_rerank_score(query: str, doc, query_intent: str | None = None) -> fl
     title_source = f"{title} {source} {vendor} {product} {component} {document_family}"
 
     score = 0.0
+    score += compute_generic_entity_alignment_score(query, metadata, content)
 
     # Priority should help, but not dominate semantic relevance.
     try:
@@ -1298,11 +1475,9 @@ def is_explicit_follow_up_query(user_query: str) -> bool:
 def should_use_memory_for_query(user_query: str, query_intent: str) -> bool:
     if is_explicit_follow_up_query(user_query):
         return True
-
-    if query_intent == "escalation":
-        return True
-
-    return False
+    if query_intent in {"conceptual", "requirements"}:
+        return False
+    return True
 
 
 def is_low_risk_general_query(user_query: str) -> bool:
@@ -2677,7 +2852,6 @@ def generate_answer_with_rag(user_query: str, memory):
     hard_anchor = has_hard_documentary_anchor(user_query, retrieved_docs, query_intent)
     strong_entity_match = has_strong_entity_document_match(user_query, retrieved_docs)
 
-    # Requirements: use normal RAG if there is real support.
     if query_intent == "requirements":
         if (
             support_info["support_level"] in {"weak", "none"}
@@ -2691,7 +2865,6 @@ def generate_answer_with_rag(user_query: str, memory):
             memory.add_turn(user_query, answer)
             return answer
 
-    # Procedural / troubleshooting: fail closed only when support is weak/none.
     if query_intent in {"procedural", "troubleshooting"}:
         if (
             support_info["support_level"] in {"weak", "none"}
@@ -2705,7 +2878,6 @@ def generate_answer_with_rag(user_query: str, memory):
             memory.add_turn(user_query, answer)
             return answer
 
-    # Generic weak support rule, but allow cases where entity-document alignment is strong.
     if (
         support_info["support_level"] in {"weak", "none"}
         and query_intent not in {"conceptual", "requirements"}
@@ -2790,77 +2962,6 @@ def generate_answer_with_rag(user_query: str, memory):
 # -----------------------------------------------------------------------------
 # Debug helpers
 # -----------------------------------------------------------------------------
-def debug_metadata_search(term: str, limit: int = 30) -> dict[str, Any]:
-    """
-    Search vectorstore metadata and document previews without calling the LLM.
-    Useful to verify whether a product/process exists in Chroma.
-    """
-    vectorstore = get_vectorstore()
-    collection = vectorstore._collection
-
-    term_lower = term.lower()
-
-    try:
-        data = collection.get(
-            include=["metadatas", "documents"],
-            limit=10000,
-        )
-    except Exception as e:
-        return {
-            "term": term,
-            "error": str(e),
-            "matches": [],
-        }
-
-    metadatas = data.get("metadatas", []) or []
-    documents = data.get("documents", []) or []
-    ids = data.get("ids", []) or []
-
-    matches = []
-
-    for idx, metadata in enumerate(metadatas):
-        metadata = metadata or {}
-        doc_text = documents[idx] if idx < len(documents) else ""
-        item_id = ids[idx] if idx < len(ids) else None
-
-        searchable = " ".join([
-            str(metadata.get("title", "")),
-            str(metadata.get("source", "")),
-            str(metadata.get("canonical_url", "")),
-            str(metadata.get("product", "")),
-            str(metadata.get("vendor", "")),
-            str(metadata.get("component", "")),
-            str(metadata.get("document_family", "")),
-            str(metadata.get("collection_name", "")),
-            str(metadata.get("folder_origin", "")),
-            str(doc_text[:800]),
-        ]).lower()
-
-        if term_lower in searchable:
-            matches.append({
-                "id": item_id,
-                "title": metadata.get("title"),
-                "source": metadata.get("source"),
-                "vendor": metadata.get("vendor"),
-                "product": metadata.get("product"),
-                "component": metadata.get("component"),
-                "document_family": metadata.get("document_family"),
-                "collection_name": metadata.get("collection_name"),
-                "folder_origin": metadata.get("folder_origin"),
-                "page": metadata.get("page"),
-                "page_label": metadata.get("page_label"),
-                "preview": doc_text[:350],
-            })
-
-        if len(matches) >= limit:
-            break
-
-    return {
-        "term": term,
-        "match_count_returned": len(matches),
-        "matches": matches,
-    }
-
 def debug_query_diagnostics(user_query: str) -> dict[str, Any]:
     retrieved_context, retrieved_docs = retrieve_context(
         user_query,
@@ -2869,6 +2970,7 @@ def debug_query_diagnostics(user_query: str) -> dict[str, Any]:
 
     support_info = assess_retrieval_support(user_query, retrieved_docs)
     query_intent = classify_query_intent(user_query)
+    query_profile = detect_query_profile(user_query)
     hard_anchor = has_hard_documentary_anchor(
         user_query,
         retrieved_docs,
@@ -2899,6 +3001,7 @@ def debug_query_diagnostics(user_query: str) -> dict[str, Any]:
     return {
         "query": user_query,
         "query_intent": query_intent,
+        "query_profile": query_profile,
         "support_info": support_info,
         "hard_anchor": hard_anchor,
         "real_source_labels": real_source_labels,
