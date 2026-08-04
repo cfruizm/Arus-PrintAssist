@@ -757,80 +757,165 @@ def is_tangential_source_for_query(query: str, doc) -> bool:
 
     This is product-agnostic. It prevents the model from using procedures
     from adjacent but different processes, such as PIN, warranty, installation,
-    maintenance or portals, when the query is about troubleshooting.
+    maintenance, billing, brochures or portals, when the query is about a
+    different support need.
     """
     text = query.lower()
-    content = doc.page_content.lower()
     metadata = doc.metadata or {}
 
+    content = str(doc.page_content or "").lower()
     title = str(metadata.get("title", "")).lower()
     source = str(metadata.get("source", "")).lower()
     document_family = str(metadata.get("document_family", "")).lower()
     component = str(metadata.get("component", "")).lower()
-
-    source_text = f"{title} {source} {document_family} {component} {content[:1200]}"
+    product = str(metadata.get("product", "")).lower()
 
     query_intent = classify_query_intent(query)
 
-    tangential_process_terms = [
-        "pin",
-        "autogestion",
-        "autogestión",
-        "portal",
-        "credenciales",
-        "garantía",
-        "garantia",
-        "warranty",
-        "mantenimiento preventivo",
-        "facturación",
-        "facturacion",
-        "instalación",
-        "instalacion",
-        "brochure",
-    ]
+    # Use title/source/metadata as stronger signal of what the document is about.
+    # Content can contain incidental mentions, so title/source are more important.
+    source_identity = f"{title} {source} {document_family} {component} {product}"
+    source_head = f"{source_identity} {content[:800]}"
 
-    symptom_terms = [
-        "error",
-        "falla",
-        "no imprime",
-        "cola",
-        "bloqueada",
-        "atascada",
-        "desaparece",
-        "desaparecen",
-        "trabajos",
-        "offline",
-        "retenidos",
-        "liberar",
-    ]
+    def query_has_any(terms: list[str]) -> bool:
+        return any(term in text for term in terms)
 
-    # For troubleshooting, reject sources centered on unrelated processes
-    # unless they also mention the symptom/problem terms.
+    def source_identity_has_any(terms: list[str]) -> bool:
+        return any(term in source_identity for term in terms)
+
+    def source_has_any(terms: list[str]) -> bool:
+        return any(term in source_head for term in terms)
+
+    process_categories = {
+        "pin_autogestion": [
+            "pin",
+            "autogestion",
+            "autogestión",
+            "credencial",
+            "credenciales",
+            "portal",
+            "papercut hive",
+            "hive",
+        ],
+        "warranty": [
+            "garantía",
+            "garantia",
+            "garantías",
+            "garantias",
+            "warranty",
+            "rma",
+            "reemplazo",
+        ],
+        "installation": [
+            "instalar",
+            "instalación",
+            "instalacion",
+            "incorporar",
+            "enrolar",
+            "enroll",
+            "setup",
+            "configurar",
+        ],
+        "maintenance": [
+            "mantenimiento",
+            "preventivo",
+            "limpiar cabezal",
+            "cabezal",
+            "limpieza",
+        ],
+        "billing": [
+            "facturación",
+            "facturacion",
+            "cobro",
+            "tarifa",
+            "valorización",
+            "valorizacion",
+        ],
+        "brochure": [
+            "brochure",
+            "folleto",
+            "comercial",
+        ],
+    }
+
+    # -------------------------------------------------------------------------
+    # Troubleshooting
+    # -------------------------------------------------------------------------
     if query_intent == "troubleshooting":
-        source_has_tangential_process = any(term in source_text for term in tangential_process_terms)
-        source_has_symptom_alignment = any(term in source_text for term in symptom_terms)
+        for category_name, category_terms in process_categories.items():
+            query_is_about_category = query_has_any(category_terms)
 
-        if source_has_tangential_process and not source_has_symptom_alignment:
-            return True
+            # Strong tangential signal: the document title/source/metadata is centered
+            # on a different process that the user did not ask about.
+            source_is_centered_on_category = source_identity_has_any(category_terms)
 
-        # If the query is about a specific symptom and the source is mostly about PIN/autogestion,
-        # reject unless the source also directly discusses that symptom.
-        if any(term in text for term in ["desaparece", "desaparecen", "trabajos"]) and any(
-            term in source_text for term in ["pin", "autogestion", "autogestión"]
-        ):
-            if not any(term in source_text for term in ["trabajos", "cola", "retenidos", "liberar"]):
+            if source_is_centered_on_category and not query_is_about_category:
                 return True
 
-    # For requirements, reject marketing/general docs when real requirements docs exist.
-    if query_intent == "requirements":
-        if "brochure" in source_text:
+        # Additional guard:
+        # If the query is about jobs/queue/disappearing work, do not use documents
+        # centered on PIN/autogestion/portal unless the user explicitly asks for PIN or portal.
+        job_or_queue_query = query_has_any([
+            "trabajo",
+            "trabajos",
+            "desaparece",
+            "desaparecen",
+            "desaparecido",
+            "cola",
+            "queue",
+            "retenido",
+            "retenidos",
+            "liberar",
+        ])
+
+        pin_or_portal_source = source_identity_has_any(
+            process_categories["pin_autogestion"]
+        )
+
+        pin_or_portal_query = query_has_any(
+            process_categories["pin_autogestion"]
+        )
+
+        if job_or_queue_query and pin_or_portal_source and not pin_or_portal_query:
             return True
 
-    # For warranty, reject non-warranty operational/admin docs.
-    if query_intent == "warranty":
-        warranty_terms = ["garantía", "garantia", "warranty", "suministro", "suministros"]
-        if not any(term in source_text for term in warranty_terms):
+    # -------------------------------------------------------------------------
+    # Requirements
+    # -------------------------------------------------------------------------
+    if query_intent == "requirements":
+        # Reject brochures/general marketing documents for requirements.
+        if source_has_any(process_categories["brochure"]):
             return True
+
+        # Reject warranty/maintenance docs for requirements unless explicitly asked.
+        for category_name in ["warranty", "maintenance", "billing"]:
+            category_terms = process_categories[category_name]
+            if source_identity_has_any(category_terms) and not query_has_any(category_terms):
+                return True
+
+    # -------------------------------------------------------------------------
+    # Warranty
+    # -------------------------------------------------------------------------
+    if query_intent == "warranty":
+        warranty_terms = process_categories["warranty"] + [
+            "suministro",
+            "suministros",
+            "consumible",
+            "consumibles",
+        ]
+
+        if not source_has_any(warranty_terms):
+            return True
+
+    # -------------------------------------------------------------------------
+    # Procedural
+    # -------------------------------------------------------------------------
+    if query_intent == "procedural":
+        # If user asks for a procedure, avoid unrelated warranty/billing/brochure docs.
+        for category_name in ["warranty", "billing", "brochure"]:
+            category_terms = process_categories[category_name]
+            if source_identity_has_any(category_terms) and not query_has_any(category_terms):
+                return True
 
     return False
 
