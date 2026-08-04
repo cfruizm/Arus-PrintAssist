@@ -356,7 +356,8 @@ def compact_page_list(pages: list[int]) -> str:
     return "pages " + ", ".join(str(page) for page in pages)
 
 
-def build_real_source_labels(docs: list) -> listgrouped: dict[tuple[str, str], dict[str, list]] = defaultdict(
+def build_real_source_labels(docs: list) -> list:
+    grouped: dict[tuple[str, str], dict[str, list]] = defaultdict(
         lambda: {"numeric_pages": [], "other_pages": []}
     )
 
