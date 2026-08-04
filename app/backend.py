@@ -1476,6 +1476,16 @@ def classify_query_intent(user_query: str) -> str:
         "cómo crear", "como crear",
         "cómo realizar", "como realizar",
         "procedimiento", "pasos", "trámite", "tramite",
+        "cómo consultar", "como consultar",
+        "consultar y asignar",
+        "consultar pin",
+        "asignar pin",
+        "crear pin",
+        "modificar pin",
+        "actualizar pin",
+        "visualizar pin",
+        "buscar usuario",
+        "gestionar pin",
     ]
 
     conceptual_patterns = [
@@ -1563,14 +1573,18 @@ def is_explicit_follow_up_query(user_query: str) -> bool:
     ]
     return any(p in text for p in follow_up_patterns)
 
-
 def should_use_memory_for_query(user_query: str, query_intent: str) -> bool:
+    """
+    Use conversation memory only for explicit follow-up questions or escalation.
+    This reduces prompt size, cost and cross-topic contamination.
+    """
     if is_explicit_follow_up_query(user_query):
         return True
-    if query_intent in {"conceptual", "requirements"}:
-        return False
-    return True
 
+    if query_intent == "escalation":
+        return True
+
+    return False
 
 def is_low_risk_general_query(user_query: str) -> bool:
     text = user_query.lower()
