@@ -3007,6 +3007,8 @@ def remove_internal_chunk_references(answer: str) -> str:
 def generate_answer_with_rag(user_query: str, memory):
     hf_client = get_hf_client()
 
+    turn_start = time.perf_counter()
+
     if hf_client is None:
         return (
             "No fue posible generar la respuesta porque falta la configuración "
@@ -3035,6 +3037,25 @@ def generate_answer_with_rag(user_query: str, memory):
                 user_query=user_query,
                 real_source_labels=real_source_labels,
             )
+
+            latency_seconds = round(time.perf_counter() - turn_start, 3)
+
+            record = build_turn_observability_record(
+                user_message=user_query,
+                route_type="conservative_no_support",
+                query_intent=query_intent,
+                support_info=support_info,
+                hard_anchor=hard_anchor,
+                strong_entity_match=strong_entity_match,
+                retrieved_docs=retrieved_docs,
+                real_source_labels=real_source_labels,
+                llm_diagnostics=st.session_state.get("last_llm_diagnostics", {}),
+                latency_seconds=latency_seconds,
+                fallback_used=True,
+            )
+            update_last_turn_diagnostics(record)
+            append_turn_observability_record(record)
+
             memory.add_turn(user_query, answer)
             return answer
 
@@ -3048,6 +3069,25 @@ def generate_answer_with_rag(user_query: str, memory):
                 user_query=user_query,
                 real_source_labels=real_source_labels,
             )
+
+            latency_seconds = round(time.perf_counter() - turn_start, 3)
+
+            record = build_turn_observability_record(
+                user_message=user_query,
+                route_type="conservative_no_support",
+                query_intent=query_intent,
+                support_info=support_info,
+                hard_anchor=hard_anchor,
+                strong_entity_match=strong_entity_match,
+                retrieved_docs=retrieved_docs,
+                real_source_labels=real_source_labels,
+                llm_diagnostics=st.session_state.get("last_llm_diagnostics", {}),
+                latency_seconds=latency_seconds,
+                fallback_used=True,
+            )
+            update_last_turn_diagnostics(record)
+            append_turn_observability_record(record)
+            
             memory.add_turn(user_query, answer)
             return answer
 
@@ -3060,6 +3100,25 @@ def generate_answer_with_rag(user_query: str, memory):
             user_query=user_query,
             real_source_labels=real_source_labels,
         )
+
+            latency_seconds = round(time.perf_counter() - turn_start, 3)
+
+            record = build_turn_observability_record(
+                user_message=user_query,
+                route_type="conservative_no_support",
+                query_intent=query_intent,
+                support_info=support_info,
+                hard_anchor=hard_anchor,
+                strong_entity_match=strong_entity_match,
+                retrieved_docs=retrieved_docs,
+                real_source_labels=real_source_labels,
+                llm_diagnostics=st.session_state.get("last_llm_diagnostics", {}),
+                latency_seconds=latency_seconds,
+                fallback_used=True,
+            )
+            update_last_turn_diagnostics(record)
+            append_turn_observability_record(record)
+
         memory.add_turn(user_query, answer)
         return answer
 
@@ -3086,13 +3145,70 @@ def generate_answer_with_rag(user_query: str, memory):
         )
     except BadRequestError as e:
         update_last_llm_diagnostics(llm_call_ok=False, error=e)
-        return build_llm_unavailable_answer(e)
+        latency_seconds = round(time.perf_counter() - turn_start, 3)
+        answer = build_llm_unavailable_answer(e)
+        record = build_turn_observability_record(
+            user_message=user_query,
+            route_type="llm_error",
+            query_intent=query_intent,
+            support_info=support_info,
+            hard_anchor=hard_anchor,
+            strong_entity_match=strong_entity_match,
+            retrieved_docs=retrieved_docs,
+            real_source_labels=real_source_labels,
+            llm_diagnostics=st.session_state.get("last_llm_diagnostics", {}),
+            latency_seconds=latency_seconds,
+            fallback_used=True,
+            error=str(e),
+        )
+        update_last_turn_diagnostics(record)
+        append_turn_observability_record(record)
+    
+        return answer
+        
     except HfHubHTTPError as e:
         update_last_llm_diagnostics(llm_call_ok=False, error=e)
-        return build_llm_unavailable_answer(e)
+        latency_seconds = round(time.perf_counter() - turn_start, 3)
+        answer = build_llm_unavailable_answer(e)
+        record = build_turn_observability_record(
+            user_message=user_query,
+            route_type="llm_error",
+            query_intent=query_intent,
+            support_info=support_info,
+            hard_anchor=hard_anchor,
+            strong_entity_match=strong_entity_match,
+            retrieved_docs=retrieved_docs,
+            real_source_labels=real_source_labels,
+            llm_diagnostics=st.session_state.get("last_llm_diagnostics", {}),
+            latency_seconds=latency_seconds,
+            fallback_used=True,
+            error=str(e),
+        )
+        update_last_turn_diagnostics(record)
+        append_turn_observability_record(record)
+        return answer
+        
     except Exception as e:
         update_last_llm_diagnostics(llm_call_ok=False, error=e)
-        return build_llm_unavailable_answer(e)
+        latency_seconds = round(time.perf_counter() - turn_start, 3)
+        answer = build_llm_unavailable_answer(e)
+        record = build_turn_observability_record(
+            user_message=user_query,
+            route_type="llm_error",
+            query_intent=query_intent,
+            support_info=support_info,
+            hard_anchor=hard_anchor,
+            strong_entity_match=strong_entity_match,
+            retrieved_docs=retrieved_docs,
+            real_source_labels=real_source_labels,
+            llm_diagnostics=st.session_state.get("last_llm_diagnostics", {}),
+            latency_seconds=latency_seconds,
+            fallback_used=True,
+            error=str(e),
+        )
+        update_last_turn_diagnostics(record)
+        append_turn_observability_record(record)
+        return answer
 
     raw_response_debug = serialize_llm_response_for_debug(response)
     answer = extract_llm_answer_text(response)
@@ -3129,6 +3245,26 @@ def generate_answer_with_rag(user_query: str, memory):
     else:
         st.session_state["last_llm_diagnostics"]["malformed_answer_detected"] = False
 
+    latency_seconds = round(time.perf_counter() - turn_start, 3)
+
+    record = build_turn_observability_record(
+        user_message=user_query,
+        route_type="rag_answer",
+        query_intent=query_intent,
+        support_info=support_info,
+        hard_anchor=hard_anchor,
+        strong_entity_match=strong_entity_match,
+        retrieved_docs=retrieved_docs,
+        real_source_labels=real_source_labels,
+        llm_diagnostics=st.session_state.get("last_llm_diagnostics", {}),
+        latency_seconds=latency_seconds,
+        fallback_used=st.session_state.get(
+            "last_llm_diagnostics", {}
+        ).get("malformed_answer_detected", False),
+    )
+    update_last_turn_diagnostics(record)
+    append_turn_observability_record(record)
+    
     memory.add_turn(user_query, answer)
     return answer
     
@@ -3472,12 +3608,124 @@ def process_escalation_turn(user_message: str, state: IncidentState, session_sta
     }
 
 
+def get_llm_usage_estimated_cost(usage_info) -> float | None:
+    """
+    Extract estimated_cost from provider usage when available.
+    """
+    if not usage_info:
+        return None
+
+    if isinstance(usage_info, dict):
+        value = usage_info.get("estimated_cost")
+        try:
+            return float(value) if value is not None else None
+        except Exception:
+            return None
+
+    return None
+
+
+def build_turn_observability_record(
+    user_message: str,
+    route_type: str,
+    query_intent: str | None = None,
+    support_info: dict | None = None,
+    hard_anchor: bool | None = None,
+    strong_entity_match: bool | None = None,
+    retrieved_docs: list | None = None,
+    real_source_labels: list[str] | None = None,
+    llm_diagnostics: dict | None = None,
+    latency_seconds: float | None = None,
+    fallback_used: bool = False,
+    error: str | None = None,
+) -> dict:
+    """
+    Build a compact observability record for debugging, cost tracking,
+    future model comparison and hardware sizing.
+    """
+    support_info = support_info or {}
+    retrieved_docs = retrieved_docs or []
+    real_source_labels = real_source_labels or []
+    llm_diagnostics = llm_diagnostics or {}
+
+    usage = llm_diagnostics.get("usage")
+    estimated_cost = get_llm_usage_estimated_cost(usage)
+
+    sources_summary = []
+    for doc in retrieved_docs[:6]:
+        metadata = doc.metadata or {}
+        sources_summary.append(
+            {
+                "title": metadata.get("title"),
+                "source": metadata.get("source"),
+                "vendor": metadata.get("vendor"),
+                "product": metadata.get("product"),
+                "component": metadata.get("component"),
+                "document_family": metadata.get("document_family"),
+                "page": metadata.get("page"),
+                "page_label": metadata.get("page_label"),
+            }
+        )
+
+    return {
+        "timestamp": datetime.now().isoformat(),
+        "route_type": route_type,
+        "user_message": user_message,
+        "query_intent": query_intent,
+        "support_level": support_info.get("support_level"),
+        "support_top_score": support_info.get("top_score"),
+        "support_avg_overlap": support_info.get("avg_overlap"),
+        "hard_anchor": hard_anchor,
+        "strong_entity_match": strong_entity_match,
+        "retrieved_count": len(retrieved_docs),
+        "real_source_labels": real_source_labels,
+        "retrieved_sources_summary": sources_summary,
+        "llm": {
+            "llm_call_ok": llm_diagnostics.get("llm_call_ok"),
+            "model": llm_diagnostics.get("model"),
+            "provider": llm_diagnostics.get("provider"),
+            "temperature": llm_diagnostics.get("temperature"),
+            "max_tokens": llm_diagnostics.get("max_tokens"),
+            "max_tokens_source": llm_diagnostics.get("max_tokens_source"),
+            "disable_thinking": llm_diagnostics.get("disable_thinking"),
+            "finish_reason": llm_diagnostics.get("finish_reason"),
+            "usage": usage,
+            "estimated_cost": estimated_cost,
+            "error": llm_diagnostics.get("error"),
+        },
+        "latency_seconds": latency_seconds,
+        "fallback_used": fallback_used,
+        "error": error,
+    }
+
+
+def update_last_turn_diagnostics(record: dict):
+    """
+    Store last turn diagnostics in Streamlit session state for sidebar/debug UI.
+    """
+    st.session_state["last_turn_diagnostics"] = record
+
+
+def append_turn_observability_record(record: dict):
+    """
+    Append observability record to JSONL file.
+    Safe for prototype use. If persistence fails, do not break the app.
+    """
+    try:
+        RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
+        with open(TURN_OBSERVABILITY_FILE, "a", encoding="utf-8") as f:
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
+
 # -----------------------------------------------------------------------------
 # Logging / persistence
 # -----------------------------------------------------------------------------
 LOGS_FILE = RUNTIME_DIR / "conversation_logs.json"
 INCIDENTS_FILE = RUNTIME_DIR / "incident_summaries.json"
 
+TURN_OBSERVABILITY_FILE = RUNTIME_DIR / "turn_observability.jsonl"
 
 def append_json_record(file_path: Path, record: dict):
     if file_path.exists():
