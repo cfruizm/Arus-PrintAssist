@@ -1298,9 +1298,11 @@ def is_explicit_follow_up_query(user_query: str) -> bool:
 def should_use_memory_for_query(user_query: str, query_intent: str) -> bool:
     if is_explicit_follow_up_query(user_query):
         return True
-    if query_intent in {"conceptual", "requirements"}:
-        return False
-    return True
+
+    if query_intent == "escalation":
+        return True
+
+    return False
 
 
 def is_low_risk_general_query(user_query: str) -> bool:
@@ -2788,6 +2790,77 @@ def generate_answer_with_rag(user_query: str, memory):
 # -----------------------------------------------------------------------------
 # Debug helpers
 # -----------------------------------------------------------------------------
+def debug_metadata_search(term: str, limit: int = 30) -> dict[str, Any]:
+    """
+    Search vectorstore metadata and document previews without calling the LLM.
+    Useful to verify whether a product/process exists in Chroma.
+    """
+    vectorstore = get_vectorstore()
+    collection = vectorstore._collection
+
+    term_lower = term.lower()
+
+    try:
+        data = collection.get(
+            include=["metadatas", "documents"],
+            limit=10000,
+        )
+    except Exception as e:
+        return {
+            "term": term,
+            "error": str(e),
+            "matches": [],
+        }
+
+    metadatas = data.get("metadatas", []) or []
+    documents = data.get("documents", []) or []
+    ids = data.get("ids", []) or []
+
+    matches = []
+
+    for idx, metadata in enumerate(metadatas):
+        metadata = metadata or {}
+        doc[, metadata in enumerate(metadatasn(documents) else ""
+        item_id = ids[idx] if idx < len(ids) else None
+
+        searchable = " ".join([
+            str(metadata.get("title", "")),
+            str(metadata.get("source", "")),
+            str(metadata.get("canonical_url", "")),
+            str(metadata.get("product", "")),
+            str(metadata.get("vendor", "")),
+            str(metadata.get("component", "")),
+            str(metadata.get("document_family", "")),
+            str(metadata.get("collection_name", "")),
+            str(metadata.get("folder_origin", "")),
+            str(doc_text[:800]),
+        ]).lower()
+
+        if term_lower in searchable:
+            matches.append({
+                "id": item_id,
+                "title": metadata.get("title"),
+                "source": metadata.get("source"),
+                "vendor": metadata.get("vendor"),
+                "product": metadata.get("product"),
+                "component": metadata.get("component"),
+                "document_family": metadata.get("document_family"),
+                "collection_name": metadata.get("collection_name"),
+                "folder_origin": metadata.get("folder_origin"),
+                "page": metadata.get("page"),
+                "page_label": metadata.get("page_label"),
+                "preview": doc_text[:350],
+            })
+
+        if len(matches) >= limit:
+            break
+
+    return {
+        "term": term,
+        "match_count_returned": len(matches),
+        "matches": matches,
+    }
+
 def debug_query_diagnostics(user_query: str) -> dict[str, Any]:
     retrieved_context, retrieved_docs = retrieve_context(
         user_query,
