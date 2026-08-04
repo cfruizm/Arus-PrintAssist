@@ -39,12 +39,14 @@ try:
         backend_is_ready,
         get_backend_status,
         debug_query_diagnostics,
+        summarize_turn_observability,
     )
 
     try:
         from app.backend import debug_metadata_search
     except Exception:
         debug_metadata_search = None
+        summarize_turn_observability = None
 
 except Exception as e:
     BACKEND_IMPORT_ERROR = e
@@ -218,6 +220,13 @@ with st.sidebar:
             if "last_turn_diagnostics" in st.session_state:
                 with st.expander("Último turno observado", expanded=False):
                     st.json(st.session_state["last_turn_diagnostics"])
+
+            if summarize_turn_observability is not None:
+                if st.button("Ver resumen de observabilidad"):
+                    try:
+                        st.json(summarize_turn_observability())
+                    except Exception as e:
+                        st.error(f"No fue posible calcular el resumen de observabilidad: {e}")
 
             if "last_llm_diagnostics" in st.session_state:
                 with st.expander("Última llamada LLM", expanded=False):
