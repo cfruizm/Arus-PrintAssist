@@ -329,35 +329,82 @@ def format_source_label(metadata: dict) -> str:
         return f"{title} | {source_name}" if title else source_name
     return f"{title} | {source_name} | page {page}" if title else f"{source_name} | page {page}"
 
+def compact_page_list(pages: list[int]) -> str:
+    """
+    Format page labels without implying a continuous range when pages are sparse.
+    Examples:
+    - [1] -> "page 1"
+    - [1, 2, 3] -> "pages 1–3"
+    - [1, 36, 246, 298] -> "pages 1, 36, 246, 298"
+    """
+    pages = sorted(set(pages))
 
-def build_real_source_labels(docs: list) -> list[str]:
-    grouped: dict[tuple[str, str], list[int]] = defaultdict(list)
+    if not pages:
+        return ""
+
+    if len(pages) == 1:
+        return f"page {pages[0]}"
+
+    is_contiguous = all(
+        pages[i] + 1 == pages[i + 1]
+        for i in range(len(pages) - 1)
+    )
+
+    if is_contiguous:
+        return f"pages {pages[0]}–{pages[-1]}"
+
+    return "pages " + ", ".join(str(page) for page in pages)
+
+
+def build_real_source_labels(docs: list) -> listgrouped: dict[tuple[str, str], dict[str, list]] = defaultdict(
+        lambda: {"numeric_pages": [], "other_pages": []}
+    )
 
     for doc in docs:
-        md = doc.metadata
+        md = doc.metadata or {}
+
         title = md.get("title", "")
         source = md.get("source", "unknown_source")
         source_name = Path(str(source)).name if "/" in str(source) else str(source)
+
         page = md.get("page_label", md.get("page", None))
         key = (title, source_name)
+
         if page is not None:
             try:
-                grouped[key].append(int(str(page)))
+                grouped[key]["numeric_pages"].append(int(str(page)))
             except Exception:
-                grouped[key]
-        else:
-            grouped[key]
+                grouped[key]["other_pages"].append(str(page))
 
     labels = []
-    for (title, source_name), pages in grouped.items():
-        pages = sorted(set(pages))
-        if pages:
-            page_text = f"page {pages[0]}" if len(pages) == 1 else f"pages {pages[0]}–{pages[-1]}"
-            labels.append(f"{title} | {source_name} | {page_text}" if title else f"{source_name} | {page_text}")
-        else:
-            labels.append(f"{title} | {source_name}" if title else source_name)
-    return labels
 
+    for (title, source_name), page_data in grouped.items():
+        numeric_pages = page_data["numeric_pages"]
+        other_pages = sorted(set(page_data["other_pages"]))
+
+        page_parts = []
+
+        if numeric_pages:
+            page_parts.append(compact_page_list(numeric_pages))
+
+        if other_pages:
+            page_parts.append("pages " + ", ".join(other_pages))
+
+        if page_parts:
+            page_text = "; ".join(page_parts)
+            labels.append(
+                f"{title} | {source_name} | {page_text}"
+                if title
+                else f"{source_name} | {page_text}"
+            )
+        else:
+            labels.append(
+                f"{title} | {source_name}"
+                if title
+                else source_name
+            )
+
+    return labels
 
 def build_source_block(real_source_labels: list[str]) -> str:
     if not real_source_labels:
@@ -788,6 +835,50 @@ def compute_rerank_score(query: str, doc, query_intent: str | None = None) -> fl
 
     score = 0.0
     score += compute_generic_entity_alignment_score(query, metadata, content)
+
+        # Global conceptual-query boost.
+        # For "qué es / what is" style questions, prefer introduction, overview,
+        # definition and purpose chunks over admin/detail-only chunks.
+        if query_intent == "conceptual":
+            conceptual_overview_terms = [
+                "introduction",
+                "introducción",
+                "introduccion",
+                "overview",
+                "descripción general",
+                "descripcion general",
+                "definition",
+                "definición",
+                "definicion",
+                "purpose",
+                "propósito",
+                "proposito",
+                "what is",
+                "qué es",
+                "que es",
+                "solution",
+                "solución",
+                "solucion",
+                "allows an organization",
+                "permite",
+                "componentes",
+                "components",
+            ]
+    
+            if any(term in content[:1600] for term in conceptual_overview_terms):
+                score += 3.5
+    
+            # Prefer early meaningful intro pages over deep admin/reference pages.
+            try:
+                page_number = int(str(metadata.get("page", 999)))
+            except Exception:
+                page_number = 999
+    
+            if page_number <= 30 and any(
+                term in content[:1600]
+                for term in conceptual_overview_terms
+            ):
+                score += 1.5
 
     # Priority should help, but not dominate semantic relevance.
     try:
