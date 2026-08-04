@@ -3101,23 +3101,23 @@ def generate_answer_with_rag(user_query: str, memory):
             real_source_labels=real_source_labels,
         )
 
-            latency_seconds = round(time.perf_counter() - turn_start, 3)
+        latency_seconds = round(time.perf_counter() - turn_start, 3)
 
-            record = build_turn_observability_record(
-                user_message=user_query,
-                route_type="conservative_no_support",
-                query_intent=query_intent,
-                support_info=support_info,
-                hard_anchor=hard_anchor,
-                strong_entity_match=strong_entity_match,
-                retrieved_docs=retrieved_docs,
-                real_source_labels=real_source_labels,
-                llm_diagnostics=st.session_state.get("last_llm_diagnostics", {}),
-                latency_seconds=latency_seconds,
-                fallback_used=True,
-            )
-            update_last_turn_diagnostics(record)
-            append_turn_observability_record(record)
+        record = build_turn_observability_record(
+            user_message=user_query,
+            route_type="conservative_no_support",
+            query_intent=query_intent,
+            support_info=support_info,
+            hard_anchor=hard_anchor,
+            strong_entity_match=strong_entity_match,
+            retrieved_docs=retrieved_docs,
+            real_source_labels=real_source_labels,
+            llm_diagnostics=st.session_state.get("last_llm_diagnostics", {}),
+            latency_seconds=latency_seconds,
+            fallback_used=True,
+        )
+        update_last_turn_diagnostics(record)
+        append_turn_observability_record(record)
 
         memory.add_turn(user_query, answer)
         return answer
