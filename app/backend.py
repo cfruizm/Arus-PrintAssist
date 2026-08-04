@@ -2820,7 +2820,7 @@ def debug_metadata_search(term: str, limit: int = 30) -> dict[str, Any]:
 
     for idx, metadata in enumerate(metadatas):
         metadata = metadata or {}
-        doc[, metadata in enumerate(metadatasn(documents) else ""
+        doc_text = documents[idx] if idx < len(documents) else ""
         item_id = ids[idx] if idx < len(ids) else None
 
         searchable = " ".join([
