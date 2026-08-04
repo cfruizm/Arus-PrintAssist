@@ -1705,25 +1705,29 @@ Reglas obligatorias:
     #### POLÍTICA PARA GARANTÍAS
     
     Objetivo:
-    Orientar trámites de garantía sin inventar SLA, proveedores, causales ni RMA.
+    Orientar trámites de garantía sin inventar SLA, proveedores, causales, RMA ni responsables no documentados.
     
-    La sección Respuesta debe usar esta estructura:
+    La sección Respuesta debe usar exactamente esta estructura:
     
     ### Alcance del trámite
     Explica qué cubre el documento o proceso recuperado.
     
     ### Información requerida
     Lista datos, evidencias o condiciones solicitadas por las fuentes.
+    Si la documentación no especifica datos requeridos, indícalo claramente.
     
     ### Pasos documentados
-    Lista pasos presentes en la documentación, sin completarlos con supuestos.
+    Lista únicamente los pasos presentes en la documentación.
+    No completes pasos faltantes con supuestos.
     
     ### Cuándo validar o escalar
     Indica cuándo validar con proveedor, responsable interno o nivel superior si la fuente no define el flujo completo.
     
     Restricciones:
-    - No mezcles mantenimiento preventivo, configuración o administración de impresión con garantía, salvo que la fuente lo conecte explícitamente.
-    - No inventes tiempos de atención, causales, formatos o responsables.
+    - No uses el formato de troubleshooting para consultas de garantía.
+    - No uses los encabezados "Diagnóstico documental", "Validaciones iniciales", "Acciones recomendadas" ni "Cuándo escalar", salvo que el usuario haya planteado explícitamente un incidente de troubleshooting.
+    - No mezcles mantenimiento preventivo, configuración, operación de impresión o troubleshooting con garantía, salvo que la fuente lo conecte explícitamente.
+    - No inventes tiempos de atención, causales, formatos, SLA, RMA ni responsables.
     """
 
     if query_intent == "escalation":
@@ -1874,6 +1878,9 @@ def build_rag_messages(
 ### PREGUNTA DEL USUARIO
 {user_query}
 
+#### INTENCIÓN DETECTADA
+{query_intent}
+
 ### NIVEL DE SOPORTE DOCUMENTAL
 {support_level}
 
@@ -1885,13 +1892,18 @@ def build_rag_messages(
 
 #### FORMATO DE RESPUESTA OBLIGATORIO
 
-Debes responder siempre con estas dos secciones, en este orden:
+Debes responder siempre con estas dos secciones principales, en este orden:
 
 Respuesta:
-- Escribe una respuesta técnica clara, útil y trazable.
-- No omitas esta sección.
-- No respondas únicamente con fuentes.
-- Si la información documental es limitada, explica qué sí se puede validar con las fuentes disponibles y qué no se puede concluir.
+- Usa encabezados Markdown con "###".
+- No uses los encabezados como bullets.
+- No escribas encabezados en la misma línea del contenido.
+- Cada encabezado debe tener su propio párrafo.
+- Usa únicamente el formato indicado por la política de intención.
+- No mezcles formatos entre intenciones. Por ejemplo:
+  - Si la intención es warranty, no uses "Diagnóstico documental" salvo que la política de warranty lo indique.
+  - Si la intención es requirements, no uses pasos de instalación.
+  - Si la intención es troubleshooting, no uses formato de garantía o requisitos.
 - No agregues causas, validaciones ni acciones que no estén soportadas por la información documental disponible.
 - Si una recomendación no está explícitamente documentada, no la incluyas.
 
@@ -2599,9 +2611,14 @@ def generate_answer_with_rag(user_query: str, memory):
             return answer
 
     # Procedural / troubleshooting:
-    # remain conservative only if there is neither hard anchor nor strong entity-document match.
+    # fail closed only when support is weak/none AND there is no documentary anchor.
+    # If support is partial or strong, allow the LLM to answer with caution.
     if query_intent in {"procedural", "troubleshooting"}:
-        if not hard_anchor and not strong_entity_match:
+        if (
+            support_info["support_level"] in {"weak", "none"}
+            and not hard_anchor
+            and not strong_entity_match
+        ):
             answer = build_conservative_no_support_answer(
                 user_query=user_query,
                 real_source_labels=real_source_labels,
