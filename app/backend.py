@@ -1797,6 +1797,127 @@ Reglas obligatorias:
     - Recomendar validación o escalamiento cuando la documentación no sea suficiente.
     """
 
+def build_response_format_contract(query_intent: str) -> str:
+    """
+    Defines the exact visible response structure expected for each query intent.
+    This is product-agnostic and should apply across all supported domains.
+    """
+
+    if query_intent == "troubleshooting":
+        return """
+#### CONTRATO DE FORMATO PARA TROUBLESHOOTING
+
+La sección Respuesta debe usar exactamente estos encabezados Markdown:
+
+### Diagnóstico documental
+Explica qué permite concluir la documentación y qué no permite concluir.
+
+### Validaciones iniciales
+Lista solo validaciones soportadas por la documentación recuperada.
+
+### Acciones recomendadas
+Lista acciones N1 soportadas por las fuentes. Si no hay procedimiento documentado, dilo claramente.
+
+### Cuándo escalar
+Indica cuándo escalar y qué evidencia recopilar.
+
+No uses referencias internas como [Chunk 1], [Chunk 2] o similares.
+"""
+
+    if query_intent == "requirements":
+        return """
+#### CONTRATO DE FORMATO PARA REQUERIMIENTOS
+
+La sección Respuesta debe usar únicamente las categorías que estén documentadas:
+
+### Prerrequisitos del entorno
+### Sistemas operativos compatibles
+### Plataformas de virtualización compatibles
+### Requisitos mínimos de hardware
+### Requisitos de red / seguridad
+### Límites o notas
+
+No conviertas la respuesta en pasos de instalación.
+No uses referencias internas como [Chunk 1], [Chunk 2] o similares.
+"""
+
+    if query_intent == "warranty":
+        return """
+#### CONTRATO DE FORMATO PARA GARANTÍAS
+
+La sección Respuesta debe usar exactamente estos encabezados Markdown:
+
+### Alcance del trámite
+Explica qué cubre el documento o proceso recuperado.
+
+### Información requerida
+Lista la información, condiciones o datos requeridos por la fuente. Si la fuente no los especifica, dilo.
+
+### Pasos documentados
+Lista solo los pasos explícitos en la documentación.
+
+### Cuándo validar o escalar
+Indica cuándo validar con proveedor, responsable interno o nivel superior si la fuente no define el flujo completo.
+
+No uses formato de troubleshooting.
+No uses encabezados como "Diagnóstico documental", "Validaciones iniciales", "Acciones recomendadas" o "Cuándo escalar" para consultas de garantía.
+No uses referencias internas como [Chunk 1], [Chunk 2] o similares.
+"""
+
+    if query_intent == "procedural":
+        return """
+#### CONTRATO DE FORMATO PARA PROCEDIMIENTOS
+
+La sección Respuesta debe usar exactamente estos encabezados Markdown:
+
+### Objetivo del procedimiento
+### Pasos soportados por la documentación
+### Validaciones posteriores
+### Precauciones o límites
+
+No inventes pasos faltantes.
+No uses referencias internas como [Chunk 1], [Chunk 2] o similares.
+"""
+
+    if query_intent == "conceptual":
+        return """
+#### CONTRATO DE FORMATO PARA CONSULTAS CONCEPTUALES
+
+La sección Respuesta debe usar estos encabezados cuando aplique:
+
+### Definición
+### Para qué sirve
+### Componentes o funciones principales
+### Límites según documentación disponible
+
+No conviertas una consulta conceptual en procedimiento.
+No uses referencias internas como [Chunk 1], [Chunk 2] o similares.
+"""
+
+    if query_intent == "escalation":
+        return """
+#### CONTRATO DE FORMATO PARA ESCALAMIENTO
+
+La sección Respuesta debe usar exactamente estos encabezados Markdown:
+
+### Información mínima para escalar
+### Evidencia recomendada
+### Resumen sugerido
+### Campos faltantes
+
+No inventes diagnóstico, prioridad ni severidad.
+No vuelvas a pedir datos ya entregados por el usuario.
+No uses referencias internas como [Chunk 1], [Chunk 2] o similares.
+"""
+
+    return """
+#### CONTRATO DE FORMATO GENERAL
+
+La sección Respuesta debe ser clara, útil y trazable.
+Usa encabezados Markdown cuando ayuden a la comprensión.
+No uses referencias internas como [Chunk 1], [Chunk 2] o similares.
+"""
+    
 def build_rag_messages(
     user_query: str,
     retrieved_context: str,
@@ -1810,6 +1931,7 @@ def build_rag_messages(
     real_source_labels = real_source_labels or []
     source_block = build_source_block(real_source_labels)
     query_intent = classify_query_intent(user_query)
+    response_format_contract = build_response_format_contract(query_intent)
     has_sources = bool(real_source_labels)
     intent_instruction = build_intent_instruction(
         query_intent=query_intent,
@@ -1884,11 +2006,11 @@ def build_rag_messages(
 ### NIVEL DE SOPORTE DOCUMENTAL
 {support_level}
 
-#### INSTRUCCIÓN ADICIONAL POR INTENCIÓN
-{intent_instruction}
-
 #### POLÍTICA DE RESPUESTA POR INTENCIÓN
 {intent_instruction}
+
+#### CONTRATO DE FORMATO VISIBLE
+{response_format_contract}
 
 #### FORMATO DE RESPUESTA OBLIGATORIO
 
@@ -1910,6 +2032,7 @@ Respuesta:
 Fuente(s):
 - Incluye únicamente fuentes de la lista de fuentes disponibles para citar.
 - No inventes fuentes.
+- No cites chunks internos.
 - Si no hay fuentes suficientes, escribe:
   - Base de conocimiento actual sin coincidencias documentales suficientes
 
@@ -1922,6 +2045,9 @@ Fuente(s):
 - No cites "Documentación oficial de ..." si no aparece exactamente en la lista de fuentes disponibles.
 
 {requirements_instruction}
+
+#### INSTRUCCIÓN ADICIONAL POR INTENCIÓN
+{intent_instruction}
 
 ### INSTRUCCIÓN ADICIONAL
 {fallback_instruction}
@@ -2570,7 +2696,25 @@ def update_last_llm_diagnostics(
         "error": str(error) if error else None,
         "timestamp": datetime.now().isoformat(),
     }
-    
+
+def remove_internal_chunk_references(answer: str) -> str:
+    """
+    Remove internal retrieval references that should not be visible to end users.
+    The final answer should cite only real source labels in Fuente(s).
+    """
+    text = answer
+
+    text = re.sub(r"\s*\[Chunk\s*\d+\]", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s*\(Chunk\s*\d+\)", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s*Chunk\s*\d+\s*", " ", text, flags=re.IGNORECASE)
+
+    # Clean extra spaces before punctuation.
+    text = re.sub(r"\s+([,.;:])", r"\1", text)
+
+    # Normalize excessive blank lines.
+    text = re.sub(r"\n{3,}", "\n\n", text)
+
+    return text.strip()
 # -----------------------------------------------------------------------------
 # Generation
 # -----------------------------------------------------------------------------
@@ -2728,6 +2872,7 @@ def generate_answer_with_rag(user_query: str, memory):
     }
 
     answer = clean_user_facing_answer(answer)
+    answer = remove_internal_chunk_references(answer)
 
     answer = enforce_real_source_traceability(
         answer=answer,
