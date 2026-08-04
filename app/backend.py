@@ -3374,53 +3374,86 @@ def build_incident_summary(state: IncidentState) -> str:
 - Evidencia: {state.evidence or 'No especificada'}
 - Tipo de afectación: {state.impact_type or 'No especificado'}""".strip()
 
-
 def process_escalation_turn(user_message: str, state: IncidentState, session_state: ChatSessionState):
     pending_field = getattr(session_state, "pending_incident_field", None)
     user_text = user_message.strip()
 
-    if pending_field and field_accepts_no_value(pending_field) and is_no_value_answer(user_message):
-        apply_no_value_to_field(state, pending_field)
-    elif pending_field and is_non_informative_reply(user_message):
-        return {
-            "status": "collecting_information",
-            "missing_fields": get_missing_incident_fields(state),
-            "next_field": pending_field,
-            "next_question": FIELD_QUESTIONS[pending_field],
-            "incident_state": state.to_dict(),
-        }
-    else:
-        extracted = extract_incident_fields(user_message)
-        if pending_field == "software_involved" and not extracted["software_involved"]:
-            extracted["software_involved"] = user_text
-        elif pending_field == "software_version" and not extracted["software_version"]:
+    # -------------------------------------------------------------------------
+    # If the assistant asked for a specific field, map the user's answer
+    # primarily to that exact field.
+    #
+    # This prevents a response like "Impresora E52645, sede principal" from
+    # filling both printer_data and contract_client_location when the pending
+    # question was only asking for printer_data.
+    # -------------------------------------------------------------------------
+    if pending_field:
+        if field_accepts_no_value(pending_field) and is_no_value_answer(user_message):
+            apply_no_value_to_field(state, pending_field)
+
+        elif is_no_value_answer(user_message) and not field_accepts_no_value(pending_field):
+            return {
+                "status": "collecting_information",
+                "missing_fields": get_missing_incident_fields(state),
+                "next_field": pending_field,
+                "next_question": FIELD_QUESTIONS[pending_field],
+                "incident_state": state.to_dict(),
+            }
+
+        elif is_non_informative_reply(user_message):
+            return {
+                "status": "collecting_information",
+                "missing_fields": get_missing_incident_fields(state),
+                "next_field": pending_field,
+                "next_question": FIELD_QUESTIONS[pending_field],
+                "incident_state": state.to_dict(),
+            }
+
+        elif pending_field == "software_involved":
+            state.software_involved = user_text
+
+        elif pending_field == "software_version":
             version_only = re.search(r"\b\d+(?:\.\d+)+\b", user_message)
-            extracted["software_version"] = version_only.group(0) if version_only else user_text
-        elif pending_field == "error_description":
-            extracted["error_description"] = user_text
+            state.software_version = version_only.group(0) if version_only else user_text
+
         elif pending_field == "actions_attempted":
-            extracted["actions_attempted"] = [user_text]
+            if user_text not in state.actions_attempted:
+                state.actions_attempted.append(user_text)
+
+        elif pending_field == "error_description":
+            state.error_description = user_text
+
         elif pending_field == "printer_data":
-            extracted["printer_data"] = user_text
+            state.printer_data = user_text
+
         elif pending_field == "contract_client_location":
-            extracted["contract_client_location"] = user_text
+            state.contract_client_location = user_text
+
         elif pending_field == "evidence":
-            extracted["evidence"] = user_text
+            state.evidence = user_text
+
         elif pending_field == "impact_type":
-            extracted["impact_type"] = user_text
+            state.impact_type = user_text
 
-        if pending_field != "printer_data":
-            if extracted.get("printer_data") == user_text and not looks_like_specific_printer_data(user_message):
-                extracted["printer_data"] = None
-        if pending_field != "error_description":
-            if extracted.get("error_description") == user_text and pending_field == "actions_attempted":
-                extracted["error_description"] = None
+        # Clear the pending field after processing the answer.
+        session_state.pending_incident_field = None
 
+    else:
+        # ---------------------------------------------------------------------
+        # No pending field means this is a free-form escalation message.
+        # In this case, extracting multiple fields from the same message is valid.
+        # ---------------------------------------------------------------------
+        extracted = extract_incident_fields(user_message)
         update_incident_state(state, extracted)
 
+    # -------------------------------------------------------------------------
+    # Decide next step.
+    # -------------------------------------------------------------------------
     missing_fields = get_missing_incident_fields(state)
+
     if missing_fields:
         next_field = missing_fields[0]
+        session_state.pending_incident_field = next_field
+
         return {
             "status": "collecting_information",
             "missing_fields": missing_fields,
@@ -3428,6 +3461,8 @@ def process_escalation_turn(user_message: str, state: IncidentState, session_sta
             "next_question": FIELD_QUESTIONS[next_field],
             "incident_state": state.to_dict(),
         }
+
+    session_state.pending_incident_field = None
 
     return {
         "status": "ready_for_summary",
