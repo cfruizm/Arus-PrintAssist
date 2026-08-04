@@ -2296,11 +2296,20 @@ def extract_llm_answer_text(response) -> str:
     return ""
     
 def get_effective_max_tokens() -> int:
+    """
+    Resolve max_tokens from Streamlit secrets first, then fallback to LLM_CONFIG.
+    This avoids hardcoded max_tokens from config.py during model tests.
+    """
     try:
-        return int(st.secrets.get("HF_MAX_TOKENS", LLM_CONFIG.get("max_tokens", 900)))
-    except Exception:
-        return int(LLM_CONFIG.get("max_tokens", 900))
+        value = st.secrets.get("HF_MAX_TOKENS", None)
 
+        if value is not None:
+            return int(value)
+
+        return int(LLM_CONFIG.get("max_tokens", 600))
+
+    except Exception:
+        return 600
 
 def get_effective_disable_thinking() -> bool:
     value = st.secrets.get("HF_DISABLE_THINKING", True)
@@ -2310,6 +2319,18 @@ def get_effective_disable_thinking() -> bool:
 
     return str(value).strip().lower() in {"1", "true", "yes", "y", "si", "sí"}
 
+def get_effective_max_tokens_source() -> str:
+    """
+    Show whether max_tokens came from Streamlit secrets or config fallback.
+    Useful for debugging deployment configuration.
+    """
+    try:
+        if st.secrets.get("HF_MAX_TOKENS", None) is not None:
+            return "streamlit_secrets.HF_MAX_TOKENS"
+    except Exception:
+        pass
+
+    return "LLM_CONFIG.max_tokens_or_default"
 
 def prepare_messages_for_no_think(messages: list[dict]) -> list:
     """Add a direct-answer instruction to reduce hidden/thinking token usage
@@ -2376,7 +2397,83 @@ def call_hf_chat_completion(hf_client, messages: list[dict]):
         # Retry without extra_body but keep the /no_think instruction in the prompt.
         call_kwargs.pop("extra_body", None)
         return hf_client.chat_completion(**call_kwargs)
+def get_effective_max_tokens() -> int:
+    """
+    Resolve max_tokens from Streamlit secrets first, then fallback to LLM_CONFIG.
+    """
+    try:
+        value = st.secrets.get("HF_MAX_TOKENS", None)
 
+        if value is not None:
+            return int(value)
+
+        return int(LLM_CONFIG.get("max_tokens", 600))
+
+    except Exception:
+        return 600
+
+
+def get_effective_max_tokens_source() -> str:
+    """
+    Show whether max_tokens came from Streamlit secrets or config fallback.
+    Useful for debugging deployment configuration.
+    """
+    try:
+        if st.secrets.get("HF_MAX_TOKENS", None) is not None:
+            return "streamlit_secrets.HF_MAX_TOKENS"
+    except Exception:
+        pass
+
+    return "LLM_CONFIG.max_tokens_or_default"
+
+
+def update_last_llm_diagnostics(
+    llm_call_ok: bool,
+    error=None,
+    raw_answer: str = "",
+    raw_response_debug: str = "",
+    response=None,
+):
+    """
+    Store consistent LLM diagnostics in Streamlit session state.
+    This keeps debug output stable for both success and error cases.
+    """
+    finish_reason = None
+    usage_info = None
+
+    if response is not None:
+        try:
+            finish_reason = response.choices[0].finish_reason
+        except Exception:
+            finish_reason = None
+
+        try:
+            if hasattr(response, "usage"):
+                usage_info = response.usage
+                if hasattr(usage_info, "model_dump"):
+                    usage_info = usage_info.model_dump()
+        except Exception:
+            usage_info = None
+
+    st.session_state["last_llm_diagnostics"] = {
+        "llm_call_ok": llm_call_ok,
+        "model": get_effective_llm_model(),
+        "provider": get_effective_hf_provider(),
+        "temperature": LLM_CONFIG.get("temperature"),
+        "max_tokens": get_effective_max_tokens(),
+        "max_tokens_source": get_effective_max_tokens_source(),
+        "disable_thinking": get_effective_disable_thinking(),
+        "finish_reason": finish_reason,
+        "usage": usage_info,
+        "raw_answer_length": len(raw_answer or ""),
+        "raw_answer_preview": (raw_answer or "")[:1000],
+        "has_respuesta_section": "respuesta:" in (raw_answer or "").lower(),
+        "has_fuentes_section": "fuente" in (raw_answer or "").lower(),
+        "raw_response_debug": raw_response_debug,
+        "error": str(error) if error else None,
+        "timestamp": datetime.now().isoformat(),
+    }
+    
 # -----------------------------------------------------------------------------
 # Generation
 # -----------------------------------------------------------------------------
@@ -2463,44 +2560,36 @@ def generate_answer_with_rag(user_query: str, memory):
     )
 
     except BadRequestError as e:
-        st.session_state["last_llm_diagnostics"] = {
-            "llm_call_ok": False,
-            "model": get_effective_llm_model(),
-            "provider": get_effective_hf_provider(),
-            "temperature": LLM_CONFIG.get("temperature"),
-            "max_tokens": LLM_CONFIG.get("max_tokens"),
-            "error": str(e),
-            "timestamp": datetime.now().isoformat(),
-        }
+        update_last_llm_diagnostics(
+            llm_call_ok=False,
+            error=e,
+        )
         return build_llm_unavailable_answer(e)
 
     except HfHubHTTPError as e:
-        st.session_state["last_llm_diagnostics"] = {
-            "llm_call_ok": False,
-            "model": get_effective_llm_model(),
-            "provider": get_effective_hf_provider(),
-            "temperature": LLM_CONFIG.get("temperature"),
-            "max_tokens": LLM_CONFIG.get("max_tokens"),
-            "error": str(e),
-            "timestamp": datetime.now().isoformat(),
-        }
+        update_last_llm_diagnostics(
+            llm_call_ok=False,
+            error=e,
+        )
         return build_llm_unavailable_answer(e)
 
     except Exception as e:
-        st.session_state["last_llm_diagnostics"] = {
-            "llm_call_ok": False,
-            "model": get_effective_llm_model(),
-            "provider": get_effective_hf_provider(),
-            "temperature": LLM_CONFIG.get("temperature"),
-            "max_tokens": LLM_CONFIG.get("max_tokens"),
-            "error": str(e),
-            "timestamp": datetime.now().isoformat(),
-        }
+        update_last_llm_diagnostics(
+            llm_call_ok=False,
+            error=e,
+        )
         return build_llm_unavailable_answer(e)
 
     raw_response_debug = serialize_llm_response_for_debug(response)
     answer = extract_llm_answer_text(response)
     raw_answer = answer
+    
+    update_last_llm_diagnostics(
+        llm_call_ok=True,
+        raw_answer=raw_answer,
+        raw_response_debug=raw_response_debug,
+        response=response,
+    )
     
     finish_reason = None
     usage_info = None
@@ -2987,6 +3076,8 @@ def get_backend_status():
         "hf_client_ok": False,
         "llm_model": get_effective_llm_model(),
         "hf_provider": get_effective_hf_provider(),
+        "llm_max_tokens": get_effective_max_tokens(),
+        "llm_max_tokens_source": get_effective_max_tokens_source(),
         "error": None,
     }
 
