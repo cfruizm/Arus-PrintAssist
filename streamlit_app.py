@@ -39,8 +39,13 @@ try:
         backend_is_ready,
         get_backend_status,
         debug_query_diagnostics,
-        debug_metadata_search,
     )
+
+    try:
+        from app.backend import debug_metadata_search
+    except Exception:
+        debug_metadata_search = None
+
 except Exception as e:
     BACKEND_IMPORT_ERROR = e
 
@@ -242,7 +247,10 @@ with st.sidebar:
             )
             if st.button("Buscar metadata"):
                 if debug_metadata_search is None:
-                    st.error("debug_metadata_search no está disponible.")
+                    st.warning(
+                        "La búsqueda de metadata no está disponible en esta versión del backend. "
+                        "La app puede seguir funcionando normalmente."
+                    )
                 else:
                     try:
                         st.json(debug_metadata_search(metadata_search_term))
