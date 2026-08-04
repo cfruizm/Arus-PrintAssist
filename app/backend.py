@@ -3718,6 +3718,160 @@ def append_turn_observability_record(record: dict):
     except Exception:
         pass
 
+def summarize_turn_observability(limit: int = 500) -> dict[str, Any]:
+    """
+    Summarize accumulated turn observability records.
+
+    This does not call the LLM. It reads the local JSONL observability file and
+    aggregates cost, token usage, latency, intents, models and fallback/error data.
+    """
+    if not TURN_OBSERVABILITY_FILE.exists():
+        return {
+            "record_count": 0,
+            "message": "No hay registros de observabilidad todavía.",
+        }
+
+    records = []
+
+    try:
+        with open(TURN_OBSERVABILITY_FILE, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+
+                try:
+                    records.append(json.loads(line))
+                except Exception:
+                    continue
+    except Exception as e:
+        return {
+            "record_count": 0,
+            "error": str(e),
+        }
+
+    if limit and len(records) > limit:
+        records = records[-limit:]
+
+    total_estimated_cost = 0.0
+    total_prompt_tokens = 0
+    total_completion_tokens = 0
+    total_tokens = 0
+    latency_values = []
+
+    intents = defaultdict(int)
+    models = defaultdict(int)
+    providers = defaultdict(int)
+    route_types = defaultdict(int)
+    support_levels = defaultdict(int)
+    source_counts = defaultdict(int)
+
+    llm_error_count = 0
+    fallback_count = 0
+
+    for record in records:
+        route_type = record.get("route_type")
+        if route_type:
+            route_types[route_type] += 1
+
+        query_intent = record.get("query_intent")
+        if query_intent:
+            intents[query_intent] += 1
+
+        support_level = record.get("support_level")
+        if support_level:
+            support_levels[support_level] += 1
+
+        latency = record.get("latency_seconds")
+        if isinstance(latency, (int, float)):
+            latency_values.append(float(latency))
+
+        if record.get("fallback_used"):
+            fallback_count += 1
+
+        for source_label in record.get("real_source_labels", []) or []:
+            source_counts[source_label] += 1
+
+        llm_info = record.get("llm", {}) or {}
+
+        model = llm_info.get("model")
+        if model:
+            models[model] += 1
+
+        provider = llm_info.get("provider")
+        if provider:
+            providers[provider] += 1
+
+        if llm_info.get("error"):
+            llm_error_count += 1
+
+        usage = llm_info.get("usage") or {}
+
+        try:
+            total_prompt_tokens += int(usage.get("prompt_tokens") or 0)
+        except Exception:
+            pass
+
+        try:
+            total_completion_tokens += int(usage.get("completion_tokens") or 0)
+        except Exception:
+            pass
+
+        try:
+            total_tokens += int(usage.get("total_tokens") or 0)
+        except Exception:
+            pass
+
+        try:
+            estimated_cost = llm_info.get("estimated_cost")
+            if estimated_cost is not None:
+                total_estimated_cost += float(estimated_cost)
+        except Exception:
+            pass
+
+    record_count = len(records)
+    llm_call_records = sum(1 for r in records if (r.get("llm") or {}).get("llm_call_ok") is not None)
+
+    avg_latency = None
+    max_latency = None
+
+    if latency_values:
+        avg_latency = round(sum(latency_values) / len(latency_values), 3)
+        max_latency = round(max(latency_values), 3)
+
+    avg_total_tokens = round(total_tokens / record_count, 2) if record_count else 0
+    avg_prompt_tokens = round(total_prompt_tokens / record_count, 2) if record_count else 0
+    avg_completion_tokens = round(total_completion_tokens / record_count, 2) if record_count else 0
+    avg_cost = round(total_estimated_cost / record_count, 8) if record_count else 0
+
+    return {
+        "record_count": record_count,
+        "llm_call_records": llm_call_records,
+        "total_estimated_cost": round(total_estimated_cost, 8),
+        "avg_estimated_cost_per_turn": avg_cost,
+        "total_prompt_tokens": total_prompt_tokens,
+        "total_completion_tokens": total_completion_tokens,
+        "total_tokens": total_tokens,
+        "avg_prompt_tokens_per_turn": avg_prompt_tokens,
+        "avg_completion_tokens_per_turn": avg_completion_tokens,
+        "avg_total_tokens_per_turn": avg_total_tokens,
+        "avg_latency_seconds": avg_latency,
+        "max_latency_seconds": max_latency,
+        "fallback_count": fallback_count,
+        "llm_error_count": llm_error_count,
+        "intents": dict(sorted(intents.items())),
+        "support_levels": dict(sorted(support_levels.items())),
+        "route_types": dict(sorted(route_types.items())),
+        "models": dict(sorted(models.items())),
+        "providers": dict(sorted(providers.items())),
+        "top_sources": dict(
+            sorted(
+                source_counts.items(),
+                key=lambda item: item[1],
+                reverse=True,
+            )[:10]
+        ),
+    }
 
 # -----------------------------------------------------------------------------
 # Logging / persistence
