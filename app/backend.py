@@ -1527,6 +1527,64 @@ def deduplicate_ranked_docs(docs: list) -> list:
 
     return unique_docs
 
+def is_low_information_chunk(doc) -> bool:
+    """
+    Detect chunks that are unlikely to help the LLM answer:
+    covers, legal notices, table of contents, title-only pages or very short chunks.
+
+    This is global and product-agnostic.
+    """
+    metadata = doc.metadata or {}
+    content = " ".join(str(doc.page_content or "").lower().split())
+
+    title = str(metadata.get("title", "")).lower()
+    page_label = str(metadata.get("page_label", "")).lower()
+    document_family = str(metadata.get("document_family", "")).lower()
+
+    if not content:
+        return True
+
+    # Very short chunks usually contain only cover/title fragments.
+    if len(content) < 120:
+        return True
+
+    low_value_terms = [
+        "copyright and legal notice",
+        "trademark credits",
+        "table of contents",
+        "índice",
+        "indice",
+        "aviso legal",
+        "información de uso interno",
+        "informacion de uso interno",
+        "información restringida",
+        "informacion restringida",
+        "confidencial",
+        "uso exclusivo",
+    ]
+
+    if any(term in content[:1200] for term in low_value_terms):
+        return True
+
+    # Cover/title-like technical guide pages.
+    cover_like_patterns = [
+        "technical training guide version",
+        "administrator guide",
+        "user guide",
+        "guía del usuario",
+        "guia del usuario",
+    ]
+
+    if page_label in {"i", "1"} and len(content) < 300:
+        if any(pattern in content for pattern in cover_like_patterns):
+            return True
+
+    # Table of figures pages are usually not useful as final evidence.
+    if "table of figures" in content[:1200]:
+        return True
+
+    return False
+
 def retrieve_context(query: str, top_k: int = 4):
     vectorstore = get_vectorstore()
     profile = detect_query_profile(query)
@@ -1606,9 +1664,18 @@ def retrieve_context(query: str, top_k: int = 4):
         if not is_tangential_source_for_query(query, doc)
     ]
     
+    ranked_docs_without_low_info = [
+        doc for doc in ranked_docs
+        if not is_low_information_chunk(doc)
+    ]
+    
+    # Prefer useful chunks, but avoid emptying the context completely.
+    if ranked_docs_without_low_info:
+        ranked_docs = ranked_docs_without_low_info
+    
     if not ranked_docs:
         ranked_docs = deduplicate_ranked_docs(filtered_ranked_docs)
-
+    
     # Source diversity: avoid sending 4 chunks from the same PDF when possible.
     max_docs_per_source = CONFIG.get("max_docs_per_source", 2)
     selected_docs = []
