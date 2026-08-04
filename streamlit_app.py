@@ -225,6 +225,10 @@ with st.sidebar:
         "Buscar metadata/vectorstore",
         value="HP Access Control",
     )
+
+    if "last_turn_diagnostics" in st.session_state:
+        st.sidebar.markdown("### Último turno observado")
+        st.sidebar.json(st.session_state["last_turn_diagnostics"])
     
     if st.sidebar.button("Buscar en metadata"):
         try:
