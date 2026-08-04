@@ -1,6 +1,8 @@
 # streamlit_app.py
 # Main Streamlit entrypoint for Arus PrintAssist
 
+from __future__ import annotations
+
 import streamlit as st
 
 from app.config import (
@@ -10,23 +12,26 @@ from app.config import (
     PAGE_LAYOUT,
     SIDEBAR_TITLE,
 )
-
 from app.session_state import ChatSessionState
 
 # -----------------------------------------------------------------------------
-# Optional debug mode
+# Debug mode
 # -----------------------------------------------------------------------------
-# Keep this False in normal user-facing deployments.
-DEBUG_UI = True
+# Default is False to keep the demo clean. Enable in Streamlit secrets with:
+# DEBUG_UI = true
+try:
+    DEBUG_UI = bool(st.secrets.get("DEBUG_UI", False))
+except Exception:
+    DEBUG_UI = False
 
 # -----------------------------------------------------------------------------
 # Backend imports
 # -----------------------------------------------------------------------------
-# The fallback keeps the app loadable while the backend module is still incomplete.
 BACKEND_IMPORT_ERROR = None
 
 try:
     from app.backend import (
+        IncidentState,
         create_chat_session_state,
         route_user_message,
         finalize_escalation_case,
@@ -34,21 +39,22 @@ try:
         backend_is_ready,
         get_backend_status,
         debug_query_diagnostics,
+        debug_metadata_search,
     )
 except Exception as e:
     BACKEND_IMPORT_ERROR = e
 
+    IncidentState = None
     create_chat_session_state = None
     route_user_message = None
     finalize_escalation_case = None
     reset_chat_session_state = None
-    backend_is_ready = None
     get_backend_status = None
     debug_query_diagnostics = None
+    debug_metadata_search = None
 
     def backend_is_ready() -> bool:
         return False
-
 
 # -----------------------------------------------------------------------------
 # Page configuration
@@ -62,7 +68,6 @@ st.set_page_config(
 st.title(APP_TITLE)
 st.caption(APP_SUBTITLE)
 
-
 # -----------------------------------------------------------------------------
 # Session bootstrap
 # -----------------------------------------------------------------------------
@@ -72,85 +77,67 @@ if "chat_state" not in st.session_state:
     else:
         st.session_state.chat_state = ChatSessionState()
 
-# Extra protection in case an old session survives a code update
+# Extra protection in case an old session survives a code update.
 if getattr(st.session_state.chat_state, "incident_state", None) is None:
-    try:
-        from app.backend import IncidentState
+    if IncidentState is not None:
         st.session_state.chat_state.incident_state = IncidentState()
-    except Exception:
-        pass
 
 if "chat_messages" not in st.session_state:
     st.session_state.chat_messages = [
         {
             "role": "assistant",
-            "content": (
-                "Hola, soy Arus PrintAssist. "
-                "¿Con que puedo ayudarte hoy? "
-            ),
+            "content": "Hola, soy Arus PrintAssist. ¿Con qué puedo ayudarte hoy?",
         }
     ]
 
+# Cache this result for the current run to avoid repeated checks in the UI.
+BACKEND_READY = backend_is_ready()
+CURRENT_MODE = getattr(st.session_state.chat_state, "mode", "normal")
 
 # -----------------------------------------------------------------------------
-# Main user guidance block (Spanish - end user facing)
+# Main user guidance block
 # -----------------------------------------------------------------------------
 st.markdown(
     """
-**Arus PrintAssist** puede ayudarte con documentación técnica, troubleshooting básico, 
+**Arus PrintAssist** puede ayudarte con documentación técnica, troubleshooting básico,
 procedimientos del servicio de impresión y recopilación de información para escalamiento.
 
-**Ten en cuenta:**
-- Responde con base en la documentación disponible.
-- Puede dar respuestas parciales si una consulta no está bien cubierta por la base documental.
-- En casos críticos o ambiguos, se recomienda validar la información o escalar el caso.
+**Ten en cuenta:** responde con base en la documentación disponible. En casos críticos,
+ambiguos o de alto impacto, valida la información o escala el caso cuando corresponda.
 """
 )
 
 with st.expander("Guía de uso del asistente", expanded=False):
     st.markdown(
         """
-### ¿Qué es Arus PrintAssist?
-Arus PrintAssist es un asistente especializado en soporte de primer nivel para servicios de impresión.  
-Puede ayudarte con consultas sobre software de impresión, herramientas del servicio, procedimientos operativos, troubleshooting básico y recopilación de información para escalamiento.
-
 ### ¿Qué puede hacer?
 - Responder preguntas conceptuales sobre herramientas y soluciones del servicio de impresión.
-- Consultar requerimientos, componentes y características de algunos productos soportados.
-- Orientar procedimientos operativos y configuraciones básicas cuando exista soporte documental.
-- Brindar apoyo en troubleshooting inicial de incidentes relacionados con impresión.
+- Consultar requerimientos, componentes y características de productos soportados.
+- Orientar procedimientos operativos cuando exista soporte documental.
+- Apoyar troubleshooting inicial de incidentes relacionados con impresión.
 - Guiar la recolección de información para escalamiento de casos.
 - Responder usando la base documental disponible e indicar las fuentes consultadas.
 
-### Limitaciones
-- Las respuestas se generan con base en la documentación cargada en la base de conocimiento.
-- Si la documentación disponible no cubre bien una consulta, la respuesta puede ser parcial, incompleta o conservadora.
-- El asistente no reemplaza la validación técnica humana en casos críticos, ambiguos o de alto impacto.
-- Algunas respuestas pueden contener errores, omisiones o interpretaciones imperfectas de la documentación.
-
-### Ejemplos de preguntas recomendadas
-- ¿Qué es HP Web Jetadmin?
+### Ejemplos de preguntas
+- ¿Qué es HP Access Control?
 - ¿Qué requerimientos son necesarios para instalar HP SDS Monitor?
-- ¿Cómo reiniciar manualmente el servicio de HP Web Jetadmin?
-- ¿Qué debo hacer si los trabajos desaparecen en PaperCut MF?
-- ¿Cuáles son los componentes de la solución HP Access Control?
+- ¿Qué debo hacer si la cola de impresión está bloqueada?
+- ¿Cómo consultar y asignar PIN en Print Evolve?
 - ¿Cómo realizar el trámite de garantía de los suministros de impresión?
-- ¿Qué debo tener en cuenta para una arquitectura de seguridad en nube de GAV Tracking?
+- Ya reinicié el servicio y sigue fallando, necesito escalar el caso.
 
-### Aviso
-Este asistente puede cometer errores u omisiones.  
-Si la consulta implica configuraciones críticas, procedimientos de alto impacto, cambios en seguridad o decisiones operativas sensibles, se recomienda validar la respuesta con documentación adicional o escalar el caso cuando corresponda.
+### Limitaciones
+El asistente puede entregar respuestas parciales si la documentación disponible no cubre bien la consulta.
+No reemplaza la validación técnica humana en configuraciones críticas, cambios de seguridad o incidentes de alto impacto.
 """
     )
 
-
 # -----------------------------------------------------------------------------
-# Sidebar
+# Sidebar: essential controls only
 # -----------------------------------------------------------------------------
 with st.sidebar:
     st.header(SIDEBAR_TITLE)
 
-    # Show only actionable controls for end users
     if st.button("Nueva conversación"):
         if reset_chat_session_state is not None:
             st.session_state.chat_state = reset_chat_session_state()
@@ -160,187 +147,107 @@ with st.sidebar:
         st.session_state.chat_messages = [
             {
                 "role": "assistant",
-                "content": (
-                    "La sesión fue reiniciada. "
-                    "Puedes comenzar con una nueva consulta."
-                ),
+                "content": "La sesión fue reiniciada. Puedes comenzar con una nueva consulta.",
             }
         ]
         st.rerun()
 
-    # Escalation export only when applicable
-    current_mode = getattr(st.session_state.chat_state, "mode", "normal")
+    if not BACKEND_READY:
+        st.warning(
+            "El servicio de respuestas no está disponible temporalmente. "
+            "Intenta nuevamente más tarde."
+        )
 
-    if backend_is_ready() and current_mode == "escalation":
+    if BACKEND_READY and CURRENT_MODE == "escalation" and finalize_escalation_case is not None:
         if st.button("Finalizar y exportar caso"):
-            result = finalize_escalation_case(st.session_state.chat_state)
+            try:
+                result = finalize_escalation_case(st.session_state.chat_state)
+                st.success("Caso persistido correctamente.")
 
-            st.success("Caso persistido correctamente.")
-
-            exported_file_path = result.get("exported_file")
-
-            if exported_file_path:
-                try:
+                exported_file_path = result.get("exported_file")
+                if exported_file_path:
                     with open(exported_file_path, "r", encoding="utf-8") as f:
                         exported_text = f.read()
 
                     file_name = exported_file_path.split("/")[-1]
-
-                    st.text_area(
-                        "Resumen exportado",
-                        exported_text,
-                        height=250,
-                    )
-
+                    st.text_area("Resumen exportado", exported_text, height=220)
                     st.download_button(
                         label="Descargar resumen del caso (.txt)",
                         data=exported_text,
                         file_name=file_name,
                         mime="text/plain",
                     )
-
-                    if DEBUG_UI:
-                        with st.expander("Ver detalle del archivo exportado"):
-                            st.json(result)
-
-                except Exception as e:
-                    st.error(f"No fue posible preparar la descarga del archivo: {e}")
-            else:
-                st.warning("No se encontró la ruta del archivo exportado.")
-
-
-    # Only show a warning if the backend is unavailable
-    if not backend_is_ready():
-        st.warning(
-            "El servicio de respuestas no está disponible temporalmente. "
-            "Intenta nuevamente más tarde."
-        )
-
-    ####
-    # -----------------------------------------------------------------------------
-    # Temporary debug panel
-    # -----------------------------------------------------------------------------
-
-    metadata_search_term = st.sidebar.text_input(
-        "Buscar metadata/vectorstore",
-        value="HP Access Control",
-    )
-
-    if "last_turn_diagnostics" in st.session_state:
-        st.sidebar.markdown("### Último turno observado")
-        st.sidebar.json(st.session_state["last_turn_diagnostics"])
-    
-    if st.sidebar.button("Buscar en metadata"):
-        try:
-            from app.backend import debug_metadata_search
-    
-            result = debug_metadata_search(metadata_search_term)
-            st.subheader("Resultado búsqueda metadata")
-            st.json(result)
-        except Exception as e:
-            st.error(f"Error buscando metadata: {e}")
-
-    
-    if DEBUG_UI and BACKEND_IMPORT_ERROR is not None:
-        st.error("Error importando app.backend")
-        st.exception(BACKEND_IMPORT_ERROR)
-        
-        if isinstance(BACKEND_IMPORT_ERROR, SyntaxError):
-            st.subheader("Detalle del SyntaxError")
-            st.write("Archivo:", BACKEND_IMPORT_ERROR.filename)
-            st.write("Línea:", BACKEND_IMPORT_ERROR.lineno)
-            st.write("Offset:", BACKEND_IMPORT_ERROR.offset)
-            st.write("Mensaje:", BACKEND_IMPORT_ERROR.msg)
-            if BACKEND_IMPORT_ERROR.text:
-                st.code(BACKEND_IMPORT_ERROR.text, language="python")
-        
-        st.sidebar.divider()
-        st.sidebar.subheader("Debug técnico")
-    
-        if get_backend_status is not None:
-            if st.sidebar.button("Ver estado backend"):
-                try:
-                    status = get_backend_status()
-                    st.sidebar.json(status)
-                except Exception as e:
-                    st.sidebar.error(f"Error consultando backend: {e}")
-    
-        if st.sidebar.button("Inspeccionar vectorstore"):
-            try:
-                from app.backend import get_vectorstore
-    
-                vectorstore = get_vectorstore()
-                collection = vectorstore._collection
-    
-                st.subheader("Inspección de vectorstore")
-                st.write("Collection name:", collection.name)
-                st.write("Document count:", collection.count())
-    
-                peek = collection.peek(5)
-    
-                st.write("IDs:")
-                st.json(peek.get("ids", []))
-    
-                st.write("Metadatas:")
-                st.json(peek.get("metadatas", []))
-    
-                st.write("Documents preview:")
-                for i, doc in enumerate(peek.get("documents", []), start=1):
-                    st.markdown(f"**Documento {i}**")
-                    st.code(doc[:1000])
-    
+                else:
+                    st.warning("No se encontró la ruta del archivo exportado.")
             except Exception as e:
-                st.error(f"Error inspeccionando vectorstore: {e}")
-    
-        debug_query = st.sidebar.text_area(
-            "Consulta para debug retrieval",
-            value="¿Qué hago si la cola de impresión está bloqueada?",
-            height=120,
-        )
-    
-        if st.sidebar.button("Ejecutar debug retrieval"):
-            if debug_query_diagnostics is None:
-                st.error("debug_query_diagnostics no está disponible.")
-            else:
-                try:
-                    result = debug_query_diagnostics(debug_query)
-                    st.subheader("Resultado debug retrieval")
-                    st.json(result)
-                except Exception as e:
-                    st.error(f"Error ejecutando debug retrieval: {e}")
-    if "last_llm_diagnostics" in st.session_state:
-        st.sidebar.markdown("### Última llamada LLM")
-        st.sidebar.json(st.session_state["last_llm_diagnostics"])
-    # Optional technical diagnostics (hidden in normal production mode)
+                st.error(f"No fue posible exportar el caso: {e}")
+
+    # -------------------------------------------------------------------------
+    # Optional technical debug panel. Hidden by default.
+    # -------------------------------------------------------------------------
     if DEBUG_UI:
         with st.expander("Diagnóstico técnico", expanded=False):
-            st.write(f"**Modo actual:** {current_mode}")
+            st.caption("Úsalo solo para pruebas. Algunas acciones no llaman al LLM; el chat normal sí puede consumir créditos.")
 
-            if backend_is_ready():
-                st.success("Backend ready")
-            else:
-                st.warning("Backend not ready")
+            if BACKEND_IMPORT_ERROR is not None:
+                st.error("Error importando app.backend")
+                st.exception(BACKEND_IMPORT_ERROR)
 
-            if debug_query_diagnostics is not None:
-                debug_query = st.text_input(
-                    "Consulta para depuración",
-                    value="¿Que requerimientos son necesarios para instalar HP SDS monitor?",
-                )
+                if isinstance(BACKEND_IMPORT_ERROR, SyntaxError):
+                    st.write("Archivo:", BACKEND_IMPORT_ERROR.filename)
+                    st.write("Línea:", BACKEND_IMPORT_ERROR.lineno)
+                    st.write("Offset:", BACKEND_IMPORT_ERROR.offset)
+                    st.write("Mensaje:", BACKEND_IMPORT_ERROR.msg)
+                    if BACKEND_IMPORT_ERROR.text:
+                        st.code(BACKEND_IMPORT_ERROR.text, language="python")
 
-                if st.button("Ejecutar diagnóstico"):
-                    try:
-                        debug_result = debug_query_diagnostics(debug_query)
-                        st.json(debug_result)
-                    except Exception as e:
-                        st.error(f"No fue posible ejecutar el diagnóstico: {e}")
+            st.write(f"**Modo actual:** {CURRENT_MODE}")
+            st.write("**Backend:**", "ready" if BACKEND_READY else "not ready")
 
-            if get_backend_status is not None:
+            if get_backend_status is not None and st.button("Ver estado backend"):
                 try:
-                    status = get_backend_status()
-                    st.json(status)
+                    st.json(get_backend_status())
                 except Exception as e:
-                    st.error(f"No fue posible obtener el estado del backend: {e}")
+                    st.error(f"Error consultando backend: {e}")
 
+            if "last_turn_diagnostics" in st.session_state:
+                with st.expander("Último turno observado", expanded=False):
+                    st.json(st.session_state["last_turn_diagnostics"])
+
+            if "last_llm_diagnostics" in st.session_state:
+                with st.expander("Última llamada LLM", expanded=False):
+                    st.json(st.session_state["last_llm_diagnostics"])
+
+            st.divider()
+            st.markdown("**Debug retrieval, no consume LLM**")
+            debug_query = st.text_area(
+                "Consulta para debug retrieval",
+                value="¿Qué es HP Access Control?",
+                height=90,
+            )
+            if st.button("Ejecutar debug retrieval"):
+                if debug_query_diagnostics is None:
+                    st.error("debug_query_diagnostics no está disponible.")
+                else:
+                    try:
+                        st.json(debug_query_diagnostics(debug_query))
+                    except Exception as e:
+                        st.error(f"Error ejecutando debug retrieval: {e}")
+
+            st.divider()
+            st.markdown("**Buscar metadata/vectorstore, no consume LLM**")
+            metadata_search_term = st.text_input(
+                "Término de búsqueda",
+                value="HP Access Control",
+            )
+            if st.button("Buscar metadata"):
+                if debug_metadata_search is None:
+                    st.error("debug_metadata_search no está disponible.")
+                else:
+                    try:
+                        st.json(debug_metadata_search(metadata_search_term))
+                    except Exception as e:
+                        st.error(f"Error buscando metadata: {e}")
 
 # -----------------------------------------------------------------------------
 # Render chat history
@@ -349,40 +256,34 @@ for msg in st.session_state.chat_messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
-
 # -----------------------------------------------------------------------------
 # Chat input
 # -----------------------------------------------------------------------------
 user_prompt = st.chat_input("Describe tu consulta o incidente de impresión...")
 
 if user_prompt:
-    st.session_state.chat_messages.append(
-        {
-            "role": "user",
-            "content": user_prompt,
-        }
-    )
+    st.session_state.chat_messages.append({"role": "user", "content": user_prompt})
 
     with st.chat_message("user"):
         st.markdown(user_prompt)
 
-    if backend_is_ready() and route_user_message is not None:
-        bot_response = route_user_message(
-            user_prompt,
-            st.session_state.chat_state,
-        )
+    if BACKEND_READY and route_user_message is not None:
+        try:
+            bot_response = route_user_message(user_prompt, st.session_state.chat_state)
+        except Exception as e:
+            bot_response = (
+                "Se presentó un error procesando tu solicitud. "
+                "Si el problema persiste, revisa el diagnóstico técnico o intenta nuevamente."
+            )
+            if DEBUG_UI:
+                st.exception(e)
     else:
         bot_response = (
             "El servicio de respuestas no está disponible temporalmente. "
             "Por favor intenta nuevamente más tarde."
         )
 
-    st.session_state.chat_messages.append(
-        {
-            "role": "assistant",
-            "content": bot_response,
-        }
-    )
+    st.session_state.chat_messages.append({"role": "assistant", "content": bot_response})
 
     with st.chat_message("assistant"):
         st.markdown(bot_response)
