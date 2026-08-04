@@ -220,6 +220,22 @@ with st.sidebar:
     # -----------------------------------------------------------------------------
     # Temporary debug panel
     # -----------------------------------------------------------------------------
+
+    metadata_search_term = st.sidebar.text_input(
+        "Buscar metadata/vectorstore",
+        value="HP Access Control",
+    )
+    
+    if st.sidebar.button("Buscar en metadata"):
+        try:
+            from app.backend import debug_metadata_search
+    
+            result = debug_metadata_search(metadata_search_term)
+            st.subheader("Resultado búsqueda metadata")
+            st.json(result)
+        except Exception as e:
+            st.error(f"Error buscando metadata: {e}")
+
     
     if DEBUG_UI and BACKEND_IMPORT_ERROR is not None:
         st.error("Error importando app.backend")
