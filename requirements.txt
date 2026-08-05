@@ -13,7 +13,7 @@ torch
 torchvision
 
 chromadb
-protobuf==3.20.3
+protobuf>=5.26.1,<6
 
 huggingface_hub
 pypdf
