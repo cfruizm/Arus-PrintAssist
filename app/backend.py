@@ -601,98 +601,6 @@ def compute_generic_entity_alignment_score(user_query: str, metadata: dict, cont
 
     return score
 
-
-
-def get_specific_entity_terms(user_query: str) -> list[str]:
-    """
-    Return product/process-specific terms that are meaningful for title/source alignment.
-    This intentionally excludes generic retrieval metadata values such as
-    sanitized_support_assets or internal_support_asset.
-    """
-    query_entities = detect_query_entities(user_query)
-    terms: list[str] = []
-
-    for product_id in query_entities.get("products", []) or []:
-        item = PRODUCT_ENTITY_REGISTRY.get(product_id)
-        if not item:
-            continue
-        canonical = item.get("canonical_name")
-        if canonical:
-            terms.append(str(canonical).lower())
-        terms.extend(str(alias).lower() for alias in item.get("aliases", []) or [])
-
-    for process_id in query_entities.get("processes", []) or []:
-        item = PROCESS_ENTITY_REGISTRY.get(process_id)
-        if not item:
-            continue
-        canonical = item.get("canonical_name")
-        if canonical:
-            terms.append(str(canonical).lower())
-        terms.extend(str(alias).lower() for alias in item.get("aliases", []) or [])
-
-    generic_terms = {
-        "hp", "arus", "arus_internal", "sanitized_support_assets",
-        "internal_support_asset", "general", "monitor", "admin",
-    }
-
-    cleaned = []
-    seen = set()
-    for term in terms:
-        term = " ".join(term.strip().lower().split())
-        if not term or term in generic_terms or len(term) < 3:
-            continue
-        if term not in seen:
-            seen.add(term)
-            cleaned.append(term)
-
-    return cleaned
-
-
-def doc_has_specific_entity_alignment(query: str, doc) -> bool:
-    """
-    Check whether a document is clearly aligned with the specific entity in the query.
-    Prioritizes title/source metadata because internal DA Arus documents often share
-    generic product metadata.
-    """
-    terms = get_specific_entity_terms(query)
-    if not terms:
-        return False
-
-    metadata = doc.metadata or {}
-    title = str(metadata.get("title", "")).lower()
-    source = str(metadata.get("source", "")).lower()
-    collection_name = str(metadata.get("collection_name", "")).lower()
-    folder_origin = str(metadata.get("folder_origin", "")).lower()
-    content = str(doc.page_content or "").lower()
-
-    identity_text = " ".join([title, source, collection_name, folder_origin])
-    content_head = content[:1600]
-
-    return any(term in identity_text for term in terms) or any(term in content_head for term in terms)
-
-
-def filter_docs_by_specific_entity_alignment(query: str, docs: list) -> list:
-    """
-    Global post-rerank filter for entity-specific queries.
-    If at least one retrieved document is clearly aligned with the entity name/alias,
-    drop generic internal documents that are not aligned.
-
-    This prevents MFPsecure queries from pulling PaperCut/PrintEvolve DA documents,
-    and applies to future products without product-specific code.
-    """
-    terms = get_specific_entity_terms(query)
-    if not terms or not docs:
-        return docs
-
-    aligned_docs = [doc for doc in docs if doc_has_specific_entity_alignment(query, doc)]
-
-    # Only apply when we have a meaningful aligned subset. If no aligned docs exist,
-    # do not empty or damage retrieval.
-    if aligned_docs:
-        return aligned_docs
-
-    return docs
-
 def detect_query_profile(query: str):
     """
     Build a retrieval profile using query intent and lightweight hints.
@@ -765,6 +673,74 @@ def detect_query_profile(query: str):
         profile["filter"] = safe_filter
         profile["k_initial"] = max(profile.get("k_initial", 12), 18)
         profile["k_final"] = max(profile.get("k_final", 4), 4)
+
+    return profile
+    
+    # ------------------------------------------------------------------
+    # Fallback generic heuristics only for stable metadata families
+    # ------------------------------------------------------------------
+    if any(term in text for term in ["papercut", "paper cut"]):
+        profile["filter"] = make_chroma_filter(vendor="papercut")
+        return profile
+
+    if any(term in text for term in ["sds", "hp smart device services", "jamc", "dca"]):
+        profile["filter"] = make_chroma_filter(vendor="hp", product="sds")
+        return profile
+
+    if any(term in text for term in ["web jet admin", "web jetadmin", "wja"]):
+        profile["filter"] = make_chroma_filter(vendor="hp", product="web_jetadmin")
+        return profile
+
+    if any(term in text for term in ["access control", "hp ac", "hac"]):
+        profile["filter"] = make_chroma_filter(vendor="hp", product="hp_access_control")
+        return profile
+
+    if any(term in text for term in ["gav tracking", "gav"]):
+        profile["filter"] = make_chroma_filter(vendor="gav", product="gav_tracking")
+        return profile
+
+    if any(term in text for term in ["epson remote services", "ers"]):
+        profile["filter"] = make_chroma_filter(vendor="epson", product="epson_remote_services")
+        return profile
+
+    if any(term in text for term in ["epson print admin", "epa"]):
+        profile["filter"] = make_chroma_filter(vendor="epson", product="epson_print_admin")
+        return profile
+
+    # For internal/operational questions (DA Arus / Print Evolve / MFPsecure / SIMP),
+    # do not constrain retrieval with metadata filters.
+    return profile
+
+    # ------------------------------------------------------------------
+    # Fallback generic heuristics if no entity hints were detected
+    # ------------------------------------------------------------------
+    if any(term in text for term in ["papercut", "print jobs", "trabajos de impresión", "trabajos de impresion"]):
+        profile["filter"] = make_chroma_filter(vendor="papercut")
+        return profile
+
+    if any(term in text for term in ["sds", "hp smart device services", "jamc", "dca"]):
+        profile["filter"] = make_chroma_filter(vendor="hp", product="sds")
+        return profile
+
+    if any(term in text for term in ["web jet admin", "web jetadmin", "wja"]):
+        profile["filter"] = make_chroma_filter(vendor="hp", product="web_jetadmin")
+        return profile
+
+    if any(term in text for term in ["access control", "hp ac", "hac"]):
+        profile["filter"] = make_chroma_filter(vendor="hp", product="hp_access_control")
+        return profile
+
+    if any(term in text for term in ["gav tracking", "gav"]):
+        profile["filter"] = make_chroma_filter(vendor="gav", product="gav_tracking")
+        return profile
+
+    if any(term in text for term in ["epson remote services", "ers"]):
+        profile["filter"] = make_chroma_filter(vendor="epson", product="epson_remote_services")
+        return profile
+
+    if any(term in text for term in ["epson print admin", "epa"]):
+        profile["filter"] = make_chroma_filter(vendor="epson", product="epson_print_admin")
+        return profile
 
     return profile
 
@@ -860,9 +836,6 @@ def compute_rerank_score(query: str, doc, query_intent: str | None = None) -> fl
 
     score = 0.0
     score += compute_generic_entity_alignment_score(query, metadata, content)
-
-    if doc_has_specific_entity_alignment(query, doc):
-        score += 5.0
 
     # Global conceptual-query boost.
     # For "qué es / what is" style questions, prefer introduction, overview,
@@ -1450,7 +1423,6 @@ def assess_retrieval_support(query: str, docs: list) -> dict[str, Any]:
         "avg_overlap": round(avg_overlap, 3),
     }
 
-
 def classify_query_intent(user_query: str) -> str:
     text = user_query.lower()
 
@@ -1490,12 +1462,9 @@ def classify_query_intent(user_query: str) -> str:
         "cuándo debo escalar", "cuando debo escalar",
     ]
 
-    # Architecture requires an explicit architecture/integration/flow wording.
-    # Do not classify a product name such as "GAV Tracking" as architecture by itself;
-    # "¿Qué es GAV Tracking?" must remain conceptual.
     architecture_patterns = [
-        "arquitectura", "integración", "integracion",
-        "diagrama", "flujo", "modelo de seguridad", "arquitectura de seguridad",
+        "arquitectura", "componentes", "integración", "integracion",
+        "diagrama", "flujo", "gav tracking",
     ]
 
     procedural_patterns = [
@@ -1527,8 +1496,8 @@ def classify_query_intent(user_query: str) -> str:
         "explica", "diferencia entre",
     ]
 
-    # Order matters. Explicit support workflows first, then conceptual before
-    # architecture to avoid product-name false positives.
+    # Order matters: warranty/escalation/troubleshooting must be detected
+    # before generic procedural phrases like "cómo realizar".
     if any(p in text for p in warranty_patterns):
         return "warranty"
 
@@ -1541,11 +1510,11 @@ def classify_query_intent(user_query: str) -> str:
     if any(p in text for p in troubleshooting_patterns):
         return "troubleshooting"
 
-    if any(p in text for p in conceptual_patterns):
-        return "conceptual"
-
     if any(p in text for p in architecture_patterns):
         return "architecture"
+
+    if any(p in text for p in conceptual_patterns):
+        return "conceptual"
 
     if any(p in text for p in procedural_patterns):
         return "procedural"
@@ -1800,8 +1769,6 @@ def retrieve_context(query: str, top_k: int = 4):
         doc for doc in ranked_docs
         if not is_tangential_source_for_query(query, doc)
     ]
-
-    ranked_docs = filter_docs_by_specific_entity_alignment(query, ranked_docs)
     
     ranked_docs_without_low_info = [
         doc for doc in ranked_docs
