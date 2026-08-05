@@ -470,7 +470,58 @@ def get_vectorstore_metadata_value_counts() -> dict[str, dict[str, int]]:
     return {field: dict(values) for field, values in counts.items()}
 
 
+
+def entity_alias_is_explicitly_mentioned(text: str, alias: str) -> bool:
+    """
+    Check alias presence without allowing short aliases to match inside words.
+    Example: alias "hac" must not match "hacer".
+    """
+    alias = " ".join(str(alias).lower().strip().split())
+    if not alias:
+        return False
+
+    escaped = re.escape(alias)
+
+    # Multi-word aliases should be matched as a phrase with word boundaries.
+    if " " in alias:
+        return re.search(rf"(?<!\w){escaped}(?!\w)", text) is not None
+
+    # Short aliases/acronyms must be exact tokens.
+    return re.search(rf"\b{escaped}\b", text) is not None
+
+
+def registry_entity_is_explicitly_mentioned(user_query: str, registry_item: dict) -> bool:
+    text = user_query.lower()
+    aliases = [str(a).lower() for a in registry_item.get("aliases", []) or []]
+    canonical = str(registry_item.get("canonical_name", "")).lower()
+
+    candidates = []
+    if canonical:
+        candidates.append(canonical)
+    candidates.extend(aliases)
+
+    return any(entity_alias_is_explicitly_mentioned(text, candidate) for candidate in candidates)
+
+
 def get_detected_product_entities_with_registry(user_query: str) -> list[tuple[str, dict]]:
+    """
+    Return detected product entities, validating aliases with token/phrase boundaries.
+    This prevents short aliases such as HAC from matching inside words like "hacer".
+    """
+    query_entities = detect_query_entities(user_query)
+    product_ids = query_entities.get("products", []) or []
+
+    validated = []
+    for product_id in product_ids:
+        registry_item = PRODUCT_ENTITY_REGISTRY.get(product_id)
+        if not registry_item:
+            continue
+        if registry_entity_is_explicitly_mentioned(user_query, registry_item):
+            validated.append((product_id, registry_item))
+
+    return validated
+
+
     query_entities = detect_query_entities(user_query)
     product_ids = query_entities.get("products", []) or []
     return [
@@ -601,98 +652,6 @@ def compute_generic_entity_alignment_score(user_query: str, metadata: dict, cont
 
     return score
 
-
-
-def get_specific_entity_terms(user_query: str) -> list[str]:
-    """
-    Return product/process-specific terms that are meaningful for title/source alignment.
-    This intentionally excludes generic retrieval metadata values such as
-    sanitized_support_assets or internal_support_asset.
-    """
-    query_entities = detect_query_entities(user_query)
-    terms: list[str] = []
-
-    for product_id in query_entities.get("products", []) or []:
-        item = PRODUCT_ENTITY_REGISTRY.get(product_id)
-        if not item:
-            continue
-        canonical = item.get("canonical_name")
-        if canonical:
-            terms.append(str(canonical).lower())
-        terms.extend(str(alias).lower() for alias in item.get("aliases", []) or [])
-
-    for process_id in query_entities.get("processes", []) or []:
-        item = PROCESS_ENTITY_REGISTRY.get(process_id)
-        if not item:
-            continue
-        canonical = item.get("canonical_name")
-        if canonical:
-            terms.append(str(canonical).lower())
-        terms.extend(str(alias).lower() for alias in item.get("aliases", []) or [])
-
-    generic_terms = {
-        "hp", "arus", "arus_internal", "sanitized_support_assets",
-        "internal_support_asset", "general", "monitor", "admin",
-    }
-
-    cleaned = []
-    seen = set()
-    for term in terms:
-        term = " ".join(term.strip().lower().split())
-        if not term or term in generic_terms or len(term) < 3:
-            continue
-        if term not in seen:
-            seen.add(term)
-            cleaned.append(term)
-
-    return cleaned
-
-
-def doc_has_specific_entity_alignment(query: str, doc) -> bool:
-    """
-    Check whether a document is clearly aligned with the specific entity in the query.
-    Prioritizes title/source metadata because internal DA Arus documents often share
-    generic product metadata.
-    """
-    terms = get_specific_entity_terms(query)
-    if not terms:
-        return False
-
-    metadata = doc.metadata or {}
-    title = str(metadata.get("title", "")).lower()
-    source = str(metadata.get("source", "")).lower()
-    collection_name = str(metadata.get("collection_name", "")).lower()
-    folder_origin = str(metadata.get("folder_origin", "")).lower()
-    content = str(doc.page_content or "").lower()
-
-    identity_text = " ".join([title, source, collection_name, folder_origin])
-    content_head = content[:1600]
-
-    return any(term in identity_text for term in terms) or any(term in content_head for term in terms)
-
-
-def filter_docs_by_specific_entity_alignment(query: str, docs: list) -> list:
-    """
-    Global post-rerank filter for entity-specific queries.
-    If at least one retrieved document is clearly aligned with the entity name/alias,
-    drop generic internal documents that are not aligned.
-
-    This prevents MFPsecure queries from pulling PaperCut/PrintEvolve DA documents,
-    and applies to future products without product-specific code.
-    """
-    terms = get_specific_entity_terms(query)
-    if not terms or not docs:
-        return docs
-
-    aligned_docs = [doc for doc in docs if doc_has_specific_entity_alignment(query, doc)]
-
-    # Only apply when we have a meaningful aligned subset. If no aligned docs exist,
-    # do not empty or damage retrieval.
-    if aligned_docs:
-        return aligned_docs
-
-    return docs
-
 def detect_query_profile(query: str):
     """
     Build a retrieval profile using query intent and lightweight hints.
@@ -765,6 +724,74 @@ def detect_query_profile(query: str):
         profile["filter"] = safe_filter
         profile["k_initial"] = max(profile.get("k_initial", 12), 18)
         profile["k_final"] = max(profile.get("k_final", 4), 4)
+
+    return profile
+    
+    # ------------------------------------------------------------------
+    # Fallback generic heuristics only for stable metadata families
+    # ------------------------------------------------------------------
+    if any(term in text for term in ["papercut", "paper cut"]):
+        profile["filter"] = make_chroma_filter(vendor="papercut")
+        return profile
+
+    if any(term in text for term in ["sds", "hp smart device services", "jamc", "dca"]):
+        profile["filter"] = make_chroma_filter(vendor="hp", product="sds")
+        return profile
+
+    if any(term in text for term in ["web jet admin", "web jetadmin", "wja"]):
+        profile["filter"] = make_chroma_filter(vendor="hp", product="web_jetadmin")
+        return profile
+
+    if any(term in text for term in ["access control", "hp ac", "hac"]):
+        profile["filter"] = make_chroma_filter(vendor="hp", product="hp_access_control")
+        return profile
+
+    if any(term in text for term in ["gav tracking", "gav"]):
+        profile["filter"] = make_chroma_filter(vendor="gav", product="gav_tracking")
+        return profile
+
+    if any(term in text for term in ["epson remote services", "ers"]):
+        profile["filter"] = make_chroma_filter(vendor="epson", product="epson_remote_services")
+        return profile
+
+    if any(term in text for term in ["epson print admin", "epa"]):
+        profile["filter"] = make_chroma_filter(vendor="epson", product="epson_print_admin")
+        return profile
+
+    # For internal/operational questions (DA Arus / Print Evolve / MFPsecure / SIMP),
+    # do not constrain retrieval with metadata filters.
+    return profile
+
+    # ------------------------------------------------------------------
+    # Fallback generic heuristics if no entity hints were detected
+    # ------------------------------------------------------------------
+    if any(term in text for term in ["papercut", "print jobs", "trabajos de impresión", "trabajos de impresion"]):
+        profile["filter"] = make_chroma_filter(vendor="papercut")
+        return profile
+
+    if any(term in text for term in ["sds", "hp smart device services", "jamc", "dca"]):
+        profile["filter"] = make_chroma_filter(vendor="hp", product="sds")
+        return profile
+
+    if any(term in text for term in ["web jet admin", "web jetadmin", "wja"]):
+        profile["filter"] = make_chroma_filter(vendor="hp", product="web_jetadmin")
+        return profile
+
+    if any(term in text for term in ["access control", "hp ac", "hac"]):
+        profile["filter"] = make_chroma_filter(vendor="hp", product="hp_access_control")
+        return profile
+
+    if any(term in text for term in ["gav tracking", "gav"]):
+        profile["filter"] = make_chroma_filter(vendor="gav", product="gav_tracking")
+        return profile
+
+    if any(term in text for term in ["epson remote services", "ers"]):
+        profile["filter"] = make_chroma_filter(vendor="epson", product="epson_remote_services")
+        return profile
+
+    if any(term in text for term in ["epson print admin", "epa"]):
+        profile["filter"] = make_chroma_filter(vendor="epson", product="epson_print_admin")
+        return profile
 
     return profile
 
@@ -860,9 +887,6 @@ def compute_rerank_score(query: str, doc, query_intent: str | None = None) -> fl
 
     score = 0.0
     score += compute_generic_entity_alignment_score(query, metadata, content)
-
-    if doc_has_specific_entity_alignment(query, doc):
-        score += 5.0
 
     # Global conceptual-query boost.
     # For "qué es / what is" style questions, prefer introduction, overview,
@@ -1457,6 +1481,10 @@ def classify_query_intent(user_query: str) -> str:
     requirements_patterns = [
         "qué requerimientos", "que requerimientos",
         "qué requisitos", "que requisitos",
+        "cuáles son los requisitos", "cuales son los requisitos",
+        "cuáles son requisitos", "cuales son requisitos",
+        "requisitos para instalar", "requisitos para instalación", "requisitos para instalacion",
+        "requerimientos para instalar", "requerimientos para instalación", "requerimientos para instalacion",
         "requerimientos necesarios", "requisitos necesarios",
         "system requirements", "minimum requirements",
         "requisitos mínimos", "requisitos minimos",
@@ -1468,6 +1496,7 @@ def classify_query_intent(user_query: str) -> str:
         "qué hacer si", "que hacer si",
         "qué debo hacer si", "que debo hacer si",
         "debo hacer si",
+        "qué debería hacer si", "que deberia hacer si", "qué deberia hacer si", "que debería hacer si",
         "error", "falla", "fallando",
         "cola", "queue", "spooler",
         "bloqueada", "bloqueado", "atascada", "atascado", "atasco",
@@ -1490,9 +1519,6 @@ def classify_query_intent(user_query: str) -> str:
         "cuándo debo escalar", "cuando debo escalar",
     ]
 
-    # Architecture requires an explicit architecture/integration/flow wording.
-    # Do not classify a product name such as "GAV Tracking" as architecture by itself;
-    # "¿Qué es GAV Tracking?" must remain conceptual.
     architecture_patterns = [
         "arquitectura", "integración", "integracion",
         "diagrama", "flujo", "modelo de seguridad", "arquitectura de seguridad",
@@ -1506,10 +1532,16 @@ def classify_query_intent(user_query: str) -> str:
         "cómo habilitar", "como habilitar",
         "cómo crear", "como crear",
         "cómo realizar", "como realizar",
+        "cómo reinicio", "como reinicio",
+        "cómo reiniciar", "como reiniciar",
+        "reinicio manualmente", "reiniciar manualmente", "reiniciar el servicio", "reiniciar servicio",
         "procedimiento", "pasos", "trámite", "tramite",
         "cómo consultar", "como consultar",
+        "cómo puedo comprobar", "como puedo comprobar",
+        "comprobar y asignar",
         "consultar y asignar",
         "consultar pin",
+        "comprobar pin",
         "asignar pin",
         "crear pin",
         "modificar pin",
@@ -1517,6 +1549,7 @@ def classify_query_intent(user_query: str) -> str:
         "visualizar pin",
         "buscar usuario",
         "gestionar pin",
+        "cómo uso", "como uso", "cómo usar", "como usar",
     ]
 
     conceptual_patterns = [
@@ -1524,11 +1557,11 @@ def classify_query_intent(user_query: str) -> str:
         "para qué sirve", "para que sirve",
         "cómo funciona", "como funciona",
         "qué hace", "que hace",
+        "cuáles son los componentes", "cuales son los componentes",
+        "componentes de",
         "explica", "diferencia entre",
     ]
 
-    # Order matters. Explicit support workflows first, then conceptual before
-    # architecture to avoid product-name false positives.
     if any(p in text for p in warranty_patterns):
         return "warranty"
 
@@ -1800,8 +1833,6 @@ def retrieve_context(query: str, top_k: int = 4):
         doc for doc in ranked_docs
         if not is_tangential_source_for_query(query, doc)
     ]
-
-    ranked_docs = filter_docs_by_specific_entity_alignment(query, ranked_docs)
     
     ranked_docs_without_low_info = [
         doc for doc in ranked_docs
@@ -3446,6 +3477,55 @@ ERROR_PATTERNS = ["error", "falla", "bloqueada", "no responde", "no funciona", "
 VERSION_RE = re.compile(r"(?:versi[oó]n|version)\s*[:\-]?\s*([A-Za-z0-9\.\-_]+)", re.IGNORECASE)
 
 
+
+
+def extract_printer_data_snippet(user_message: str) -> str | None:
+    """
+    Extract a concise printer/device fragment from free-form escalation text.
+    Avoids storing the entire user message as printer_data.
+    """
+    patterns = [
+        r"\bHP\s+[A-Za-z0-9\-]+(?:\s+de\s+la\s+sede\s+[A-Za-zÁÉÍÓÚáéíóúÑñ0-9\s\-]+)?",
+        r"\b(?:LaserJet|OfficeJet|DeskJet|PageWide)\s+[A-Za-z0-9\-]+(?:\s+[^.,;]*)?",
+        r"\b\d{1,3}(?:\.\d{1,3}){3}\b",
+    ]
+
+    for pattern in patterns:
+        match = re.search(pattern, user_message, flags=re.IGNORECASE)
+        if match:
+            return " ".join(match.group(0).strip().split())
+
+    if looks_like_specific_printer_data(user_message) and len(user_message) <= 120:
+        return user_message.strip()
+
+    return None
+
+
+def extract_contract_location_snippet(user_message: str) -> str | None:
+    """
+    Extract a concise client/contract/location fragment from free-form text.
+    Avoids storing the entire user message as contract_client_location.
+    """
+    text = user_message.strip()
+
+    explicit_patterns = [
+        r"(?:cliente|contrato)\s*[:\-]?\s*([A-Za-zÁÉÍÓÚáéíóúÑñ0-9\s\-_.]+?)(?:[.,;]|$)",
+        r"(?:sede|ubicaci[oó]n|oficina)\s*[:\-]?\s*([A-Za-zÁÉÍÓÚáéíóúÑñ0-9\s\-_.]+?)(?:[.,;]|$)",
+    ]
+
+    for pattern in explicit_patterns:
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if match:
+            value = match.group(1).strip()
+            prefix = re.search(r"cliente|contrato|sede|ubicaci[oó]n|oficina", match.group(0), flags=re.IGNORECASE)
+            if prefix:
+                label = prefix.group(0).strip()
+                return " ".join(f"{label} {value}".split())
+            return " ".join(value.split())
+
+    return None
+
+
 def extract_incident_fields(user_message: str):
     text = user_message.lower()
     extracted = {
@@ -3492,21 +3572,35 @@ def extract_incident_fields(user_message: str):
         extracted["actions_attempted"] = list(dict.fromkeys(detected_actions))
 
     if any(pattern in text for pattern in ERROR_PATTERNS) or any(
-        expr in text for expr in ["no puedo", "no deja", "no me permite", "no aparece", "no logro", "no carga", "se detiene", "se cae", "no registra", "no agrega", "no detecta", "no encuentra"]
+        expr in text for expr in [
+            "no puedo", "no deja", "no me permite", "no aparece", "no aparecen",
+            "no logro", "no carga", "se detiene", "se cae", "no registra",
+            "no agrega", "no detecta", "no encuentra",
+        ]
     ):
         extracted["error_description"] = user_message.strip()
 
-    if looks_like_specific_printer_data(user_message):
-        extracted["printer_data"] = user_message.strip()
+    printer_snippet = extract_printer_data_snippet(user_message)
+    if printer_snippet:
+        extracted["printer_data"] = printer_snippet
 
-    if any(term in text for term in ["cliente", "contrato", "sede", "ubicación", "ubicacion", "site", "oficina"]):
-        extracted["contract_client_location"] = user_message.strip()
+    location_snippet = extract_contract_location_snippet(user_message)
+    if location_snippet:
+        extracted["contract_client_location"] = location_snippet
 
     if any(term in text for term in ["captura", "screenshot", "pantallazo", "evidencia", "log", "adjunto", "mensaje de error"]):
-        extracted["evidence"] = user_message.strip()
+        # Keep full message only when it is mostly about evidence; otherwise this
+        # will be asked as a pending field later.
+        if len(user_message) <= 160:
+            extracted["evidence"] = user_message.strip()
 
-    if any(term in text for term in ["afecta", "varios usuarios", "muchos usuarios", "un usuario", "todos los usuarios", "dispositivo crítico", "dispositivo critico", "indisponibilidad", "intermitente", "no imprime", "operación detenida", "operacion detenida", "masivo"]):
-        extracted["impact_type"] = user_message.strip()
+    if any(term in text for term in [
+        "afecta", "varios usuarios", "muchos usuarios", "un usuario", "todos los usuarios",
+        "dispositivo crítico", "dispositivo critico", "indisponibilidad", "intermitente",
+        "operación detenida", "operacion detenida", "masivo", "masiva",
+    ]):
+        if len(user_message) <= 160:
+            extracted["impact_type"] = user_message.strip()
 
     return extracted
 
@@ -3543,18 +3637,11 @@ def build_incident_summary(state: IncidentState) -> str:
 - Evidencia: {state.evidence or 'No especificada'}
 - Tipo de afectación: {state.impact_type or 'No especificado'}""".strip()
 
+
 def process_escalation_turn(user_message: str, state: IncidentState, session_state: ChatSessionState):
     pending_field = getattr(session_state, "pending_incident_field", None)
     user_text = user_message.strip()
 
-    # -------------------------------------------------------------------------
-    # If the assistant asked for a specific field, map the user's answer
-    # primarily to that exact field.
-    #
-    # This prevents a response like "Impresora E52645, sede principal" from
-    # filling both printer_data and contract_client_location when the pending
-    # question was only asking for printer_data.
-    # -------------------------------------------------------------------------
     if pending_field:
         if field_accepts_no_value(pending_field) and is_no_value_answer(user_message):
             apply_no_value_to_field(state, pending_field)
@@ -3598,30 +3685,23 @@ def process_escalation_turn(user_message: str, state: IncidentState, session_sta
             state.contract_client_location = user_text
 
         elif pending_field == "evidence":
-            state.evidence = user_text
+            state.evidence = "No adjunta evidencia" if is_no_value_answer(user_message) else user_text
 
         elif pending_field == "impact_type":
             state.impact_type = user_text
 
-        # Clear the pending field after processing the answer.
         session_state.pending_incident_field = None
 
     else:
-        # ---------------------------------------------------------------------
-        # No pending field means this is a free-form escalation message.
-        # In this case, extracting multiple fields from the same message is valid.
-        # ---------------------------------------------------------------------
         extracted = extract_incident_fields(user_message)
         update_incident_state(state, extracted)
 
-    # -------------------------------------------------------------------------
-    # Decide next step.
-    # -------------------------------------------------------------------------
     missing_fields = get_missing_incident_fields(state)
 
     if missing_fields:
         next_field = missing_fields[0]
         session_state.pending_incident_field = next_field
+        setattr(session_state, "escalation_summary_ready", False)
 
         return {
             "status": "collecting_information",
@@ -3632,6 +3712,7 @@ def process_escalation_turn(user_message: str, state: IncidentState, session_sta
         }
 
     session_state.pending_incident_field = None
+    setattr(session_state, "escalation_summary_ready", True)
 
     return {
         "status": "ready_for_summary",
@@ -3968,10 +4049,27 @@ def finalize_escalation_case(session_state: ChatSessionState):
 # -----------------------------------------------------------------------------
 # Routing
 # -----------------------------------------------------------------------------
+
 def handle_escalation_message(user_message: str, session_state: ChatSessionState):
     session_state = ensure_session_state_integrity(session_state)
     session_state.mode = "escalation"
     session_state.incident_state.escalation_requested = True
+
+    normalized_message = normalize_user_reply(user_message)
+
+    # If the case is already ready for summary, do not regenerate the summary
+    # for acknowledgements like "ok" or "salir". Keep escalation mode active so
+    # the sidebar export button remains available.
+    if getattr(session_state, "escalation_summary_ready", False) and not getattr(session_state, "pending_incident_field", None):
+        if normalized_message in {"ok", "listo", "gracias", "salir", "finalizar", "terminar"}:
+            bot_message = (
+                "El resumen del caso ya está listo para exportar. "
+                "Puedes usar el botón de la barra lateral 'Finalizar y exportar caso' "
+                "o iniciar una nueva conversación si deseas consultar otro tema."
+            )
+            session_state.memory.add_turn(user_message, bot_message)
+            session_state.log_turn(user_message, bot_message, "escalation_ready_ack")
+            return bot_message
 
     result = process_escalation_turn(user_message, session_state.incident_state, session_state)
     if result["status"] == "collecting_information":
@@ -3982,6 +4080,7 @@ def handle_escalation_message(user_message: str, session_state: ChatSessionState
         return bot_message
 
     session_state.pending_incident_field = None
+    setattr(session_state, "escalation_summary_ready", True)
     summary = result["summary"]
     bot_message = (
         "He reunido la información principal del caso. "
