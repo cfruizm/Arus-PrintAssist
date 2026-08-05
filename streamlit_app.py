@@ -46,7 +46,6 @@ try:
         from app.backend import debug_metadata_search
     except Exception:
         debug_metadata_search = None
-        summarize_turn_observability = None
 
 except Exception as e:
     BACKEND_IMPORT_ERROR = e
@@ -59,6 +58,7 @@ except Exception as e:
     get_backend_status = None
     debug_query_diagnostics = None
     debug_metadata_search = None
+    summarize_turn_observability = None
 
     def backend_is_ready() -> bool:
         return False
