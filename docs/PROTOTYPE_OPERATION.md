@@ -17,14 +17,12 @@ Arus PrintAssist es un chatbot de soporte N1 para servicios de impresión. Respo
 
 ## 3. Secrets requeridos
 
-```toml
 HF_TOKEN = "..."
 HF_MODEL = "Qwen/Qwen3.6-35B-A3B"
 HF_PROVIDER = "deepinfra"
 HF_DISABLE_THINKING = true
 HF_MAX_TOKENS = 600
-DEBUG_UI = true
-DEBUG_UI = false´´´
+DEBUG_UI = false
 
 ## 4. Qué consume créditos
 
