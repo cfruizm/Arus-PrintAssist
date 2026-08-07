@@ -2102,20 +2102,38 @@ def retrieve_context(query: str, top_k: int = 4):
     # matches are present before semantic reranking.
     add_candidates(get_anchor_docs_for_issue_packs(vectorstore, query, query_intent, metadata_filter))
 
-    for retrieval_query in retrieval_queries:
-        if metadata_filter:
-            try:
-                add_candidates(run_retrieval(retrieval_query, metadata_filter))
-            except Exception:
-                pass
-        if (not metadata_filter) or CONFIG.get("enable_filter_fallback", True) or is_papercut_query(query):
-            try:
-                add_candidates(run_retrieval(retrieval_query, None))
-            except Exception:
-                pass
-
-    if not docs:
-        return "", []
+        for retrieval_query in retrieval_queries:
+            if metadata_filter:
+                try:
+                    add_candidates(run_retrieval(retrieval_query, metadata_filter))
+                except Exception:
+                    pass
+            else:
+                try:
+                    add_candidates(run_retrieval(retrieval_query, None))
+                except Exception:
+                    pass
+    
+        # Fallback amplio solo para PaperCut.
+        # Justificación:
+        # - PaperCut NG/MF comparte documentación entre productos y la metadata puede quedar como papercut_ng
+        #   aunque la consulta diga PaperCut MF.
+        # - Para otros productos con filtro explícito, como HP SDS o GAV Tracking, el fallback amplio puede
+        #   contaminar resultados con documentos de PaperCut.
+        if (
+            not docs
+            and metadata_filter
+            and is_papercut_query(query)
+            and CONFIG.get("enable_filter_fallback", True)
+        ):
+            for retrieval_query in retrieval_queries:
+                try:
+                    add_candidates(run_retrieval(retrieval_query, None))
+                except Exception:
+                    pass
+    
+        if not docs:
+            return "", []
 
     ranked_docs_with_scores = []
 
