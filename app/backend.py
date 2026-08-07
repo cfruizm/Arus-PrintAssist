@@ -2160,7 +2160,6 @@ def doc_matches_requested_metadata(doc, metadata_filter, relaxed: bool = False) 
             return False
 
     return True
-
 def deduplicate_filter_sequence(filters: list) -> list:
     """
     Remove duplicated filters while preserving order.
@@ -2291,7 +2290,7 @@ def retrieve_context(query: str, top_k: int = 4):
 
     if not docs:
         return "", []
-
+        
     ranked_docs_with_scores = []
 
     for doc in docs:
