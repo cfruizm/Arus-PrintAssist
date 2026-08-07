@@ -4496,4 +4496,18 @@ def get_backend_status():
     except Exception as e:
         status["error"] = f"HF client error: {e}"
 
+    try:
+        counts = get_vectorstore_metadata_value_counts()
+
+        status["metadata_counts_top"] = {
+            field: sorted(
+                [(str(k), int(v)) for k, v in values.items()],
+                key=lambda item: item[1],
+                reverse=True,
+            )[:20]
+            for field, values in counts.items()
+        }
+    except Exception as exc:
+        status["metadata_counts_error"] = str(exc)
+
     return status
