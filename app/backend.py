@@ -320,15 +320,64 @@ def has_strong_entity_document_match(user_query: str, docs: list) -> bool:
 
     return strong_hits >= 3
 
+def get_best_source_value(metadata: dict) -> str:
+    """
+    Return the best available source value for both PDF and web documents.
+    Web crawled docs can have source_url or canonical_url instead of source.
+    """
+    metadata = metadata or {}
+    return str(
+        metadata.get("source")
+        or metadata.get("source_url")
+        or metadata.get("canonical_url")
+        or "unknown_source"
+    )
+
+
+def clean_source_label_text(value: str) -> str:
+    """
+    Clean source text for display.
+    This avoids showing broken HTML/JSON fragments in Fuente(s).
+    """
+    text = str(value or "").strip()
+    text = text.replace("&quot;", '"')
+    text = re.sub(r"\s+", " ", text)
+
+    # If a malformed HTML anchor reaches metadata, keep only the href URL.
+    href_match = re.search(r'href="([^"]+)"', text)
+    if href_match:
+        text = href_match.group(1)
+
+    return text.strip()
+
+
 def format_source_label(metadata: dict) -> str:
-    source = metadata.get("source", "unknown_source")
-    title = metadata.get("title", "")
-    source_name = Path(str(source)).name if "/" in str(source) else str(source)
+    """
+    Build a readable source label for PDF and web sources.
+
+    For PDFs:
+    - show file name and page when available.
+
+    For web:
+    - show full URL because Path(url).name loses important context.
+    """
+    metadata = metadata or {}
+
+    title = str(metadata.get("title", "") or "").strip()
+    source = clean_source_label_text(get_best_source_value(metadata))
     page = metadata.get("page_label", metadata.get("page", None))
+
+    is_web = source.startswith("http://") or source.startswith("https://")
+    source_name = source if is_web else (Path(source).name if "/" in source else source)
 
     if page is None:
         return f"{title} | {source_name}" if title else source_name
-    return f"{title} | {source_name} | page {page}" if title else f"{source_name} | page {page}"
+
+    return (
+        f"{title} | {source_name} | page {page}"
+        if title
+        else f"{source_name} | page {page}"
+    )
 
 def compact_page_list(pages: list[int]) -> str:
     """
@@ -356,8 +405,15 @@ def compact_page_list(pages: list[int]) -> str:
 
     return "pages " + ", ".join(str(page) for page in pages)
 
-
 def build_real_source_labels(docs: list) -> list:
+    """
+    Build real source labels for final citation.
+
+    Important fix:
+    Web documents usually do not have page/page_label.
+    The previous version only created a source group when page was present,
+    so web sources were silently dropped and real_source_labels became empty.
+    """
     grouped: dict[tuple[str, str], dict[str, list]] = defaultdict(
         lambda: {"numeric_pages": [], "other_pages": []}
     )
@@ -365,12 +421,19 @@ def build_real_source_labels(docs: list) -> list:
     for doc in docs:
         md = doc.metadata or {}
 
-        title = md.get("title", "")
-        source = md.get("source", "unknown_source")
-        source_name = Path(str(source)).name if "/" in str(source) else str(source)
+        title = str(md.get("title", "") or "").strip()
+        source = clean_source_label_text(get_best_source_value(md))
+
+        is_web = source.startswith("http://") or source.startswith("https://")
+        source_name = source if is_web else (Path(source).name if "/" in source else source)
 
         page = md.get("page_label", md.get("page", None))
         key = (title, source_name)
+
+        # Critical line:
+        # Create the group even when there is no page.
+        # This allows web sources to appear in Fuente(s).
+        _ = grouped[key]
 
         if page is not None:
             try:
