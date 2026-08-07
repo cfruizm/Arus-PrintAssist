@@ -2251,23 +2251,48 @@ def retrieve_context(query: str, top_k: int = 4):
     
     ranked_docs = filtered_ranked_docs
     ranked_docs = deduplicate_ranked_docs(ranked_docs)
-    
+
     ranked_docs = [
         doc for doc in ranked_docs
         if not is_tangential_source_for_query(query, doc)
     ]
-    
+
     ranked_docs_without_low_info = [
         doc for doc in ranked_docs
         if not is_low_information_chunk(doc)
     ]
-    
+
     # Prefer useful chunks, but avoid emptying the context completely.
     if ranked_docs_without_low_info:
         ranked_docs = ranked_docs_without_low_info
-    
+
     if not ranked_docs:
         ranked_docs = deduplicate_ranked_docs(filtered_ranked_docs)
+
+    # Safe fallback for explicit metadata-filtered queries.
+    #
+    # Why:
+    # HP SDS, GAV, HP WJA and internal PDFs can have lower semantic scores than
+    # PaperCut web articles. If the query had a safe metadata filter and we already
+    # restricted retrieval to that product/vendor family, it is safer to keep the
+    # best filtered candidates than to return no documents.
+    #
+    # This does NOT do broad retrieval and therefore does not reintroduce PaperCut
+    # contamination into HP/GAV queries.
+    if not ranked_docs and metadata_filter and ranked_docs_with_scores:
+        ranked_docs = [
+            doc
+            for doc, score in ranked_docs_with_scores[:k_final]
+        ]
+
+    # Second safeguard:
+    # If low-information/tangential filtering removed everything after a valid
+    # metadata-filtered retrieval, keep the best filtered candidates.
+    if metadata_filter and not ranked_docs and ranked_docs_with_scores:
+        ranked_docs = [
+            doc
+            for doc, score in ranked_docs_with_scores[:k_final]
+        ]
     
     # Source diversity: avoid sending 4 chunks from the same PDF when possible.
     max_docs_per_source = CONFIG.get("max_docs_per_source", 2)
