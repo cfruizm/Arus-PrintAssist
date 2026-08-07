@@ -2063,6 +2063,94 @@ def is_low_information_chunk(doc) -> bool:
 
     return False
 
+def extract_filter_clauses(metadata_filter) -> dict:
+    """
+    Convert a Chroma filter into a simple dict when possible.
+
+    Supports:
+    - {"vendor": "hp"}
+    - {"$and": [{"product": "sds"}, {"vendor": "hp"}, {"component": "monitor"}]}
+    """
+    if not metadata_filter:
+        return {}
+
+    if "$and" in metadata_filter and isinstance(metadata_filter["$and"], list):
+        merged = {}
+        for clause in metadata_filter["$and"]:
+            if isinstance(clause, dict):
+                merged.update(clause)
+        return merged
+
+    if isinstance(metadata_filter, dict):
+        return dict(metadata_filter)
+
+    return {}
+
+
+def build_controlled_filter_sequence(metadata_filter, query: str) -> list:
+    """
+    Build safe fallback filters without broad contamination.
+
+    For explicit product queries:
+    1. original filter
+    2. vendor + product
+    3. product only
+    4. vendor only
+
+    For PaperCut:
+    - keep vendor-level behavior because NG/MF docs are shared.
+    """
+    if not metadata_filter:
+        return [None]
+
+    clauses = extract_filter_clauses(metadata_filter)
+
+    vendor = clauses.get("vendor")
+    product = clauses.get("product")
+    component = clauses.get("component")
+
+    filters = []
+
+    # 1. Original filter first
+    filters.append(metadata_filter)
+
+    # PaperCut special case already uses vendor-level filtering.
+    if is_papercut_query(query):
+        if vendor:
+            filters.append({"vendor": vendor})
+        return deduplicate_filter_sequence(filters)
+
+    # 2. vendor + product, dropping component
+    if vendor and product:
+        filters.append(make_chroma_filter(vendor=vendor, product=product))
+
+    # 3. product only
+    if product:
+        filters.append({"product": product})
+
+    # 4. vendor only
+    if vendor:
+        filters.append({"vendor": vendor})
+
+    return deduplicate_filter_sequence(filters)
+
+
+def deduplicate_filter_sequence(filters: list) -> list:
+    """
+    Remove duplicated filters while preserving order.
+    """
+    unique = []
+    seen = set()
+
+    for item in filters:
+        key = json.dumps(item, sort_keys=True, ensure_ascii=False) if item is not None else "None"
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(item)
+
+    return unique
+    
 def retrieve_context(query: str, top_k: int = 4):
     vectorstore = get_vectorstore()
     profile = detect_query_profile(query)
@@ -2102,30 +2190,23 @@ def retrieve_context(query: str, top_k: int = 4):
     # matches are present before semantic reranking.
     add_candidates(get_anchor_docs_for_issue_packs(vectorstore, query, query_intent, metadata_filter))
 
-    for retrieval_query in retrieval_queries:
-        if metadata_filter:
+    filter_sequence = build_controlled_filter_sequence(metadata_filter, query)
+
+    for filter_value in filter_sequence:
+        for retrieval_query in retrieval_queries:
             try:
-                add_candidates(run_retrieval(retrieval_query, metadata_filter))
-            except Exception:
-                pass
-        else:
-            try:
-                add_candidates(run_retrieval(retrieval_query, None))
+                add_candidates(run_retrieval(retrieval_query, filter_value))
             except Exception:
                 pass
 
-    # Fallback amplio solo para PaperCut.
-    # Justificación:
-    # - PaperCut NG/MF comparte documentación entre productos y la metadata puede quedar como papercut_ng
-    #   aunque la consulta diga PaperCut MF.
-    # - Para otros productos con filtro explícito, como HP SDS o GAV Tracking, el fallback amplio puede
-    #   contaminar resultados con documentos de PaperCut.
-    if (
-        not docs
-        and metadata_filter
-        and is_papercut_query(query)
-        and CONFIG.get("enable_filter_fallback", True)
-    ):
+        # If we already found candidates, stop relaxing filters.
+        # This prevents broader filters from contaminating a good result set.
+        if docs:
+            break
+
+    # Broad fallback is allowed only when there was no explicit metadata filter.
+    # This avoids contaminating HP SDS / GAV / DA Arus queries with PaperCut web docs.
+    if not docs and not metadata_filter:
         for retrieval_query in retrieval_queries:
             try:
                 add_candidates(run_retrieval(retrieval_query, None))
@@ -2134,7 +2215,7 @@ def retrieve_context(query: str, top_k: int = 4):
 
     if not docs:
         return "", []
-
+        
     ranked_docs_with_scores = []
 
     for doc in docs:
