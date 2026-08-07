@@ -18,6 +18,7 @@ except Exception:
     HfHubHTTPError = Exception
 from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_core.documents import Document
 
 from app.config import CONFIG, LLM_CONFIG, RUNTIME_DIR
 from app.session_state import ChatSessionState, RollingConversationMemory
@@ -658,8 +659,12 @@ def compute_generic_entity_alignment_score(user_query: str, metadata: dict, cont
 
 
 # -----------------------------------------------------------------------------
-# vNext transversal retrieval helpers - V4
+# vNext transversal retrieval helpers - V5
 # -----------------------------------------------------------------------------
+# This layer is intentionally issue-oriented instead of product-question-specific.
+# It improves retrieval for recurring support symptoms through configurable packs.
+
+BACKEND_VNEXT_MARKER = "v5_transversal_issue_packs_anchor_retrieval"
 
 ISSUE_RETRIEVAL_PACKS = {
     "missing_print_jobs": {
@@ -679,47 +684,53 @@ ISSUE_RETRIEVAL_PACKS = {
             "print provider release station",
         ],
         "boost_identity": {
-            "missingordisappearingprintjobs": 120.0,
-            "troubleshooting missing or disappearing print jobs": 100.0,
-            "printjobsnotheld": 60.0,
-            "printingnotbeingtracked": 55.0,
-            "temporarilyhiddenmessage": 35.0,
+            "MissingOrDisappearingPrintJobs": 120.0,
+            "Troubleshooting Missing or Disappearing Print Jobs": 100.0,
+            "PrintJobsNotHeld": 60.0,
+            "PrintingNotBeingTracked": 55.0,
+            "TemporarilyHiddenMessage": 35.0,
             "find-me-printing-troubleshooting": 25.0,
         },
         "boost_content": {
             "where have my print jobs gone": 12.0,
             "print jobs not held": 8.0,
-            "not being tracked by papercut": 8.0,
+            "not being tracked by PaperCut": 8.0,
             "temporarily hidden": 6.0,
         },
         "penalize_identity": {
-            "amalgamateprinterqueues": -35.0,
-            "hidedocumentnameonwindowsprinters": -35.0,
-            "downloadembeddedmanuals": -35.0,
-            "easysecurecernerprintingwithpapercut": -35.0,
-            "windowstype4printdrivers": -35.0,
-            "howtorenameaprinter": -35.0,
-            "deploymobilityqueuesbygroup": -35.0,
-            "preventusersfromprintingjobsviamobility": -35.0,
-            "printarchivinglpr": -35.0,
-            "migratingngtonewserver": -35.0,
-            "howtomigratewindowsprintqueues": -35.0,
-            "batchdeletingprinters": -35.0,
-            "printerfailover": -35.0,
-            "fixingprintspoolercrashes": -35.0,
-            "activeuserclients": -35.0,
-            "doineedaprintserver": -35.0,
-            "webprintstatusmessages": -35.0,
-            "changingservernameip": -35.0,
+            "AmalgamatePrinterQueues": -35.0,
+            "HideDocumentNameOnWindowsPrinters": -35.0,
+            "DownloadEmbeddedManuals": -35.0,
+            "Easy-secure-cerner-printing-with-papercut": -35.0,
+            "WindowsType4PrintDrivers": -35.0,
+            "HowToRenameAPrinter": -35.0,
+            "PurchasingNewPrinters": -35.0,
+            "managing-cloud-hosted-epic-print-jobs-with-papercut-mf": -35.0,
+            "PrintToFile": -35.0,
+            "WindowsSlowPrinting": -35.0,
+            "YouAreChargingToARestrictedAccount": -35.0,
+            "QueueRedirectionLinuxExample": -35.0,
+            "DeployMobilityQueuesByGroup": -35.0,
+            "PreventUsersFromPrintingJobsViaMobility": -35.0,
+            "PrintArchivingLPR": -35.0,
+            "MigratingNGToNewServer": -35.0,
+            "HowToMigrateWindowsPrintQueues": -35.0,
+            "BatchDeletingPrinters": -35.0,
+            "PrinterFailover": -35.0,
+            "FixingPrintSpoolerCrashes": -35.0,
+            "ActiveUserClients": -35.0,
+            "DoINeedAPrintServer": -35.0,
+            "WebPrintStatusMessages": -35.0,
+            "ChangingServerNameIP": -35.0,
         },
     },
     "held_or_release_jobs": {
         "intent_any": ["troubleshooting", "procedural"],
         "query_any": ["retenid", "hold", "held", "release", "liberación", "liberacion", "pendientes de liber", "jobs pending release", "not held"],
         "expansions": ["print jobs not held hold release queue", "jobs pending release release station", "temporarily hidden message print provider", "configure how long jobs are held", "held jobs server performance"],
-        "boost_identity": {"printjobsnotheld": 70.0, "changingjobtimeoutonreleasestation": 50.0, "temporarilyhiddenmessage": 45.0, "troubleshootingserverperformanceissues": 25.0, "device-mf-copier-integration-release": 20.0},
+        "boost_identity": {"PrintJobsNotHeld": 70.0, "ChangingJobTimeoutOnReleaseStation": 50.0, "TemporarilyHiddenMessage": 45.0, "TroubleshootingServerPerformanceIssues": 25.0, "device-mf-copier-integration-release": 20.0},
         "boost_content": {"hold/release jobs": 10.0, "jobs pending release": 10.0, "release station": 8.0, "print provider": 5.0},
-        "penalize_identity": {"printarchivinglpr": -20.0, "migratingngtonewserver": -16.0},
+        "penalize_identity": {"PrintArchivingLPR": -20.0, "MigratingNGToNewServer": -16.0},
     },
     "find_me_printing": {
         "intent_any": ["troubleshooting", "procedural", "conceptual"],
@@ -733,7 +744,7 @@ ISSUE_RETRIEVAL_PACKS = {
         "intent_any": ["troubleshooting"],
         "query_any": ["cola", "queue", "spooler", "bloqueada", "atascada", "stuck"],
         "expansions": ["print queue stuck", "jobs stuck with status of printing", "windows print spooler stability", "print queue driver troubleshooting", "printer queue not printing"],
-        "boost_identity": {"jobsstuckwithstatusofprinting": 60.0, "fixingprintspoolercrashes": 35.0, "basicprintingtests": 20.0, "find-me-printing-troubleshooting": 16.0},
+        "boost_identity": {"JobsStuckWithStatusOfPrinting": 60.0, "FixingPrintSpoolerCrashes": 35.0, "BasicPrintingTests": 20.0, "find-me-printing-troubleshooting": 16.0},
         "boost_content": {"print queue": 6.0, "spooler": 6.0, "stuck": 5.0, "driver": 3.0},
         "penalize_identity": {},
     },
@@ -811,9 +822,7 @@ def compute_issue_pack_rerank_score(query: str, doc, query_intent: str | None = 
     normalized_identity = normalize_for_match(identity)
     content = str(doc.page_content or "").lower()
     score = 0.0
-    matching_packs = get_matching_issue_packs(query, query_intent)
-
-    for _, pack in matching_packs:
+    for _, pack in get_matching_issue_packs(query, query_intent):
         for term, boost in (pack.get("boost_identity") or {}).items():
             if normalize_for_match(term) in normalized_identity or str(term).lower() in identity:
                 score += float(boost)
@@ -823,7 +832,6 @@ def compute_issue_pack_rerank_score(query: str, doc, query_intent: str | None = 
         for term, penalty in (pack.get("penalize_identity") or {}).items():
             if normalize_for_match(term) in normalized_identity:
                 score += float(penalty)
-
     text = str(query or "").lower()
     for rule in TANGENTIAL_SOURCE_RULES:
         query_absent = not any(term in text for term in rule.get("query_absent_any", []))
@@ -831,6 +839,51 @@ def compute_issue_pack_rerank_score(query: str, doc, query_intent: str | None = 
         if query_absent and source_has:
             score += float(rule.get("penalty", 0.0))
     return score
+
+
+def get_anchor_docs_for_issue_packs(vectorstore, query: str, query_intent: str | None = None, metadata_filter=None) -> list:
+    """Deterministically add exact title/source matches from issue packs.
+
+    Vector similarity can miss the exact KB article due cross-lingual wording.
+    This scan is bounded by metadata filter/vendor and only adds documents whose
+    source/title match configured issue-pack anchors. It is transversal because
+    anchors live in ISSUE_RETRIEVAL_PACKS, not in retrieval code.
+    """
+    query_intent = query_intent or classify_query_intent(query)
+    packs = get_matching_issue_packs(query, query_intent)
+    if not packs:
+        return []
+    anchor_terms = []
+    for _, pack in packs:
+        anchor_terms.extend((pack.get("boost_identity") or {}).keys())
+    if not anchor_terms:
+        return []
+
+    where_filter = metadata_filter if metadata_filter else None
+    try:
+        raw = vectorstore._collection.get(where=where_filter, include=["documents", "metadatas"], limit=20000)
+    except Exception:
+        try:
+            raw = vectorstore._collection.get(include=["documents", "metadatas"], limit=20000)
+        except Exception:
+            return []
+
+    documents = raw.get("documents") or []
+    metadatas = raw.get("metadatas") or []
+    anchor_docs = []
+    seen = set()
+    normalized_terms = [normalize_for_match(t) for t in anchor_terms]
+    for content, metadata in zip(documents, metadatas):
+        metadata = metadata or {}
+        identity = normalize_for_match(get_doc_source_identity(metadata))
+        if not any(term in identity for term in normalized_terms):
+            continue
+        key = metadata.get("source") or metadata.get("source_url") or metadata.get("canonical_url") or metadata.get("title")
+        if key in seen:
+            continue
+        seen.add(key)
+        anchor_docs.append(Document(page_content=content or "", metadata=metadata))
+    return anchor_docs[:25]
 
 def detect_query_profile(query: str):
     """
@@ -1981,6 +2034,10 @@ def retrieve_context(query: str, top_k: int = 4):
                 continue
             seen_candidate_keys.add(key)
             docs.append(candidate)
+
+    # Deterministic anchor candidates first. These guarantee exact title/source
+    # matches are present before semantic reranking.
+    add_candidates(get_anchor_docs_for_issue_packs(vectorstore, query, query_intent, metadata_filter))
 
     for retrieval_query in retrieval_queries:
         if metadata_filter:
@@ -4333,6 +4390,7 @@ def get_backend_status():
         "llm_max_tokens_source": get_effective_max_tokens_source(),
         "llm_disable_thinking": get_effective_disable_thinking(),
         "error": None,
+        "backend_vnext_marker": globals().get("BACKEND_VNEXT_MARKER", "not_set"),
     }
 
     try:
