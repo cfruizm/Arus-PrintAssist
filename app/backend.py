@@ -320,15 +320,64 @@ def has_strong_entity_document_match(user_query: str, docs: list) -> bool:
 
     return strong_hits >= 3
 
+def get_best_source_value(metadata: dict) -> str:
+    """
+    Return the best available source value for both PDF and web documents.
+    Web crawled docs can have source_url or canonical_url instead of source.
+    """
+    metadata = metadata or {}
+    return str(
+        metadata.get("source")
+        or metadata.get("source_url")
+        or metadata.get("canonical_url")
+        or "unknown_source"
+    )
+
+
+def clean_source_label_text(value: str) -> str:
+    """
+    Clean source text for display.
+    This avoids showing broken HTML/JSON fragments in Fuente(s).
+    """
+    text = str(value or "").strip()
+    text = text.replace("&quot;", '"')
+    text = re.sub(r"\s+", " ", text)
+
+    # If a malformed HTML anchor reaches metadata, keep only the href URL.
+    href_match = re.search(r'href="([^"]+)"', text)
+    if href_match:
+        text = href_match.group(1)
+
+    return text.strip()
+
+
 def format_source_label(metadata: dict) -> str:
-    source = metadata.get("source", "unknown_source")
-    title = metadata.get("title", "")
-    source_name = Path(str(source)).name if "/" in str(source) else str(source)
+    """
+    Build a readable source label for PDF and web sources.
+
+    For PDFs:
+    - show file name and page when available.
+
+    For web:
+    - show full URL because Path(url).name loses important context.
+    """
+    metadata = metadata or {}
+
+    title = str(metadata.get("title", "") or "").strip()
+    source = clean_source_label_text(get_best_source_value(metadata))
     page = metadata.get("page_label", metadata.get("page", None))
+
+    is_web = source.startswith("http://") or source.startswith("https://")
+    source_name = source if is_web else (Path(source).name if "/" in source else source)
 
     if page is None:
         return f"{title} | {source_name}" if title else source_name
-    return f"{title} | {source_name} | page {page}" if title else f"{source_name} | page {page}"
+
+    return (
+        f"{title} | {source_name} | page {page}"
+        if title
+        else f"{source_name} | page {page}"
+    )
 
 def compact_page_list(pages: list[int]) -> str:
     """
@@ -356,8 +405,15 @@ def compact_page_list(pages: list[int]) -> str:
 
     return "pages " + ", ".join(str(page) for page in pages)
 
-
 def build_real_source_labels(docs: list) -> list:
+    """
+    Build real source labels for final citation.
+
+    Important fix:
+    Web documents usually do not have page/page_label.
+    The previous version only created a source group when page was present,
+    so web sources were silently dropped and real_source_labels became empty.
+    """
     grouped: dict[tuple[str, str], dict[str, list]] = defaultdict(
         lambda: {"numeric_pages": [], "other_pages": []}
     )
@@ -365,12 +421,19 @@ def build_real_source_labels(docs: list) -> list:
     for doc in docs:
         md = doc.metadata or {}
 
-        title = md.get("title", "")
-        source = md.get("source", "unknown_source")
-        source_name = Path(str(source)).name if "/" in str(source) else str(source)
+        title = str(md.get("title", "") or "").strip()
+        source = clean_source_label_text(get_best_source_value(md))
+
+        is_web = source.startswith("http://") or source.startswith("https://")
+        source_name = source if is_web else (Path(source).name if "/" in source else source)
 
         page = md.get("page_label", md.get("page", None))
         key = (title, source_name)
+
+        # Critical line:
+        # Create the group even when there is no page.
+        # This allows web sources to appear in Fuente(s).
+        _ = grouped[key]
 
         if page is not None:
             try:
@@ -664,7 +727,7 @@ def compute_generic_entity_alignment_score(user_query: str, metadata: dict, cont
 # This layer is intentionally issue-oriented instead of product-question-specific.
 # It improves retrieval for recurring support symptoms through configurable packs.
 
-BACKEND_VNEXT_MARKER = "v5_transversal_issue_packs_anchor_retrieval"
+BACKEND_VNEXT_MARKER = "v6_transversal_single_filter_controlled_fallback"
 
 ISSUE_RETRIEVAL_PACKS = {
     "missing_print_jobs": {
@@ -2000,6 +2063,120 @@ def is_low_information_chunk(doc) -> bool:
 
     return False
 
+def extract_filter_clauses(metadata_filter) -> dict:
+    """
+    Convert a Chroma filter into a simple dict when possible.
+
+    Supports:
+    - {"vendor": "hp"}
+    - {"$and": [{"product": "sds"}, {"vendor": "hp"}, {"component": "monitor"}]}
+    """
+    if not metadata_filter:
+        return {}
+
+    if "$and" in metadata_filter and isinstance(metadata_filter["$and"], list):
+        merged = {}
+        for clause in metadata_filter["$and"]:
+            if isinstance(clause, dict):
+                merged.update(clause)
+        return merged
+
+    if isinstance(metadata_filter, dict):
+        return dict(metadata_filter)
+
+    return {}
+
+
+def build_controlled_filter_sequence(metadata_filter, query: str) -> list:
+    """
+    Build a Chroma-compatible, contamination-safe filter sequence.
+
+    Important:
+    Some deployed Chroma/LangChain combinations fail on compound ``$and``
+    filters even though metadata counts are available. Those exceptions were
+    previously swallowed, which produced zero results for HP SDS and GAV.
+
+    Strategy:
+    - PaperCut: vendor-only because NG/MF documentation is shared.
+    - Other explicit products: product-only first. Product values in this
+      vectorstore are stable and unique enough (sds, gav_tracking, etc.).
+    - Vendor-only is a controlled final fallback.
+    - Compound filters are not sent to Chroma; exact vendor/component alignment
+      is checked after retrieval in Python.
+    """
+    if not metadata_filter:
+        return [None]
+
+    clauses = extract_filter_clauses(metadata_filter)
+    vendor = clauses.get("vendor")
+    product = clauses.get("product")
+    component = clauses.get("component")
+
+    filters = []
+
+    if is_papercut_query(query):
+        if vendor:
+            filters.append({"vendor": vendor})
+        return deduplicate_filter_sequence(filters or [None])
+
+    # Prefer stable product metadata. This avoids compound-filter compatibility
+    # issues and prevents cross-product contamination.
+    if product:
+        filters.append({"product": product})
+
+    # Component-only can be useful when no product hint exists.
+    if component and not product:
+        filters.append({"component": component})
+
+    # Controlled final fallback inside the same vendor family.
+    if vendor:
+        filters.append({"vendor": vendor})
+
+    return deduplicate_filter_sequence(filters or [None])
+
+
+def doc_matches_requested_metadata(doc, metadata_filter, relaxed: bool = False) -> bool:
+    """Validate retrieved metadata in Python after a single-clause Chroma query.
+
+    In strict mode, product/vendor/component present in the requested filter must
+    match. In relaxed mode, product and vendor remain mandatory while component
+    may be omitted because requirement documents can use component=requirements
+    instead of component=monitor even when the user asks about SDS Monitor.
+    """
+    if not metadata_filter:
+        return True
+
+    requested = extract_filter_clauses(metadata_filter)
+    metadata = doc.metadata or {}
+
+    for field in ("vendor", "product"):
+        expected = requested.get(field)
+        if expected is not None and str(metadata.get(field, "")).lower() != str(expected).lower():
+            return False
+
+    expected_component = requested.get("component")
+    if expected_component is not None and not relaxed:
+        if str(metadata.get("component", "")).lower() != str(expected_component).lower():
+            return False
+
+    return True
+
+def deduplicate_filter_sequence(filters: list) -> list:
+    """
+    Remove duplicated filters while preserving order.
+    """
+    unique = []
+    seen = set()
+
+    for item in filters:
+        key = json.dumps(item, sort_keys=True, ensure_ascii=False) if item is not None else "None"
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(item)
+
+    return unique
+    
 def retrieve_context(query: str, top_k: int = 4):
     vectorstore = get_vectorstore()
     profile = detect_query_profile(query)
@@ -2008,6 +2185,14 @@ def retrieve_context(query: str, top_k: int = 4):
     k_initial = profile.get("k_initial", top_k)
     k_final = profile.get("k_final", top_k)
     metadata_filter = profile.get("filter")
+
+    # Exposed to debug_query_diagnostics without changing the public return type.
+    retrieval_trace = {
+        "requested_filter": metadata_filter,
+        "filter_sequence": [],
+        "attempts": [],
+        "candidate_count": 0,
+    }
 
     def run_retrieval(retrieval_query: str, filter_value=None):
         search_kwargs = {"k": k_initial}
@@ -2020,8 +2205,16 @@ def retrieve_context(query: str, top_k: int = 4):
     docs = []
     seen_candidate_keys = set()
 
-    def add_candidates(new_docs):
+    def add_candidates(new_docs, strict_metadata: bool = False):
+        added = 0
         for candidate in new_docs or []:
+            if strict_metadata and not doc_matches_requested_metadata(
+                candidate,
+                metadata_filter,
+                relaxed=True,
+            ):
+                continue
+
             md = candidate.metadata or {}
             key = (
                 md.get("source")
@@ -2034,22 +2227,67 @@ def retrieve_context(query: str, top_k: int = 4):
                 continue
             seen_candidate_keys.add(key)
             docs.append(candidate)
+            added += 1
+        return added
 
-    # Deterministic anchor candidates first. These guarantee exact title/source
-    # matches are present before semantic reranking.
-    add_candidates(get_anchor_docs_for_issue_packs(vectorstore, query, query_intent, metadata_filter))
+    # Deterministic issue-pack anchors. Mainly useful for cross-lingual KB cases.
+    anchor_docs = get_anchor_docs_for_issue_packs(
+        vectorstore,
+        query,
+        query_intent,
+        metadata_filter,
+    )
+    add_candidates(anchor_docs, strict_metadata=False)
 
-    for retrieval_query in retrieval_queries:
-        if metadata_filter:
+    filter_sequence = build_controlled_filter_sequence(metadata_filter, query)
+    retrieval_trace["filter_sequence"] = filter_sequence
+
+    for filter_value in filter_sequence:
+        before_filter = len(docs)
+
+        for retrieval_query in retrieval_queries:
+            attempt = {
+                "query": retrieval_query,
+                "filter": filter_value,
+                "retrieved": 0,
+                "accepted": 0,
+                "error": None,
+            }
             try:
-                add_candidates(run_retrieval(retrieval_query, metadata_filter))
-            except Exception:
-                pass
-        if (not metadata_filter) or CONFIG.get("enable_filter_fallback", True) or is_papercut_query(query):
+                retrieved = run_retrieval(retrieval_query, filter_value)
+                attempt["retrieved"] = len(retrieved)
+                attempt["accepted"] = add_candidates(
+                    retrieved,
+                    strict_metadata=bool(metadata_filter and not is_papercut_query(query)),
+                )
+            except Exception as exc:
+                attempt["error"] = f"{type(exc).__name__}: {exc}"
+            retrieval_trace["attempts"].append(attempt)
+
+        # Stop relaxing filters once this level produced accepted candidates.
+        if len(docs) > before_filter:
+            break
+
+    # Broad retrieval is allowed only when there is no explicit metadata filter.
+    if not docs and not metadata_filter:
+        for retrieval_query in retrieval_queries:
+            attempt = {
+                "query": retrieval_query,
+                "filter": None,
+                "retrieved": 0,
+                "accepted": 0,
+                "error": None,
+            }
             try:
-                add_candidates(run_retrieval(retrieval_query, None))
-            except Exception:
-                pass
+                retrieved = run_retrieval(retrieval_query, None)
+                attempt["retrieved"] = len(retrieved)
+                attempt["accepted"] = add_candidates(retrieved)
+            except Exception as exc:
+                attempt["error"] = f"{type(exc).__name__}: {exc}"
+            retrieval_trace["attempts"].append(attempt)
+
+    retrieval_trace["candidate_count"] = len(docs)
+    st.session_state["last_retrieval_trace"] = retrieval_trace
 
     if not docs:
         return "", []
@@ -2089,23 +2327,48 @@ def retrieve_context(query: str, top_k: int = 4):
     
     ranked_docs = filtered_ranked_docs
     ranked_docs = deduplicate_ranked_docs(ranked_docs)
-    
+
     ranked_docs = [
         doc for doc in ranked_docs
         if not is_tangential_source_for_query(query, doc)
     ]
-    
+
     ranked_docs_without_low_info = [
         doc for doc in ranked_docs
         if not is_low_information_chunk(doc)
     ]
-    
+
     # Prefer useful chunks, but avoid emptying the context completely.
     if ranked_docs_without_low_info:
         ranked_docs = ranked_docs_without_low_info
-    
+
     if not ranked_docs:
         ranked_docs = deduplicate_ranked_docs(filtered_ranked_docs)
+
+    # Safe fallback for explicit metadata-filtered queries.
+    #
+    # Why:
+    # HP SDS, GAV, HP WJA and internal PDFs can have lower semantic scores than
+    # PaperCut web articles. If the query had a safe metadata filter and we already
+    # restricted retrieval to that product/vendor family, it is safer to keep the
+    # best filtered candidates than to return no documents.
+    #
+    # This does NOT do broad retrieval and therefore does not reintroduce PaperCut
+    # contamination into HP/GAV queries.
+    if not ranked_docs and metadata_filter and ranked_docs_with_scores:
+        ranked_docs = [
+            doc
+            for doc, score in ranked_docs_with_scores[:k_final]
+        ]
+
+    # Second safeguard:
+    # If low-information/tangential filtering removed everything after a valid
+    # metadata-filtered retrieval, keep the best filtered candidates.
+    if metadata_filter and not ranked_docs and ranked_docs_with_scores:
+        ranked_docs = [
+            doc
+            for doc, score in ranked_docs_with_scores[:k_final]
+        ]
     
     # Source diversity: avoid sending 4 chunks from the same PDF when possible.
     max_docs_per_source = CONFIG.get("max_docs_per_source", 2)
@@ -3641,6 +3904,7 @@ def debug_query_diagnostics(user_query: str) -> dict[str, Any]:
         "real_source_labels": real_source_labels,
         "retrieved_count": len(retrieved_docs),
         "retrieved_docs_summary": docs_summary,
+        "retrieval_trace": st.session_state.get("last_retrieval_trace", {}),
     }
 
 
@@ -4414,5 +4678,19 @@ def get_backend_status():
             status["error"] = "HF_TOKEN is missing or HF client could not be initialized."
     except Exception as e:
         status["error"] = f"HF client error: {e}"
+
+    try:
+        counts = get_vectorstore_metadata_value_counts()
+
+        status["metadata_counts_top"] = {
+            field: sorted(
+                [(str(k), int(v)) for k, v in values.items()],
+                key=lambda item: item[1],
+                reverse=True,
+            )[:20]
+            for field, values in counts.items()
+        }
+    except Exception as exc:
+        status["metadata_counts_error"] = str(exc)
 
     return status
