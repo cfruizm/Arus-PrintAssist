@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import json
@@ -540,6 +539,12 @@ def build_safe_metadata_filter_for_entities(user_query: str):
     It intentionally avoids filters for sparse or missing metadata because those
     caused empty retrieval for some products earlier.
     """
+    # PaperCut NG/MF docs are shared. A strict product=papercut_mf filter
+    # hides key KB articles tagged as papercut_ng but explicitly valid for MF.
+    # Therefore use only vendor-level filtering; reranking will prefer MF/NG.
+    if is_papercut_query(user_query):
+        return make_chroma_filter(vendor="papercut")
+
     counts = get_vectorstore_metadata_value_counts()
     product_counts = counts.get("product", {})
     vendor_counts = counts.get("vendor", {})
@@ -652,6 +657,191 @@ def compute_generic_entity_alignment_score(user_query: str, metadata: dict, cont
 
     return score
 
+
+
+# -----------------------------------------------------------------------------
+# PaperCut vNext retrieval helpers
+# -----------------------------------------------------------------------------
+
+def is_papercut_query(query: str) -> bool:
+    text = str(query or "").lower()
+    return "papercut" in text or "paper cut" in text
+
+
+def query_mentions_mobility_print(query: str) -> bool:
+    text = str(query or "").lower()
+    return any(term in text for term in [
+        "mobility print", "mobility", "impresión móvil", "impresion movil",
+        "mobile print", "imprimir desde celular", "impresión desde móvil",
+    ])
+
+
+def query_mentions_print_deploy(query: str) -> bool:
+    text = str(query or "").lower()
+    return any(term in text for term in ["print deploy", "print-deploy"])
+
+
+def query_mentions_job_ticketing(query: str) -> bool:
+    text = str(query or "").lower()
+    return any(term in text for term in ["job ticketing", "job-ticketing"])
+
+
+def is_papercut_missing_jobs_query(query: str) -> bool:
+    text = str(query or "").lower()
+    return is_papercut_query(text) and any(term in text for term in [
+        "desaparec", "no aparecen", "no aparece", "perdido", "perdidos",
+        "missing", "disappearing", "where have my print jobs gone",
+        "trabajos enviados no imprimen", "trabajo enviado no imprime",
+    ])
+
+
+def is_papercut_held_jobs_query(query: str) -> bool:
+    text = str(query or "").lower()
+    return is_papercut_query(text) and any(term in text for term in [
+        "retenid", "hold", "held", "release", "liberación", "liberacion",
+        "pendientes de liber", "jobs pending release", "not held",
+    ])
+
+
+def build_papercut_expanded_queries(query: str) -> list[str]:
+    """Return focused companion queries for PaperCut troubleshooting.
+
+    These queries are only used for retrieval candidate generation. They do not
+    modify the user-visible prompt and do not change source content.
+    """
+    expansions = [query]
+
+    if is_papercut_missing_jobs_query(query):
+        expansions.extend([
+            "missing or disappearing print jobs PaperCut NG MF",
+            "where have my print jobs gone PaperCut NG MF",
+            "print jobs not held PaperCut MF",
+            "print jobs not being tracked by PaperCut",
+            "temporarily hidden message PaperCut Print Provider release station",
+            "Find-Me Printing troubleshooting PaperCut MF jobs missing",
+        ])
+
+    if is_papercut_held_jobs_query(query):
+        expansions.extend([
+            "Print Jobs Not Held PaperCut MF Hold Release Queue",
+            "jobs pending release PaperCut MF release station",
+            "temporarily hidden message PaperCut Print Provider",
+            "configure how long jobs are held by PaperCut NG MF",
+            "troubleshooting server performance held jobs PaperCut",
+        ])
+
+    if is_papercut_query(query) and any(term in str(query).lower() for term in ["find-me", "find me", "findme"]):
+        expansions.extend([
+            "Set up Find-Me printing with PaperCut MF",
+            "Troubleshooting Find-Me Printing and Virtual Queues PaperCut MF",
+            "Configure Secure Print Release with Find-Me printing PaperCut MF",
+        ])
+
+    # Stable de-duplication preserving order.
+    seen = set()
+    unique = []
+    for item in expansions:
+        key = item.lower().strip()
+        if key and key not in seen:
+            seen.add(key)
+            unique.append(item)
+    return unique
+
+
+def get_doc_source_identity(metadata: dict) -> str:
+    metadata = metadata or {}
+    return " ".join([
+        str(metadata.get("title", "")),
+        str(metadata.get("source", "")),
+        str(metadata.get("source_url", "")),
+        str(metadata.get("canonical_url", "")),
+        str(metadata.get("vendor", "")),
+        str(metadata.get("product", "")),
+        str(metadata.get("source_type", "")),
+        str(metadata.get("document_family", "")),
+    ]).lower()
+
+
+def compute_papercut_vnext_score(query: str, doc) -> float:
+    """Focused PaperCut boost/penalty layer on top of generic reranking."""
+    if not is_papercut_query(query):
+        return 0.0
+
+    metadata = doc.metadata or {}
+    identity = get_doc_source_identity(metadata)
+    content = str(doc.page_content or "").lower()
+    blob = f"{identity} {content[:2500]}"
+
+    vendor = str(metadata.get("vendor", "")).lower()
+    product = str(metadata.get("product", "")).lower()
+    source_type = str(metadata.get("source_type", "")).lower()
+
+    score = 0.0
+
+    if vendor == "papercut":
+        score += 10.0
+    if product in {"papercut_mf", "papercut_ng"}:
+        score += 5.0
+    if product == "papercut_hive" and "hive" not in str(query).lower():
+        score -= 4.0
+
+    if source_type == "kb_article":
+        score += 6.0
+    elif source_type in {"manual", "guide"}:
+        score += 2.0
+
+    if is_papercut_missing_jobs_query(query):
+        if "missingordisappearingprintjobs" in identity:
+            score += 35.0
+        if "missing or disappearing print jobs" in blob:
+            score += 35.0
+        if "where have my print jobs gone" in blob:
+            score += 25.0
+        if "printjobsnotheld" in identity or "print jobs not held" in blob:
+            score += 20.0
+        if "printingnotbeingtracked" in identity or "not being tracked by papercut" in blob:
+            score += 18.0
+        if "temporarilyhiddenmessage" in identity or "temporarily hidden" in blob:
+            score += 12.0
+        if "find-me-printing-troubleshooting" in identity:
+            score += 12.0
+
+        # Tangential docs that often mention jobs/queues but are not the symptom.
+        for bad in [
+            "deploymobilityqueuesbygroup",
+            "preventusersfromprintingjobsvia mobility",
+            "preventusersfromprintingjobsviamobility",
+            "printarchivinglpr",
+            "migratingngtonewserver",
+            "howtomigratewindowsprintqueues",
+            "batchdeletingprinters",
+            "printerfailover",
+        ]:
+            if bad in identity.replace("-", ""):
+                score -= 12.0
+
+    if is_papercut_held_jobs_query(query):
+        if "changingjobtimeoutonreleasestation" in identity:
+            score += 28.0
+        if "printjobsnotheld" in identity or "print jobs not held" in blob:
+            score += 26.0
+        if "temporarilyhiddenmessage" in identity or "temporarily hidden" in blob:
+            score += 18.0
+        if "troubleshootingserverperformanceissues" in identity and "held jobs" in blob:
+            score += 16.0
+        if "printingnotbeingtracked" in identity:
+            score += 12.0
+
+    # Do not prefer Mobility Print / Print Deploy unless explicitly asked.
+    if not query_mentions_mobility_print(query) and any(term in identity for term in ["mobility-print", "mobilityprint", "mobility"]):
+        score -= 20.0
+    if not query_mentions_print_deploy(query) and any(term in identity for term in ["print-deploy", "printdeploy"]):
+        score -= 20.0
+    if not query_mentions_job_ticketing(query) and "job-ticketing" in identity:
+        score -= 20.0
+
+    return score
+
 def detect_query_profile(query: str):
     """
     Build a retrieval profile using query intent and lightweight hints.
@@ -678,12 +868,19 @@ def detect_query_profile(query: str):
         "preferred_terms": [],
     }
 
+    if is_papercut_query(query) and query_intent == "troubleshooting":
+        profile["k_initial"] = max(profile.get("k_initial", 12), 40)
+        profile["k_final"] = max(profile.get("k_final", 4), 6)
+
     if "papercut" in text:
         profile["preferred_terms"].extend([
             "papercut", "papercut mf", "print jobs", "jobs",
-            "release", "hold", "held", "find-me", "mobility print",
+            "release", "hold", "held", "find-me",
             "trabajos", "liberación", "liberacion",
         ])
+
+    if "papercut" in text and query_mentions_mobility_print(query):
+        profile["preferred_terms"].extend(["mobility print", "mobile print", "impresión móvil", "impresion movil"])
 
     if any(term in text for term in ["sds", "hp smart device services", "dca", "sda", "jamc"]):
         profile["preferred_terms"].extend([
@@ -887,6 +1084,7 @@ def compute_rerank_score(query: str, doc, query_intent: str | None = None) -> fl
 
     score = 0.0
     score += compute_generic_entity_alignment_score(query, metadata, content)
+    score += compute_papercut_vnext_score(query, doc)
 
     # Global conceptual-query boost.
     # For "qué es / what is" style questions, prefer introduction, overview,
@@ -1764,31 +1962,52 @@ def retrieve_context(query: str, top_k: int = 4):
     k_final = profile.get("k_final", top_k)
     metadata_filter = profile.get("filter")
 
-    def run_retrieval(filter_value=None):
+    def run_retrieval(retrieval_query: str, filter_value=None):
         search_kwargs = {"k": k_initial}
         if filter_value:
             search_kwargs["filter"] = filter_value
 
         retriever = vectorstore.as_retriever(search_kwargs=search_kwargs)
-        return retriever.invoke(query)
+        return retriever.invoke(retrieval_query)
 
-    docs = []
+    # For PaperCut troubleshooting, generate a wider candidate pool using
+    # focused bilingual/English companion queries, then deduplicate before rerank.
+    retrieval_queries = build_papercut_expanded_queries(query) if is_papercut_query(query) else [query]
 
-    # First attempt: use profile filter only if present.
-    if metadata_filter:
-        try:
-            docs = run_retrieval(metadata_filter)
-        except Exception:
-            docs = []
+    candidate_docs = []
+    seen_candidate_keys = set()
 
-    # Fallback: broad retrieval. This is critical for PaperCut/SDS cases
-    # where metadata filters may be too strict.
-    if not docs and CONFIG.get("enable_filter_fallback", True):
-        docs = run_retrieval(None)
+    def add_candidates(new_docs):
+        for candidate in new_docs or []:
+            md = candidate.metadata or {}
+            key = (
+                md.get("source")
+                or md.get("source_url")
+                or md.get("canonical_url")
+                or md.get("title")
+                or candidate.page_content[:160]
+            )
+            if key in seen_candidate_keys:
+                continue
+            seen_candidate_keys.add(key)
+            candidate_docs.append(candidate)
 
-    # If no filter was defined, run broad retrieval directly.
-    if not metadata_filter:
-        docs = run_retrieval(None)
+    for retrieval_query in retrieval_queries:
+        if metadata_filter:
+            try:
+                add_candidates(run_retrieval(retrieval_query, metadata_filter))
+            except Exception:
+                pass
+
+        # Always include broad retrieval for PaperCut because product metadata may
+        # tag shared NG/MF articles as papercut_ng while the user asks for MF.
+        if (not metadata_filter) or is_papercut_query(query) or CONFIG.get("enable_filter_fallback", True):
+            try:
+                add_candidates(run_retrieval(retrieval_query, None))
+            except Exception:
+                pass
+
+    docs = candidate_docs
 
     if not docs:
         return "", []
