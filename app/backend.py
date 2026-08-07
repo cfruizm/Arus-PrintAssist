@@ -723,14 +723,10 @@ def compute_generic_entity_alignment_score(user_query: str, metadata: dict, cont
 def compute_explicit_entity_identity_score(user_query: str, metadata: dict, content: str) -> float:
     """Transversal entity-title/source alignment for sparse internal domains.
 
-    Several internal tools share generic metadata such as:
-    product=sanitized_support_assets and component=internal_support_asset.
-    When documentation is sparse, metadata alone cannot distinguish MFPsecure,
-    Print Evolve, Dashboard SIMP, MIPA, or other sibling tools.
-
-    This function therefore rewards exact explicit entity mentions in document
-    title/source and softly penalizes sibling documents that only share generic
-    metadata. It is registry-driven and not hardcoded per product.
+    Internal tools can share generic metadata such as sanitized_support_assets.
+    Exact title/source matches therefore deserve a strong boost, while sibling
+    internal documents that do not mention the requested entity are penalized.
+    The implementation is registry-driven, not product-question-specific.
     """
     metadata = metadata or {}
     title = str(metadata.get("title", "")).lower()
@@ -768,8 +764,6 @@ def compute_explicit_entity_identity_score(user_query: str, metadata: dict, cont
         elif content_match:
             score += 3.0
         else:
-            # Penalize only generic internal/support assets. Stable product
-            # families such as GAV, SDS, WJA and HP AC retain normal ranking.
             vendor = str(metadata.get("vendor", "")).lower()
             product = str(metadata.get("product", "")).lower()
             if vendor == "arus_internal" or product == "sanitized_support_assets":
@@ -779,12 +773,12 @@ def compute_explicit_entity_identity_score(user_query: str, metadata: dict, cont
 
 
 # -----------------------------------------------------------------------------
-# vNext transversal retrieval helpers - V7
+# vNext transversal retrieval helpers - V8
 # -----------------------------------------------------------------------------
 # This layer is intentionally issue-oriented instead of product-question-specific.
 # It improves retrieval for recurring support symptoms through configurable packs.
 
-BACKEND_VNEXT_MARKER = "v7_intent_and_sparse_entity_reranking"
+BACKEND_VNEXT_MARKER = "v8_polarity_context_and_observability"
 
 ISSUE_RETRIEVAL_PACKS = {
     "missing_print_jobs": {
@@ -844,13 +838,66 @@ ISSUE_RETRIEVAL_PACKS = {
             "ChangingServerNameIP": -35.0,
         },
     },
-    "held_or_release_jobs": {
-        "intent_any": ["troubleshooting", "procedural"],
-        "query_any": ["retenid", "hold", "held", "release", "liberación", "liberacion", "pendientes de liber", "jobs pending release", "not held"],
-        "expansions": ["print jobs not held hold release queue", "jobs pending release release station", "temporarily hidden message print provider", "configure how long jobs are held", "held jobs server performance"],
-        "boost_identity": {"PrintJobsNotHeld": 70.0, "ChangingJobTimeoutOnReleaseStation": 50.0, "TemporarilyHiddenMessage": 45.0, "TroubleshootingServerPerformanceIssues": 25.0, "device-mf-copier-integration-release": 20.0},
-        "boost_content": {"hold/release jobs": 10.0, "jobs pending release": 10.0, "release station": 8.0, "print provider": 5.0},
-        "penalize_identity": {"PrintArchivingLPR": -20.0, "MigratingNGToNewServer": -16.0},
+    "jobs_not_held": {
+        "intent_any": ["troubleshooting"],
+        "query_any": [
+            "no quedan retenidos", "no queda retenido", "no se retienen",
+            "no se pausa", "no se pausan", "salen directamente",
+            "se imprimen directamente", "not held", "not paused",
+            "bypass hold", "bypass release",
+        ],
+        "expansions": [
+            "print jobs not held or paused",
+            "hold release queue jobs print directly",
+            "print jobs not being tracked",
+        ],
+        "boost_identity": {
+            "PrintJobsNotHeld": 80.0,
+            "PrintingNotBeingTracked": 45.0,
+        },
+        "boost_content": {
+            "not being paused": 10.0,
+            "not held": 10.0,
+            "not being tracked": 8.0,
+        },
+        "penalize_identity": {
+            "ChangingJobTimeoutOnReleaseStation": -18.0,
+            "TroubleshootingServerPerformanceIssues": -12.0,
+        },
+    },
+    "jobs_remain_held": {
+        "intent_any": ["troubleshooting"],
+        "query_any": [
+            "quedan retenidos", "queda retenido", "siguen retenidos",
+            "sigue retenido", "no se liberan", "no se libera",
+            "pendientes de liberación", "pendientes de liberacion",
+            "remain held", "remain in hold", "stuck in hold",
+            "jobs pending release",
+        ],
+        "expansions": [
+            "jobs pending release hold release queue",
+            "configure how long jobs are held",
+            "release station jobs remain held",
+            "temporarily hidden print provider",
+        ],
+        "boost_identity": {
+            "ChangingJobTimeoutOnReleaseStation": 70.0,
+            "TroubleshootingServerPerformanceIssues": 48.0,
+            "TemporarilyHiddenMessage": 42.0,
+            "device-mf-copier-integration-release": 36.0,
+            "PrintJobsNotHeld": -22.0,
+        },
+        "boost_content": {
+            "jobs pending release": 14.0,
+            "hold/release jobs": 12.0,
+            "release station": 9.0,
+            "job timeout": 9.0,
+        },
+        "penalize_identity": {
+            "WebPrintStatusMessages": -18.0,
+            "Touch-FreeSecurePrintRelease": -10.0,
+            "UserClientPopupAndNotificationIssues": -10.0,
+        },
     },
     "find_me_printing": {
         "intent_any": ["troubleshooting", "procedural", "conceptual"],
@@ -914,17 +961,29 @@ def get_matching_issue_packs(query: str, query_intent: str | None = None) -> lis
 
 
 def build_transversal_expanded_queries(query: str, query_intent: str | None = None) -> list[str]:
+    """Build a compact, intent-aware expansion set.
+
+    Debug retrieval can still inspect the final six documents, but fewer vector
+    queries reduce latency and candidate noise, especially for PaperCut.
+    """
     query_intent = query_intent or classify_query_intent(query)
     expansions = [query]
     entity_terms = get_entity_preferred_terms(query)
-    entity_context = " ".join(entity_terms[:6])
+    entity_context = " ".join(entity_terms[:4])
+
     for _, pack in get_matching_issue_packs(query, query_intent):
-        for expansion in pack.get("expansions", []) or []:
-            expansions.append(expansion)
-            if entity_context:
-                expansions.append(f"{entity_context} {expansion}")
+        for expansion in (pack.get("expansions", []) or [])[:4]:
+            expansions.append(f"{entity_context} {expansion}".strip())
+
+    if query_intent == "conceptual" and entity_context:
+        expansions.extend([
+            f"{entity_context} overview introduction purpose features",
+            f"{entity_context} descripción general para qué sirve componentes",
+        ])
+
     if is_papercut_query(query):
         expansions.append(f"PaperCut NG MF {query}")
+
     seen = set()
     unique = []
     for item in expansions:
@@ -932,7 +991,9 @@ def build_transversal_expanded_queries(query: str, query_intent: str | None = No
         if key and key not in seen:
             seen.add(key)
             unique.append(item)
-    return unique[:12]
+
+    max_queries = 7 if query_intent == "troubleshooting" else 5
+    return unique[:max_queries]
 
 
 def compute_issue_pack_rerank_score(query: str, doc, query_intent: str | None = None) -> float:
@@ -3581,6 +3642,73 @@ def remove_internal_chunk_references(answer: str) -> str:
     text = re.sub(r"\n{3,}", "\n\n", text)
 
     return text.strip()
+def select_docs_for_llm_context(user_query: str, docs: list, query_intent: str) -> list:
+    """Keep debug retrieval broad while sending a smaller context to the LLM.
+
+    The incoming documents are already reranked. We preserve that order, prefer
+    title/action alignment for procedures, and cap the model context by intent.
+    """
+    if not docs:
+        return []
+
+    max_docs_by_intent = {
+        "troubleshooting": 4,
+        "procedural": 3,
+        "requirements": 4,
+        "conceptual": 3,
+        "warranty": 3,
+        "architecture": 4,
+        "escalation": 3,
+        "default": 3,
+    }
+    max_docs = max_docs_by_intent.get(query_intent, 3)
+
+    query_terms = [
+        token for token in re.findall(r"\w+", user_query.lower())
+        if len(token) >= 4
+    ]
+
+    scored = []
+    for position, doc in enumerate(docs):
+        metadata = doc.metadata or {}
+        identity = f"{metadata.get('title', '')} {metadata.get('source', '')}".lower()
+        action_alignment = sum(1 for token in query_terms if token in identity)
+        base_order_score = max(0, 20 - position)
+        score = base_order_score + action_alignment * (3 if query_intent == "procedural" else 1)
+        scored.append((doc, score, position))
+
+    scored.sort(key=lambda item: (item[1], -item[2]), reverse=True)
+
+    selected = []
+    seen_sources = set()
+    for doc, _, _ in scored:
+        metadata = doc.metadata or {}
+        source_key = str(
+            metadata.get("source")
+            or metadata.get("source_url")
+            or metadata.get("canonical_url")
+            or metadata.get("title")
+        )
+        if source_key in seen_sources:
+            continue
+        seen_sources.add(source_key)
+        selected.append(doc)
+        if len(selected) >= max_docs:
+            break
+
+    return selected
+
+
+def build_context_from_docs(docs: list, max_chars_per_doc: int = 2600) -> str:
+    """Build compact model context from already-selected documents."""
+    context_blocks = []
+    for index, doc in enumerate(docs, start=1):
+        source_label = format_source_label(doc.metadata or {})
+        content = str(doc.page_content or "").strip()[:max_chars_per_doc]
+        context_blocks.append(f"[Chunk {index}] Source: {source_label}\n{content}")
+    return "\n\n".join(context_blocks)
+
+
 # -----------------------------------------------------------------------------
 # Generation
 # -----------------------------------------------------------------------------
@@ -3602,8 +3730,21 @@ def generate_answer_with_rag(user_query: str, memory):
     )
 
     support_info = assess_retrieval_support(user_query, retrieved_docs)
-    real_source_labels = build_real_source_labels(retrieved_docs)
     query_intent = classify_query_intent(user_query)
+
+    llm_context_docs = select_docs_for_llm_context(
+        user_query=user_query,
+        docs=retrieved_docs,
+        query_intent=query_intent,
+    )
+    retrieved_context = build_context_from_docs(llm_context_docs)
+    real_source_labels = build_real_source_labels(llm_context_docs)
+
+    st.session_state["last_llm_context_stats"] = {
+        "retrieved_docs": len(retrieved_docs),
+        "llm_context_docs": len(llm_context_docs),
+        "llm_context_chars": len(retrieved_context),
+    }
     allow_general_fallback = should_use_general_fallback(user_query, support_info)
     hard_anchor = has_hard_documentary_anchor(user_query, retrieved_docs, query_intent)
     strong_entity_match = has_strong_entity_document_match(user_query, retrieved_docs)
@@ -4285,10 +4426,14 @@ def build_turn_observability_record(
     sources_summary = []
     for doc in retrieved_docs[:6]:
         metadata = doc.metadata or {}
+        raw_source = get_best_source_value(metadata)
+        clean_source = clean_source_label_text(raw_source)
         sources_summary.append(
             {
                 "title": metadata.get("title"),
-                "source": metadata.get("source"),
+                "source": clean_source,
+                "source_url": clean_source if clean_source.startswith(("http://", "https://")) else None,
+                "source_name": Path(clean_source).name if not clean_source.startswith(("http://", "https://")) else None,
                 "vendor": metadata.get("vendor"),
                 "product": metadata.get("product"),
                 "component": metadata.get("component"),
@@ -4311,6 +4456,7 @@ def build_turn_observability_record(
         "retrieved_count": len(retrieved_docs),
         "real_source_labels": real_source_labels,
         "retrieved_sources_summary": sources_summary,
+        "llm_context": st.session_state.get("last_llm_context_stats", {}),
         "llm": {
             "llm_call_ok": llm_diagnostics.get("llm_call_ok"),
             "model": llm_diagnostics.get("model"),
