@@ -720,14 +720,71 @@ def compute_generic_entity_alignment_score(user_query: str, metadata: dict, cont
     return score
 
 
+def compute_explicit_entity_identity_score(user_query: str, metadata: dict, content: str) -> float:
+    """Transversal entity-title/source alignment for sparse internal domains.
+
+    Several internal tools share generic metadata such as:
+    product=sanitized_support_assets and component=internal_support_asset.
+    When documentation is sparse, metadata alone cannot distinguish MFPsecure,
+    Print Evolve, Dashboard SIMP, MIPA, or other sibling tools.
+
+    This function therefore rewards exact explicit entity mentions in document
+    title/source and softly penalizes sibling documents that only share generic
+    metadata. It is registry-driven and not hardcoded per product.
+    """
+    metadata = metadata or {}
+    title = str(metadata.get("title", "")).lower()
+    source = str(metadata.get("source", "")).lower()
+    content_head = str(content or "").lower()[:1400]
+    identity = f"{title} {source}"
+
+    score = 0.0
+    detected = get_detected_product_entities_with_registry(user_query)
+    if not detected:
+        return score
+
+    for _, registry_item in detected:
+        canonical = str(registry_item.get("canonical_name", "")).lower().strip()
+        aliases = [
+            str(alias).lower().strip()
+            for alias in registry_item.get("aliases", []) or []
+            if str(alias).strip()
+        ]
+        explicit_terms = [term for term in [canonical] + aliases if len(term) >= 4]
+        if not explicit_terms:
+            continue
+
+        identity_match = any(
+            entity_alias_is_explicitly_mentioned(identity, term)
+            for term in explicit_terms
+        )
+        content_match = any(
+            entity_alias_is_explicitly_mentioned(content_head, term)
+            for term in explicit_terms
+        )
+
+        if identity_match:
+            score += 14.0
+        elif content_match:
+            score += 3.0
+        else:
+            # Penalize only generic internal/support assets. Stable product
+            # families such as GAV, SDS, WJA and HP AC retain normal ranking.
+            vendor = str(metadata.get("vendor", "")).lower()
+            product = str(metadata.get("product", "")).lower()
+            if vendor == "arus_internal" or product == "sanitized_support_assets":
+                score -= 7.0
+
+    return score
+
 
 # -----------------------------------------------------------------------------
-# vNext transversal retrieval helpers - V5
+# vNext transversal retrieval helpers - V7
 # -----------------------------------------------------------------------------
 # This layer is intentionally issue-oriented instead of product-question-specific.
 # It improves retrieval for recurring support symptoms through configurable packs.
 
-BACKEND_VNEXT_MARKER = "v6_transversal_single_filter_controlled_fallback"
+BACKEND_VNEXT_MARKER = "v7_intent_and_sparse_entity_reranking"
 
 ISSUE_RETRIEVAL_PACKS = {
     "missing_print_jobs": {
@@ -1194,6 +1251,7 @@ def compute_rerank_score(query: str, doc, query_intent: str | None = None) -> fl
 
     score = 0.0
     score += compute_generic_entity_alignment_score(query, metadata, content)
+    score += compute_explicit_entity_identity_score(query, metadata, content)
     score += compute_issue_pack_rerank_score(query, doc, query_intent)
 
     # Global conceptual-query boost.
@@ -1813,6 +1871,12 @@ def classify_query_intent(user_query: str) -> str:
         "desaparece", "desaparecen", "desaparecido",
         "disappearing", "disappear", "missing jobs",
         "stuck", "not held", "cannot add", "no puedo", "no deja",
+        "qué debo revisar", "que debo revisar",
+        "qué debería revisar", "que deberia revisar",
+        "qué debo validar", "que debo validar",
+        "qué debería validar", "que deberia validar",
+        "trabajos retenidos", "trabajo retenido",
+        "quedan retenidos", "queda retenido",
     ]
 
     warranty_patterns = [
@@ -1834,9 +1898,14 @@ def classify_query_intent(user_query: str) -> str:
 
     procedural_patterns = [
         "cómo instalar", "como instalar",
+        "cómo se instala", "como se instala",
+        "cómo realizar la instalación", "como realizar la instalacion",
         "cómo agregar", "como agregar",
         "cómo incorporar", "como incorporar",
         "cómo configurar", "como configurar",
+        "cómo se configura", "como se configura",
+        "cómo registrar", "como registrar",
+        "cómo se registra", "como se registra",
         "cómo habilitar", "como habilitar",
         "cómo crear", "como crear",
         "cómo realizar", "como realizar",
@@ -1882,14 +1951,14 @@ def classify_query_intent(user_query: str) -> str:
     if any(p in text for p in troubleshooting_patterns):
         return "troubleshooting"
 
+    if any(p in text for p in procedural_patterns):
+        return "procedural"
+
     if any(p in text for p in conceptual_patterns):
         return "conceptual"
 
     if any(p in text for p in architecture_patterns):
         return "architecture"
-
-    if any(p in text for p in procedural_patterns):
-        return "procedural"
 
     return "default"
 
@@ -2089,77 +2158,52 @@ def extract_filter_clauses(metadata_filter) -> dict:
 
 def build_controlled_filter_sequence(metadata_filter, query: str) -> list:
     """
-    Build a Chroma-compatible, contamination-safe filter sequence.
+    Build safe fallback filters without broad contamination.
 
-    Important:
-    Some deployed Chroma/LangChain combinations fail on compound ``$and``
-    filters even though metadata counts are available. Those exceptions were
-    previously swallowed, which produced zero results for HP SDS and GAV.
+    For explicit product queries:
+    1. original filter
+    2. vendor + product
+    3. product only
+    4. vendor only
 
-    Strategy:
-    - PaperCut: vendor-only because NG/MF documentation is shared.
-    - Other explicit products: product-only first. Product values in this
-      vectorstore are stable and unique enough (sds, gav_tracking, etc.).
-    - Vendor-only is a controlled final fallback.
-    - Compound filters are not sent to Chroma; exact vendor/component alignment
-      is checked after retrieval in Python.
+    For PaperCut:
+    - keep vendor-level behavior because NG/MF docs are shared.
     """
     if not metadata_filter:
         return [None]
 
     clauses = extract_filter_clauses(metadata_filter)
+
     vendor = clauses.get("vendor")
     product = clauses.get("product")
     component = clauses.get("component")
 
     filters = []
 
+    # 1. Original filter first
+    filters.append(metadata_filter)
+
+    # PaperCut special case already uses vendor-level filtering.
     if is_papercut_query(query):
         if vendor:
             filters.append({"vendor": vendor})
-        return deduplicate_filter_sequence(filters or [None])
+        return deduplicate_filter_sequence(filters)
 
-    # Prefer stable product metadata. This avoids compound-filter compatibility
-    # issues and prevents cross-product contamination.
+    # 2. vendor + product, dropping component
+    if vendor and product:
+        filters.append(make_chroma_filter(vendor=vendor, product=product))
+
+    # 3. product only
     if product:
         filters.append({"product": product})
 
-    # Component-only can be useful when no product hint exists.
-    if component and not product:
-        filters.append({"component": component})
-
-    # Controlled final fallback inside the same vendor family.
+    # 4. vendor only
     if vendor:
         filters.append({"vendor": vendor})
 
-    return deduplicate_filter_sequence(filters or [None])
+    return deduplicate_filter_sequence(filters)
 
 
-def doc_matches_requested_metadata(doc, metadata_filter, relaxed: bool = False) -> bool:
-    """Validate retrieved metadata in Python after a single-clause Chroma query.
-
-    In strict mode, product/vendor/component present in the requested filter must
-    match. In relaxed mode, product and vendor remain mandatory while component
-    may be omitted because requirement documents can use component=requirements
-    instead of component=monitor even when the user asks about SDS Monitor.
-    """
-    if not metadata_filter:
-        return True
-
-    requested = extract_filter_clauses(metadata_filter)
-    metadata = doc.metadata or {}
-
-    for field in ("vendor", "product"):
-        expected = requested.get(field)
-        if expected is not None and str(metadata.get(field, "")).lower() != str(expected).lower():
-            return False
-
-    expected_component = requested.get("component")
-    if expected_component is not None and not relaxed:
-        if str(metadata.get("component", "")).lower() != str(expected_component).lower():
-            return False
-
-    return True
 def deduplicate_filter_sequence(filters: list) -> list:
     """
     Remove duplicated filters while preserving order.
@@ -2185,14 +2229,6 @@ def retrieve_context(query: str, top_k: int = 4):
     k_final = profile.get("k_final", top_k)
     metadata_filter = profile.get("filter")
 
-    # Exposed to debug_query_diagnostics without changing the public return type.
-    retrieval_trace = {
-        "requested_filter": metadata_filter,
-        "filter_sequence": [],
-        "attempts": [],
-        "candidate_count": 0,
-    }
-
     def run_retrieval(retrieval_query: str, filter_value=None):
         search_kwargs = {"k": k_initial}
         if filter_value:
@@ -2204,16 +2240,8 @@ def retrieve_context(query: str, top_k: int = 4):
     docs = []
     seen_candidate_keys = set()
 
-    def add_candidates(new_docs, strict_metadata: bool = False):
-        added = 0
+    def add_candidates(new_docs):
         for candidate in new_docs or []:
-            if strict_metadata and not doc_matches_requested_metadata(
-                candidate,
-                metadata_filter,
-                relaxed=True,
-            ):
-                continue
-
             md = candidate.metadata or {}
             key = (
                 md.get("source")
@@ -2226,67 +2254,33 @@ def retrieve_context(query: str, top_k: int = 4):
                 continue
             seen_candidate_keys.add(key)
             docs.append(candidate)
-            added += 1
-        return added
 
-    # Deterministic issue-pack anchors. Mainly useful for cross-lingual KB cases.
-    anchor_docs = get_anchor_docs_for_issue_packs(
-        vectorstore,
-        query,
-        query_intent,
-        metadata_filter,
-    )
-    add_candidates(anchor_docs, strict_metadata=False)
+    # Deterministic anchor candidates first. These guarantee exact title/source
+    # matches are present before semantic reranking.
+    add_candidates(get_anchor_docs_for_issue_packs(vectorstore, query, query_intent, metadata_filter))
 
     filter_sequence = build_controlled_filter_sequence(metadata_filter, query)
-    retrieval_trace["filter_sequence"] = filter_sequence
 
     for filter_value in filter_sequence:
-        before_filter = len(docs)
-
         for retrieval_query in retrieval_queries:
-            attempt = {
-                "query": retrieval_query,
-                "filter": filter_value,
-                "retrieved": 0,
-                "accepted": 0,
-                "error": None,
-            }
             try:
-                retrieved = run_retrieval(retrieval_query, filter_value)
-                attempt["retrieved"] = len(retrieved)
-                attempt["accepted"] = add_candidates(
-                    retrieved,
-                    strict_metadata=bool(metadata_filter and not is_papercut_query(query)),
-                )
-            except Exception as exc:
-                attempt["error"] = f"{type(exc).__name__}: {exc}"
-            retrieval_trace["attempts"].append(attempt)
+                add_candidates(run_retrieval(retrieval_query, filter_value))
+            except Exception:
+                pass
 
-        # Stop relaxing filters once this level produced accepted candidates.
-        if len(docs) > before_filter:
+        # If we already found candidates, stop relaxing filters.
+        # This prevents broader filters from contaminating a good result set.
+        if docs:
             break
 
-    # Broad retrieval is allowed only when there is no explicit metadata filter.
+    # Broad fallback is allowed only when there was no explicit metadata filter.
+    # This avoids contaminating HP SDS / GAV / DA Arus queries with PaperCut web docs.
     if not docs and not metadata_filter:
         for retrieval_query in retrieval_queries:
-            attempt = {
-                "query": retrieval_query,
-                "filter": None,
-                "retrieved": 0,
-                "accepted": 0,
-                "error": None,
-            }
             try:
-                retrieved = run_retrieval(retrieval_query, None)
-                attempt["retrieved"] = len(retrieved)
-                attempt["accepted"] = add_candidates(retrieved)
-            except Exception as exc:
-                attempt["error"] = f"{type(exc).__name__}: {exc}"
-            retrieval_trace["attempts"].append(attempt)
-
-    retrieval_trace["candidate_count"] = len(docs)
-    st.session_state["last_retrieval_trace"] = retrieval_trace
+                add_candidates(run_retrieval(retrieval_query, None))
+            except Exception:
+                pass
 
     if not docs:
         return "", []
@@ -3903,7 +3897,6 @@ def debug_query_diagnostics(user_query: str) -> dict[str, Any]:
         "real_source_labels": real_source_labels,
         "retrieved_count": len(retrieved_docs),
         "retrieved_docs_summary": docs_summary,
-        "retrieval_trace": st.session_state.get("last_retrieval_trace", {}),
     }
 
 
