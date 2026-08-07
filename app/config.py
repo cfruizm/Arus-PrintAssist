@@ -35,7 +35,7 @@ SIDEBAR_TITLE = "Control de sesión"
 CONFIG = {
     "project_name": "Arus PrintAssist Prototype",
     "language": "es",
-    "embedding_model_name": "sentence-transformers/all-MiniLM-L6-v2",
+    "embedding_model_name": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
     "vectorstore_dir": str(VECTORSTORE_DIR),
     "chunk_size": 800,
     "chunk_overlap": 150,
