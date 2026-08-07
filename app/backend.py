@@ -540,9 +540,6 @@ def build_safe_metadata_filter_for_entities(user_query: str):
     It intentionally avoids filters for sparse or missing metadata because those
     caused empty retrieval for some products earlier.
     """
-    # Some product families share documentation across variants. For PaperCut,
-    # NG/MF articles can be tagged as papercut_ng while still being valid for MF.
-    # Use vendor-level retrieval and let reranking choose the best documents.
     if is_papercut_query(user_query):
         return make_chroma_filter(vendor="papercut")
 
@@ -661,15 +658,8 @@ def compute_generic_entity_alignment_score(user_query: str, metadata: dict, cont
 
 
 # -----------------------------------------------------------------------------
-# vNext transversal retrieval helpers
+# vNext transversal retrieval helpers - V4
 # -----------------------------------------------------------------------------
-# The goal of this layer is not to hardcode one product/question, but to make
-# retrieval work better for all support flows through reusable issue packs:
-# - triggers identify a class of user problem;
-# - expansions add domain vocabulary and English/Spanish bridges;
-# - boost_identity rewards documents whose title/source are exact matches;
-# - boost_content gives weaker support when the evidence only appears in text;
-# - penalize_identity reduces tangential pages for the current intent.
 
 ISSUE_RETRIEVAL_PACKS = {
     "missing_print_jobs": {
@@ -689,134 +679,75 @@ ISSUE_RETRIEVAL_PACKS = {
             "print provider release station",
         ],
         "boost_identity": {
-            "missingordisappearingprintjobs": 90.0,
-            "troubleshooting missing or disappearing print jobs": 80.0,
-            "printjobsnotheld": 45.0,
-            "printingnotbeingtracked": 40.0,
-            "temporarilyhiddenmessage": 25.0,
-            "find-me-printing-troubleshooting": 18.0,
+            "missingordisappearingprintjobs": 120.0,
+            "troubleshooting missing or disappearing print jobs": 100.0,
+            "printjobsnotheld": 60.0,
+            "printingnotbeingtracked": 55.0,
+            "temporarilyhiddenmessage": 35.0,
+            "find-me-printing-troubleshooting": 25.0,
         },
         "boost_content": {
-            "where have my print jobs gone": 14.0,
+            "where have my print jobs gone": 12.0,
             "print jobs not held": 8.0,
             "not being tracked by papercut": 8.0,
             "temporarily hidden": 6.0,
         },
         "penalize_identity": {
-            "deploymobilityqueuesbygroup": -28.0,
-            "preventusersfromprintingjobsviamobility": -28.0,
-            "printarchivinglpr": -28.0,
-            "migratingngtonewserver": -28.0,
-            "howtomigratewindowsprintqueues": -28.0,
-            "batchdeletingprinters": -28.0,
-            "printerfailover": -28.0,
-            "fixingprintspoolercrashes": -28.0,
-            "activeuserclients": -28.0,
-            "doineedaprintserver": -28.0,
-            "webprintstatusmessages": -28.0,
-            "changingservernameip": -28.0,
+            "amalgamateprinterqueues": -35.0,
+            "hidedocumentnameonwindowsprinters": -35.0,
+            "downloadembeddedmanuals": -35.0,
+            "easysecurecernerprintingwithpapercut": -35.0,
+            "windowstype4printdrivers": -35.0,
+            "howtorenameaprinter": -35.0,
+            "deploymobilityqueuesbygroup": -35.0,
+            "preventusersfromprintingjobsviamobility": -35.0,
+            "printarchivinglpr": -35.0,
+            "migratingngtonewserver": -35.0,
+            "howtomigratewindowsprintqueues": -35.0,
+            "batchdeletingprinters": -35.0,
+            "printerfailover": -35.0,
+            "fixingprintspoolercrashes": -35.0,
+            "activeuserclients": -35.0,
+            "doineedaprintserver": -35.0,
+            "webprintstatusmessages": -35.0,
+            "changingservernameip": -35.0,
         },
     },
     "held_or_release_jobs": {
         "intent_any": ["troubleshooting", "procedural"],
-        "query_any": [
-            "retenid", "hold", "held", "release", "liberación", "liberacion",
-            "pendientes de liber", "jobs pending release", "not held",
-        ],
-        "expansions": [
-            "print jobs not held hold release queue",
-            "jobs pending release release station",
-            "temporarily hidden message print provider",
-            "configure how long jobs are held",
-            "held jobs server performance",
-        ],
-        "boost_identity": {
-            "printjobsnotheld": 60.0,
-            "changingjobtimeoutonreleasestation": 45.0,
-            "temporarilyhiddenmessage": 35.0,
-            "troubleshootingserverperformanceissues": 20.0,
-            "device-mf-copier-integration-release": 18.0,
-        },
-        "boost_content": {
-            "hold/release jobs": 10.0,
-            "jobs pending release": 10.0,
-            "release station": 8.0,
-            "print provider": 5.0,
-        },
-        "penalize_identity": {
-            "printarchivinglpr": -14.0,
-            "migratingngtonewserver": -12.0,
-        },
+        "query_any": ["retenid", "hold", "held", "release", "liberación", "liberacion", "pendientes de liber", "jobs pending release", "not held"],
+        "expansions": ["print jobs not held hold release queue", "jobs pending release release station", "temporarily hidden message print provider", "configure how long jobs are held", "held jobs server performance"],
+        "boost_identity": {"printjobsnotheld": 70.0, "changingjobtimeoutonreleasestation": 50.0, "temporarilyhiddenmessage": 45.0, "troubleshootingserverperformanceissues": 25.0, "device-mf-copier-integration-release": 20.0},
+        "boost_content": {"hold/release jobs": 10.0, "jobs pending release": 10.0, "release station": 8.0, "print provider": 5.0},
+        "penalize_identity": {"printarchivinglpr": -20.0, "migratingngtonewserver": -16.0},
     },
     "find_me_printing": {
         "intent_any": ["troubleshooting", "procedural", "conceptual"],
         "query_any": ["find-me", "find me", "findme", "follow me", "pull print", "cola virtual"],
-        "expansions": [
-            "set up find-me printing",
-            "troubleshooting find-me printing virtual queues",
-            "secure print release find-me printing",
-            "destination queues virtual print queue",
-        ],
-        "boost_identity": {
-            "find-me-printing-setup-mf": 55.0,
-            "find-me-printing-troubleshooting": 55.0,
-            "device-mf-copier-integration-release-find-me": 45.0,
-            "find-me-printing-and-load-balancing-faq": 30.0,
-        },
-        "boost_content": {
-            "find-me printing": 8.0,
-            "virtual print queue": 8.0,
-            "destination queues": 6.0,
-        },
+        "expansions": ["set up find-me printing", "troubleshooting find-me printing virtual queues", "secure print release find-me printing", "destination queues virtual print queue"],
+        "boost_identity": {"find-me-printing-setup-mf": 60.0, "find-me-printing-troubleshooting": 60.0, "device-mf-copier-integration-release-find-me": 50.0, "find-me-printing-and-load-balancing-faq": 35.0},
+        "boost_content": {"find-me printing": 8.0, "virtual print queue": 8.0, "destination queues": 6.0},
         "penalize_identity": {},
     },
     "queue_stuck_or_blocked": {
         "intent_any": ["troubleshooting"],
         "query_any": ["cola", "queue", "spooler", "bloqueada", "atascada", "stuck"],
-        "expansions": [
-            "print queue stuck",
-            "jobs stuck with status of printing",
-            "windows print spooler stability",
-            "print queue driver troubleshooting",
-            "printer queue not printing",
-        ],
-        "boost_identity": {
-            "jobsstuckwithstatusofprinting": 55.0,
-            "fixingprintspoolercrashes": 35.0,
-            "basicprintingtests": 20.0,
-            "find-me-printing-troubleshooting": 16.0,
-        },
-        "boost_content": {
-            "print queue": 6.0,
-            "spooler": 6.0,
-            "stuck": 5.0,
-            "driver": 3.0,
-        },
+        "expansions": ["print queue stuck", "jobs stuck with status of printing", "windows print spooler stability", "print queue driver troubleshooting", "printer queue not printing"],
+        "boost_identity": {"jobsstuckwithstatusofprinting": 60.0, "fixingprintspoolercrashes": 35.0, "basicprintingtests": 20.0, "find-me-printing-troubleshooting": 16.0},
+        "boost_content": {"print queue": 6.0, "spooler": 6.0, "stuck": 5.0, "driver": 3.0},
         "penalize_identity": {},
     },
 }
 
 TANGENTIAL_SOURCE_RULES = [
-    {
-        "query_absent_any": ["mobility", "mobility print", "impresión móvil", "impresion movil", "mobile print"],
-        "source_any": ["mobility-print", "mobilityprint", "mobility"],
-        "penalty": -20.0,
-    },
-    {
-        "query_absent_any": ["print deploy", "print-deploy"],
-        "source_any": ["print-deploy", "printdeploy"],
-        "penalty": -20.0,
-    },
-    {
-        "query_absent_any": ["job ticketing", "job-ticketing"],
-        "source_any": ["job-ticketing", "jobticketing"],
-        "penalty": -20.0,
-    },
+    {"query_absent_any": ["mobility", "mobility print", "impresión móvil", "impresion movil", "mobile print"], "source_any": ["mobility-print", "mobilityprint", "mobility"], "penalty": -20.0},
+    {"query_absent_any": ["print deploy", "print-deploy"], "source_any": ["print-deploy", "printdeploy"], "penalty": -20.0},
+    {"query_absent_any": ["job ticketing", "job-ticketing"], "source_any": ["job-ticketing", "jobticketing"], "penalty": -20.0},
 ]
 
 
 def normalize_for_match(value: str) -> str:
-    return str(value or "").lower().replace("-", "").replace("_", "").replace("/", "")
+    return str(value or "").lower().replace("-", "").replace("_", "").replace("/", "").replace(" ", "")
 
 
 def is_papercut_query(query: str) -> bool:
@@ -846,8 +777,7 @@ def get_matching_issue_packs(query: str, query_intent: str | None = None) -> lis
         allowed_intents = pack.get("intent_any") or []
         if allowed_intents and query_intent not in allowed_intents:
             continue
-        triggers = pack.get("query_any") or []
-        if triggers and any(trigger in text for trigger in triggers):
+        if any(trigger in text for trigger in pack.get("query_any", []) or []):
             matches.append((pack_name, pack))
     return matches
 
@@ -856,19 +786,14 @@ def build_transversal_expanded_queries(query: str, query_intent: str | None = No
     query_intent = query_intent or classify_query_intent(query)
     expansions = [query]
     entity_terms = get_entity_preferred_terms(query)
-    base_entity_context = " ".join(entity_terms[:6])
-
+    entity_context = " ".join(entity_terms[:6])
     for _, pack in get_matching_issue_packs(query, query_intent):
         for expansion in pack.get("expansions", []) or []:
-            if base_entity_context:
-                expansions.append(f"{base_entity_context} {expansion}")
             expansions.append(expansion)
-
-    # PaperCut NG/MF docs are often shared and in English; keep a light bridge
-    # when PaperCut is explicitly in the user query.
+            if entity_context:
+                expansions.append(f"{entity_context} {expansion}")
     if is_papercut_query(query):
         expansions.append(f"PaperCut NG MF {query}")
-
     seen = set()
     unique = []
     for item in expansions:
@@ -876,7 +801,7 @@ def build_transversal_expanded_queries(query: str, query_intent: str | None = No
         if key and key not in seen:
             seen.add(key)
             unique.append(item)
-    return unique[:10]
+    return unique[:12]
 
 
 def compute_issue_pack_rerank_score(query: str, doc, query_intent: str | None = None) -> float:
@@ -886,29 +811,18 @@ def compute_issue_pack_rerank_score(query: str, doc, query_intent: str | None = 
     normalized_identity = normalize_for_match(identity)
     content = str(doc.page_content or "").lower()
     score = 0.0
-
     matching_packs = get_matching_issue_packs(query, query_intent)
+
     for _, pack in matching_packs:
         for term, boost in (pack.get("boost_identity") or {}).items():
             if normalize_for_match(term) in normalized_identity or str(term).lower() in identity:
                 score += float(boost)
-
         for term, boost in (pack.get("boost_content") or {}).items():
-            # Content-only evidence is useful but should not outrank exact title/source anchors.
             if str(term).lower() in content[:1600]:
                 score += float(boost)
-
         for term, penalty in (pack.get("penalize_identity") or {}).items():
             if normalize_for_match(term) in normalized_identity:
                 score += float(penalty)
-
-        # If a document only links to a high-value target but its own title/source
-        # is unrelated, reduce its score; the target page should win.
-        strong_identity_terms = [normalize_for_match(t) for t in (pack.get("boost_identity") or {}).keys()]
-        content_mentions_strong = any(str(t).lower() in content[:2500] for t in (pack.get("boost_content") or {}).keys())
-        identity_has_strong = any(t in normalized_identity for t in strong_identity_terms)
-        if content_mentions_strong and not identity_has_strong:
-            score -= 5.0
 
     text = str(query or "").lower()
     for rule in TANGENTIAL_SOURCE_RULES:
@@ -916,7 +830,6 @@ def compute_issue_pack_rerank_score(query: str, doc, query_intent: str | None = 
         source_has = any(normalize_for_match(term) in normalized_identity for term in rule.get("source_any", []))
         if query_absent and source_has:
             score += float(rule.get("penalty", 0.0))
-
     return score
 
 def detect_query_profile(query: str):
@@ -2047,12 +1960,10 @@ def retrieve_context(query: str, top_k: int = 4):
         search_kwargs = {"k": k_initial}
         if filter_value:
             search_kwargs["filter"] = filter_value
-
         retriever = vectorstore.as_retriever(search_kwargs=search_kwargs)
         return retriever.invoke(retrieval_query)
 
     retrieval_queries = build_transversal_expanded_queries(query, query_intent)
-
     docs = []
     seen_candidate_keys = set()
 
@@ -2072,15 +1983,11 @@ def retrieve_context(query: str, top_k: int = 4):
             docs.append(candidate)
 
     for retrieval_query in retrieval_queries:
-        # First attempt: use profile filter only if present.
         if metadata_filter:
             try:
                 add_candidates(run_retrieval(retrieval_query, metadata_filter))
             except Exception:
                 pass
-
-        # Broad fallback/candidate collection. Especially important for shared
-        # families like PaperCut NG/MF where metadata can be valid but uneven.
         if (not metadata_filter) or CONFIG.get("enable_filter_fallback", True) or is_papercut_query(query):
             try:
                 add_candidates(run_retrieval(retrieval_query, None))
