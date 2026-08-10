@@ -160,16 +160,6 @@ def ensure_session_state_integrity(session_state: ChatSessionState):
         session_state.incident_state = IncidentState()
     if getattr(session_state, "pending_incident_field", None) is None:
         session_state.pending_incident_field = None
-    if getattr(session_state, "escalation_workflow_state", None) is None:
-        session_state.escalation_workflow_state = "normal"
-    if getattr(session_state, "escalation_summary_ready", None) is None:
-        session_state.escalation_summary_ready = False
-    if getattr(session_state, "escalation_persisted", None) is None:
-        session_state.escalation_persisted = False
-    if not hasattr(session_state, "last_escalation_summary"):
-        session_state.last_escalation_summary = None
-    if not hasattr(session_state, "last_escalation_exported_file"):
-        session_state.last_escalation_exported_file = None
     return session_state
 
 
@@ -209,96 +199,6 @@ def is_in_scope_message(user_message: str) -> bool:
     support_match = any(k in text for k in SUPPORT_FLOW_KEYWORDS)
 
     return domain_match or support_match
-
-# -----------------------------------------------------------------------------
-# Deterministic help and intake routes
-# -----------------------------------------------------------------------------
-CAPABILITIES_HELP_RESPONSE = """Puedo ayudarte con soporte de primer nivel para servicios y herramientas de impresión:
-
-- Diagnosticar problemas como trabajos retenidos o desaparecidos, colas bloqueadas, errores de impresión, escaneo y conectividad.
-- Consultar documentación sobre PaperCut MF, HP SDS, HP Web Jetadmin, HP Access Control, GAV Tracking, Print Evolve, MFPsecure y otras herramientas disponibles.
-- Explicar conceptos, requisitos, configuraciones y procedimientos documentados.
-- Orientar sobre consumibles, activos, garantías y procesos del servicio cuando exista documentación disponible.
-- Preparar un resumen técnico para escalar un incidente cuando el caso no pueda resolverse en primer nivel.
-
-Para comenzar, indícame el producto o herramienta, el síntoma que observas y las validaciones que ya realizaste."""
-
-SUPPORT_INTAKE_RESPONSE = """Claro. Cuéntame qué problema de impresión estás observando. Si puedes, incluye:
-
-- Producto o herramienta involucrada.
-- Síntoma o mensaje de error.
-- Impresora, dispositivo o cola afectada.
-- Acciones o validaciones que ya realizaste.
-
-Con esa información podré orientarte mejor o ayudarte a preparar un escalamiento si es necesario."""
-
-CAPABILITIES_PATTERNS = [
-    "qué puedes hacer", "que puedes hacer",
-    "cómo me puedes ayudar", "como me puedes ayudar",
-    "en qué me puedes ayudar", "en que me puedes ayudar",
-    "qué sabes hacer", "que sabes hacer",
-    "qué temas manejas", "que temas manejas",
-    "qué soportas", "que soportas",
-    "necesito orientación", "necesito orientacion",
-    "muéstrame las opciones", "muestrame las opciones",
-]
-
-CAPABILITIES_EXACT = {
-    "ayuda", "menu", "menú", "opciones", "help",
-}
-
-SUPPORT_INTAKE_PATTERNS = [
-    "tengo problemas", "tengo un problema", "necesito ayuda con una impresora",
-    "necesito soporte", "necesito ayuda con impresión", "necesito ayuda con impresion",
-    "algo no funciona", "la impresora tiene problemas",
-]
-
-ESCALATION_CANCEL_COMMANDS = {
-    "cancelar", "cancela", "salir", "abortar", "detener escalamiento",
-    "cancelar escalamiento", "olvidar el caso",
-}
-
-ESCALATION_FINISH_COMMANDS = {
-    "finalizar", "terminar", "cerrar caso", "finalizar caso", "terminar caso",
-}
-
-ACKNOWLEDGEMENT_MESSAGES = {
-    "ok", "okay", "gracias", "listo", "entendido", "perfecto", "de acuerdo",
-}
-
-
-def normalize_route_text(user_message: str) -> str:
-    text = str(user_message or "").lower().strip()
-    text = re.sub(r"[^a-záéíóúüñ0-9\s¿?]", " ", text)
-    text = re.sub(r"\s+", " ", text).strip()
-    for greeting in ("hola ", "buenas ", "buenos días ", "buenos dias ", "buenas tardes ", "buenas noches "):
-        if text.startswith(greeting):
-            text = text[len(greeting):].strip()
-            break
-    return text.strip("¿? ")
-
-
-def is_capabilities_help_message(user_message: str) -> bool:
-    text = normalize_route_text(user_message)
-    return text in CAPABILITIES_EXACT or any(pattern in text for pattern in CAPABILITIES_PATTERNS)
-
-
-def is_support_intake_message(user_message: str) -> bool:
-    text = normalize_route_text(user_message)
-    return any(pattern in text for pattern in SUPPORT_INTAKE_PATTERNS)
-
-
-def is_escalation_cancel_command(user_message: str) -> bool:
-    return normalize_route_text(user_message) in ESCALATION_CANCEL_COMMANDS
-
-
-def is_escalation_finish_command(user_message: str) -> bool:
-    return normalize_route_text(user_message) in ESCALATION_FINISH_COMMANDS
-
-
-def is_acknowledgement_message(user_message: str) -> bool:
-    return normalize_route_text(user_message) in ACKNOWLEDGEMENT_MESSAGES
-
 
 # -----------------------------------------------------------------------------
 # Query Entities helpers
@@ -878,7 +778,7 @@ def compute_explicit_entity_identity_score(user_query: str, metadata: dict, cont
 # This layer is intentionally issue-oriented instead of product-question-specific.
 # It improves retrieval for recurring support symptoms through configurable packs.
 
-BACKEND_VNEXT_MARKER = "v9_escalation_and_guided_help"
+BACKEND_VNEXT_MARKER = "v8_polarity_context_and_observability"
 
 ISSUE_RETRIEVAL_PACKS = {
     "missing_print_jobs": {
@@ -4813,191 +4713,47 @@ def finalize_escalation_case(session_state: ChatSessionState):
 # Routing
 # -----------------------------------------------------------------------------
 
-def record_deterministic_route(
-    user_message: str,
-    bot_message: str,
-    route_type: str,
-    session_state: ChatSessionState,
-):
-    """Log a deterministic route without vector retrieval or LLM usage."""
-    session_state.memory.add_turn(user_message, bot_message)
-    session_state.log_turn(user_message, bot_message, route_type)
-
-    record = build_turn_observability_record(
-        user_message=user_message,
-        route_type=route_type,
-        query_intent=None,
-        support_info={"support_level": "not_applicable", "top_score": 0, "avg_overlap": 0},
-        hard_anchor=False,
-        strong_entity_match=False,
-        retrieved_docs=[],
-        real_source_labels=[],
-        llm_diagnostics={
-            "llm_call_ok": None,
-            "model": None,
-            "provider": None,
-            "usage": None,
-            "error": None,
-        },
-        latency_seconds=0.0,
-        fallback_used=False,
-    )
-    update_last_turn_diagnostics(record)
-    append_turn_observability_record(record)
-    return bot_message
-
-
-def reset_active_escalation(session_state: ChatSessionState, keep_last_summary: bool = True):
-    """Reset collection state while optionally preserving the last completed summary."""
-    last_summary = getattr(session_state, "last_escalation_summary", None) if keep_last_summary else None
-    last_file = getattr(session_state, "last_escalation_exported_file", None) if keep_last_summary else None
-
-    session_state.incident_state = IncidentState()
-    session_state.pending_incident_field = None
-    session_state.escalation_summary_ready = False
-    session_state.escalation_persisted = False
-    session_state.escalation_workflow_state = "normal"
-    session_state.mode = "normal"
-    session_state.last_escalation_summary = last_summary
-    session_state.last_escalation_exported_file = last_file
-    return session_state
-
-
-def start_new_escalation(session_state: ChatSessionState):
-    """Start a clean escalation case and discard only active collection fields."""
-    session_state.incident_state = IncidentState()
-    session_state.incident_state.escalation_requested = True
-    session_state.pending_incident_field = None
-    session_state.escalation_summary_ready = False
-    session_state.escalation_persisted = False
-    session_state.escalation_workflow_state = "escalation_collecting"
-    session_state.mode = "escalation"
-    return session_state
-
-
-def build_pending_field_help(session_state: ChatSessionState) -> str:
-    field_name = getattr(session_state, "pending_incident_field", None)
-    if not field_name:
-        return (
-            "Estoy recopilando la información del incidente. Puedes responder la pregunta actual "
-            "o escribir 'cancelar' para abandonar el escalamiento."
-        )
-    return (
-        "Para continuar con el escalamiento necesito este dato:\n\n"
-        f"{FIELD_QUESTIONS[field_name]}\n\n"
-        "Si no deseas continuar, escribe 'cancelar'."
-    )
-
-
-def complete_escalation_case(user_message: str, summary: str, session_state: ChatSessionState):
-    """Persist, show once, close collection, and return to normal routing."""
-    session_state.pending_incident_field = None
-    session_state.escalation_summary_ready = True
-    session_state.escalation_workflow_state = "escalation_completed"
-    session_state.last_escalation_summary = summary
-
-    bot_message = (
-        "He reunido la información principal del caso y el escalamiento quedó finalizado. "
-        "Este es el resumen:\n\n"
-        f"{summary}\n\n"
-        "El siguiente mensaje se procesará como una nueva consulta normal."
-    )
-
-    # Log the summary before persistence so the completed turn is included once.
-    session_state.memory.add_turn(user_message, bot_message)
-    session_state.log_turn(user_message, bot_message, "escalation_summary_completed")
-
-    if not getattr(session_state, "escalation_persisted", False):
-        try:
-            persisted = finalize_escalation_case(session_state)
-            session_state.escalation_persisted = True
-            session_state.last_escalation_exported_file = persisted.get("exported_file")
-        except Exception as exc:
-            session_state.escalation_persisted = False
-            st.session_state["last_escalation_persistence_error"] = str(exc)
-
-    # Close the active collection immediately. Preserve the completed summary.
-    session_state.mode = "normal"
-    session_state.pending_incident_field = None
-    session_state.incident_state.escalation_requested = False
-
-    record = build_turn_observability_record(
-        user_message=user_message,
-        route_type="escalation_summary_completed",
-        query_intent="escalation",
-        support_info={"support_level": "user_provided", "top_score": 0, "avg_overlap": 0},
-        hard_anchor=False,
-        strong_entity_match=False,
-        retrieved_docs=[],
-        real_source_labels=[],
-        llm_diagnostics={},
-        latency_seconds=0.0,
-        fallback_used=False,
-        error=st.session_state.get("last_escalation_persistence_error"),
-    )
-    update_last_turn_diagnostics(record)
-    append_turn_observability_record(record)
-    return bot_message
-
-
 def handle_escalation_message(user_message: str, session_state: ChatSessionState):
     session_state = ensure_session_state_integrity(session_state)
+    session_state.mode = "escalation"
+    session_state.incident_state.escalation_requested = True
 
-    if getattr(session_state, "escalation_workflow_state", "normal") != "escalation_collecting":
-        start_new_escalation(session_state)
+    normalized_message = normalize_user_reply(user_message)
 
-    if is_escalation_cancel_command(user_message):
-        reset_active_escalation(session_state, keep_last_summary=True)
-        return record_deterministic_route(
-            user_message,
-            "El escalamiento fue cancelado. Puedes continuar con una nueva consulta de soporte.",
-            "escalation_cancelled",
-            session_state,
-        )
-
-    if is_capabilities_help_message(user_message):
-        return record_deterministic_route(
-            user_message,
-            build_pending_field_help(session_state),
-            "escalation_field_help",
-            session_state,
-        )
-
-    if is_escalation_finish_command(user_message):
-        missing = get_missing_incident_fields(session_state.incident_state)
-        if missing:
-            field_name = missing[0]
-            session_state.pending_incident_field = field_name
-            return record_deterministic_route(
-                user_message,
-                "Aún faltan datos mínimos para cerrar el escalamiento.\n\n" + FIELD_QUESTIONS[field_name],
-                "escalation_finish_incomplete",
-                session_state,
+    # If the case is already ready for summary, do not regenerate the summary
+    # for acknowledgements like "ok" or "salir". Keep escalation mode active so
+    # the sidebar export button remains available.
+    if getattr(session_state, "escalation_summary_ready", False) and not getattr(session_state, "pending_incident_field", None):
+        if normalized_message in {"ok", "listo", "gracias", "salir", "finalizar", "terminar"}:
+            bot_message = (
+                "El resumen del caso ya está listo para exportar. "
+                "Puedes usar el botón de la barra lateral 'Finalizar y exportar caso' "
+                "o iniciar una nueva conversación si deseas consultar otro tema."
             )
+            session_state.memory.add_turn(user_message, bot_message)
+            session_state.log_turn(user_message, bot_message, "escalation_ready_ack")
+            return bot_message
 
-    result = process_escalation_turn(
-        user_message,
-        session_state.incident_state,
-        session_state,
-    )
-
+    result = process_escalation_turn(user_message, session_state.incident_state, session_state)
     if result["status"] == "collecting_information":
         bot_message = result["next_question"]
         session_state.pending_incident_field = result["next_field"]
-        session_state.escalation_workflow_state = "escalation_collecting"
-        session_state.mode = "escalation"
-        return record_deterministic_route(
-            user_message,
-            bot_message,
-            "escalation_collect",
-            session_state,
-        )
+        session_state.memory.add_turn(user_message, bot_message)
+        session_state.log_turn(user_message, bot_message, "escalation_collect")
+        return bot_message
 
-    return complete_escalation_case(
-        user_message=user_message,
-        summary=result["summary"],
-        session_state=session_state,
+    session_state.pending_incident_field = None
+    setattr(session_state, "escalation_summary_ready", True)
+    summary = result["summary"]
+    bot_message = (
+        "He reunido la información principal del caso. "
+        "Por favor revisa el siguiente resumen antes de escalar:\n\n"
+        f"{summary}\n\n"
+        "Si deseas, puedes usar el botón de la barra lateral para finalizar y exportar el caso."
     )
+    session_state.memory.add_turn(user_message, bot_message)
+    session_state.log_turn(user_message, bot_message, "escalation_summary")
+    return bot_message
 
 
 def handle_normal_message(user_message: str, session_state: ChatSessionState):
@@ -5009,62 +4765,17 @@ def handle_normal_message(user_message: str, session_state: ChatSessionState):
 def route_user_message(user_message: str, session_state: ChatSessionState):
     session_state = ensure_session_state_integrity(session_state)
 
-    workflow_state = getattr(session_state, "escalation_workflow_state", "normal")
-
-    # Active collection has first priority. Help explains the pending field and
-    # cancel/finish commands are handled inside the escalation workflow.
-    if workflow_state == "escalation_collecting" or session_state.mode == "escalation":
+    if session_state.mode == "escalation":
         return handle_escalation_message(user_message, session_state)
 
-    # Acknowledgements after a completed case do not reopen or repeat the summary.
-    if workflow_state == "escalation_completed" and (
-        is_acknowledgement_message(user_message)
-        or is_escalation_finish_command(user_message)
-        or is_escalation_cancel_command(user_message)
-    ):
-        session_state.escalation_workflow_state = "normal"
-        session_state.mode = "normal"
-        return record_deterministic_route(
-            user_message,
-            "El caso anterior quedó cerrado. Cuando quieras, puedes realizar una nueva consulta.",
-            "escalation_completed_ack",
-            session_state,
-        )
-
-    # Any substantive message after completion is a new normal request.
-    if workflow_state == "escalation_completed":
-        session_state.escalation_workflow_state = "normal"
-        session_state.mode = "normal"
-
-    # Help and intake must run before scope control, retrieval, and the LLM.
-    if is_capabilities_help_message(user_message):
-        return record_deterministic_route(
-            user_message,
-            CAPABILITIES_HELP_RESPONSE,
-            "capabilities_help",
-            session_state,
-        )
-
-    if is_support_intake_message(user_message):
-        return record_deterministic_route(
-            user_message,
-            SUPPORT_INTAKE_RESPONSE,
-            "support_intake",
-            session_state,
-        )
-
     if should_activate_escalation_mode(user_message):
-        start_new_escalation(session_state)
         return handle_escalation_message(user_message, session_state)
 
     if not is_in_scope_message(user_message):
         bot_message = OUT_OF_SCOPE_RESPONSE
-        return record_deterministic_route(
-            user_message,
-            bot_message,
-            "out_of_scope",
-            session_state,
-        )
+        session_state.memory.add_turn(user_message, bot_message)
+        session_state.log_turn(user_message, bot_message, "out_of_scope")
+        return bot_message
 
     return handle_normal_message(user_message, session_state)
 
