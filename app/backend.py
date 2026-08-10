@@ -233,38 +233,23 @@ SUPPORT_INTAKE_RESPONSE = """Claro. Cuéntame qué problema de impresión estás
 Con esa información podré orientarte mejor o ayudarte a preparar un escalamiento si es necesario."""
 
 CAPABILITIES_PATTERNS = [
-    "qué puedes hacer", "que puedes hacer",
-    "cómo me puedes ayudar", "como me puedes ayudar",
-    "en qué me puedes ayudar", "en que me puedes ayudar",
-    "qué sabes hacer", "que sabes hacer",
-    "qué temas manejas", "que temas manejas",
-    "qué soportas", "que soportas",
-    "necesito orientación", "necesito orientacion",
-    "muéstrame las opciones", "muestrame las opciones",
+    "qué puedes hacer", "que puedes hacer", "cómo me puedes ayudar", "como me puedes ayudar",
+    "en qué me puedes ayudar", "en que me puedes ayudar", "qué sabes hacer", "que sabes hacer",
+    "qué temas manejas", "que temas manejas", "qué soportas", "que soportas",
+    "necesito orientación", "necesito orientacion", "muéstrame las opciones", "muestrame las opciones",
 ]
-
-CAPABILITIES_EXACT = {
-    "ayuda", "menu", "menú", "opciones", "help",
-}
-
+CAPABILITIES_EXACT = {"ayuda", "menu", "menú", "opciones", "help"}
 SUPPORT_INTAKE_PATTERNS = [
-    "tengo problemas", "tengo un problema", "necesito ayuda con una impresora",
-    "necesito soporte", "necesito ayuda con impresión", "necesito ayuda con impresion",
-    "algo no funciona", "la impresora tiene problemas",
+    "tengo problemas", "tengo un problema", "necesito ayuda con una impresora", "necesito soporte",
+    "necesito ayuda con impresión", "necesito ayuda con impresion", "algo no funciona",
+    "la impresora tiene problemas",
 ]
-
 ESCALATION_CANCEL_COMMANDS = {
     "cancelar", "cancela", "salir", "abortar", "detener escalamiento",
     "cancelar escalamiento", "olvidar el caso",
 }
-
-ESCALATION_FINISH_COMMANDS = {
-    "finalizar", "terminar", "cerrar caso", "finalizar caso", "terminar caso",
-}
-
-ACKNOWLEDGEMENT_MESSAGES = {
-    "ok", "okay", "gracias", "listo", "entendido", "perfecto", "de acuerdo",
-}
+ESCALATION_FINISH_COMMANDS = {"finalizar", "terminar", "cerrar caso", "finalizar caso", "terminar caso"}
+ACKNOWLEDGEMENT_MESSAGES = {"ok", "okay", "gracias", "listo", "entendido", "perfecto", "de acuerdo"}
 
 
 def normalize_route_text(user_message: str) -> str:
@@ -878,7 +863,7 @@ def compute_explicit_entity_identity_score(user_query: str, metadata: dict, cont
 # This layer is intentionally issue-oriented instead of product-question-specific.
 # It improves retrieval for recurring support symptoms through configurable packs.
 
-BACKEND_VNEXT_MARKER = "v9_escalation_and_guided_help"
+BACKEND_VNEXT_MARKER = "v10_pdf_download_sources"
 
 ISSUE_RETRIEVAL_PACKS = {
     "missing_print_jobs": {
@@ -3810,6 +3795,90 @@ def build_context_from_docs(docs: list, max_chars_per_doc: int = 2600) -> str:
 
 
 # -----------------------------------------------------------------------------
+# Downloadable PDF source metadata
+# -----------------------------------------------------------------------------
+PDF_LIBRARY_ROOT = Path("data/knowledge_base_pdfs")
+MAX_RESPONSE_PDF_SOURCES = 3
+MAX_INLINE_PDF_SIZE_BYTES = 15 * 1024 * 1024
+DOWNLOADABLE_PDF_VENDORS = {"hp", "gav"}
+BLOCKED_PDF_VENDORS = {"arus_internal"}
+
+
+def resolve_pdf_relative_path(source_value: str) -> Path | None:
+    """Map build-time PDF paths to data/knowledge_base_pdfs safely."""
+    source_text = str(source_value or "").replace("\\", "/").strip()
+    if not source_text.lower().endswith(".pdf"):
+        return None
+    marker = "knowledge_base_pdfs/"
+    lower = source_text.lower()
+    marker_index = lower.find(marker)
+    if marker_index >= 0:
+        relative_text = source_text[marker_index + len(marker):]
+    else:
+        relative_text = Path(source_text).name
+    relative = Path(relative_text)
+    if relative.is_absolute() or ".." in relative.parts:
+        return None
+    return relative
+
+
+def build_response_pdf_sources(docs: list) -> list[dict[str, Any]]:
+    """Return lightweight metadata for up to three downloadable HP/GAV PDFs."""
+    sources = []
+    seen = set()
+    root = PDF_LIBRARY_ROOT.resolve()
+
+    for doc in docs or []:
+        metadata = doc.metadata or {}
+        vendor = str(metadata.get("vendor", "")).lower().strip()
+        if vendor in BLOCKED_PDF_VENDORS or vendor not in DOWNLOADABLE_PDF_VENDORS:
+            continue
+
+        source_value = get_best_source_value(metadata)
+        relative = resolve_pdf_relative_path(source_value)
+        if relative is None:
+            continue
+
+        candidate = (PDF_LIBRARY_ROOT / relative).resolve()
+        try:
+            candidate.relative_to(root)
+        except ValueError:
+            continue
+
+        key = str(relative).lower()
+        if key in seen:
+            continue
+        seen.add(key)
+
+        exists = candidate.is_file()
+        size_bytes = candidate.stat().st_size if exists else None
+        page = metadata.get("page_label", metadata.get("page"))
+        pages = [str(page)] if page is not None else []
+        allowed = bool(exists and size_bytes is not None and size_bytes <= MAX_INLINE_PDF_SIZE_BYTES)
+
+        sources.append({
+            "title": str(metadata.get("title") or relative.stem),
+            "file_name": relative.name,
+            "relative_path": relative.as_posix(),
+            "page_labels": pages,
+            "vendor": vendor,
+            "product": metadata.get("product"),
+            "size_bytes": size_bytes,
+            "exists": exists,
+            "download_allowed": allowed,
+            "status": "available" if allowed else ("too_large" if exists else "missing"),
+        })
+        if len(sources) >= MAX_RESPONSE_PDF_SOURCES:
+            break
+
+    return sources
+
+
+def clear_last_response_pdf_sources():
+    st.session_state["last_response_pdf_sources"] = []
+
+
+# -----------------------------------------------------------------------------
 # Generation
 # -----------------------------------------------------------------------------
 
@@ -3845,6 +3914,7 @@ def generate_answer_with_rag(user_query: str, memory):
         "llm_context_docs": len(llm_context_docs),
         "llm_context_chars": len(retrieved_context),
     }
+    st.session_state["last_response_pdf_sources"] = build_response_pdf_sources(llm_context_docs)
     allow_general_fallback = should_use_general_fallback(user_query, support_info)
     hard_anchor = has_hard_documentary_anchor(user_query, retrieved_docs, query_intent)
     strong_entity_match = has_strong_entity_document_match(user_query, retrieved_docs)
@@ -4813,16 +4883,10 @@ def finalize_escalation_case(session_state: ChatSessionState):
 # Routing
 # -----------------------------------------------------------------------------
 
-def record_deterministic_route(
-    user_message: str,
-    bot_message: str,
-    route_type: str,
-    session_state: ChatSessionState,
-):
-    """Log a deterministic route without vector retrieval or LLM usage."""
+def record_deterministic_route(user_message: str, bot_message: str, route_type: str, session_state: ChatSessionState):
+    clear_last_response_pdf_sources()
     session_state.memory.add_turn(user_message, bot_message)
     session_state.log_turn(user_message, bot_message, route_type)
-
     record = build_turn_observability_record(
         user_message=user_message,
         route_type=route_type,
@@ -4832,13 +4896,7 @@ def record_deterministic_route(
         strong_entity_match=False,
         retrieved_docs=[],
         real_source_labels=[],
-        llm_diagnostics={
-            "llm_call_ok": None,
-            "model": None,
-            "provider": None,
-            "usage": None,
-            "error": None,
-        },
+        llm_diagnostics={"llm_call_ok": None, "model": None, "provider": None, "usage": None, "error": None},
         latency_seconds=0.0,
         fallback_used=False,
     )
@@ -4848,10 +4906,8 @@ def record_deterministic_route(
 
 
 def reset_active_escalation(session_state: ChatSessionState, keep_last_summary: bool = True):
-    """Reset collection state while optionally preserving the last completed summary."""
     last_summary = getattr(session_state, "last_escalation_summary", None) if keep_last_summary else None
     last_file = getattr(session_state, "last_escalation_exported_file", None) if keep_last_summary else None
-
     session_state.incident_state = IncidentState()
     session_state.pending_incident_field = None
     session_state.escalation_summary_ready = False
@@ -4864,7 +4920,6 @@ def reset_active_escalation(session_state: ChatSessionState, keep_last_summary: 
 
 
 def start_new_escalation(session_state: ChatSessionState):
-    """Start a clean escalation case and discard only active collection fields."""
     session_state.incident_state = IncidentState()
     session_state.incident_state.escalation_requested = True
     session_state.pending_incident_field = None
@@ -4890,23 +4945,19 @@ def build_pending_field_help(session_state: ChatSessionState) -> str:
 
 
 def complete_escalation_case(user_message: str, summary: str, session_state: ChatSessionState):
-    """Persist, show once, close collection, and return to normal routing."""
+    clear_last_response_pdf_sources()
     session_state.pending_incident_field = None
     session_state.escalation_summary_ready = True
     session_state.escalation_workflow_state = "escalation_completed"
     session_state.last_escalation_summary = summary
-
     bot_message = (
         "He reunido la información principal del caso y el escalamiento quedó finalizado. "
         "Este es el resumen:\n\n"
         f"{summary}\n\n"
         "El siguiente mensaje se procesará como una nueva consulta normal."
     )
-
-    # Log the summary before persistence so the completed turn is included once.
     session_state.memory.add_turn(user_message, bot_message)
     session_state.log_turn(user_message, bot_message, "escalation_summary_completed")
-
     if not getattr(session_state, "escalation_persisted", False):
         try:
             persisted = finalize_escalation_case(session_state)
@@ -4915,89 +4966,34 @@ def complete_escalation_case(user_message: str, summary: str, session_state: Cha
         except Exception as exc:
             session_state.escalation_persisted = False
             st.session_state["last_escalation_persistence_error"] = str(exc)
-
-    # Close the active collection immediately. Preserve the completed summary.
     session_state.mode = "normal"
     session_state.pending_incident_field = None
     session_state.incident_state.escalation_requested = False
-
-    record = build_turn_observability_record(
-        user_message=user_message,
-        route_type="escalation_summary_completed",
-        query_intent="escalation",
-        support_info={"support_level": "user_provided", "top_score": 0, "avg_overlap": 0},
-        hard_anchor=False,
-        strong_entity_match=False,
-        retrieved_docs=[],
-        real_source_labels=[],
-        llm_diagnostics={},
-        latency_seconds=0.0,
-        fallback_used=False,
-        error=st.session_state.get("last_escalation_persistence_error"),
-    )
-    update_last_turn_diagnostics(record)
-    append_turn_observability_record(record)
     return bot_message
 
 
 def handle_escalation_message(user_message: str, session_state: ChatSessionState):
     session_state = ensure_session_state_integrity(session_state)
-
     if getattr(session_state, "escalation_workflow_state", "normal") != "escalation_collecting":
         start_new_escalation(session_state)
-
     if is_escalation_cancel_command(user_message):
         reset_active_escalation(session_state, keep_last_summary=True)
-        return record_deterministic_route(
-            user_message,
-            "El escalamiento fue cancelado. Puedes continuar con una nueva consulta de soporte.",
-            "escalation_cancelled",
-            session_state,
-        )
-
+        return record_deterministic_route(user_message, "El escalamiento fue cancelado. Puedes continuar con una nueva consulta de soporte.", "escalation_cancelled", session_state)
     if is_capabilities_help_message(user_message):
-        return record_deterministic_route(
-            user_message,
-            build_pending_field_help(session_state),
-            "escalation_field_help",
-            session_state,
-        )
-
+        return record_deterministic_route(user_message, build_pending_field_help(session_state), "escalation_field_help", session_state)
     if is_escalation_finish_command(user_message):
         missing = get_missing_incident_fields(session_state.incident_state)
         if missing:
             field_name = missing[0]
             session_state.pending_incident_field = field_name
-            return record_deterministic_route(
-                user_message,
-                "Aún faltan datos mínimos para cerrar el escalamiento.\n\n" + FIELD_QUESTIONS[field_name],
-                "escalation_finish_incomplete",
-                session_state,
-            )
-
-    result = process_escalation_turn(
-        user_message,
-        session_state.incident_state,
-        session_state,
-    )
-
+            return record_deterministic_route(user_message, "Aún faltan datos mínimos para cerrar el escalamiento.\n\n" + FIELD_QUESTIONS[field_name], "escalation_finish_incomplete", session_state)
+    result = process_escalation_turn(user_message, session_state.incident_state, session_state)
     if result["status"] == "collecting_information":
-        bot_message = result["next_question"]
         session_state.pending_incident_field = result["next_field"]
         session_state.escalation_workflow_state = "escalation_collecting"
         session_state.mode = "escalation"
-        return record_deterministic_route(
-            user_message,
-            bot_message,
-            "escalation_collect",
-            session_state,
-        )
-
-    return complete_escalation_case(
-        user_message=user_message,
-        summary=result["summary"],
-        session_state=session_state,
-    )
+        return record_deterministic_route(user_message, result["next_question"], "escalation_collect", session_state)
+    return complete_escalation_case(user_message, result["summary"], session_state)
 
 
 def handle_normal_message(user_message: str, session_state: ChatSessionState):
@@ -5008,64 +5004,27 @@ def handle_normal_message(user_message: str, session_state: ChatSessionState):
 
 def route_user_message(user_message: str, session_state: ChatSessionState):
     session_state = ensure_session_state_integrity(session_state)
-
     workflow_state = getattr(session_state, "escalation_workflow_state", "normal")
-
-    # Active collection has first priority. Help explains the pending field and
-    # cancel/finish commands are handled inside the escalation workflow.
     if workflow_state == "escalation_collecting" or session_state.mode == "escalation":
         return handle_escalation_message(user_message, session_state)
-
-    # Acknowledgements after a completed case do not reopen or repeat the summary.
     if workflow_state == "escalation_completed" and (
-        is_acknowledgement_message(user_message)
-        or is_escalation_finish_command(user_message)
-        or is_escalation_cancel_command(user_message)
+        is_acknowledgement_message(user_message) or is_escalation_finish_command(user_message) or is_escalation_cancel_command(user_message)
     ):
         session_state.escalation_workflow_state = "normal"
         session_state.mode = "normal"
-        return record_deterministic_route(
-            user_message,
-            "El caso anterior quedó cerrado. Cuando quieras, puedes realizar una nueva consulta.",
-            "escalation_completed_ack",
-            session_state,
-        )
-
-    # Any substantive message after completion is a new normal request.
+        return record_deterministic_route(user_message, "El caso anterior quedó cerrado. Cuando quieras, puedes realizar una nueva consulta.", "escalation_completed_ack", session_state)
     if workflow_state == "escalation_completed":
         session_state.escalation_workflow_state = "normal"
         session_state.mode = "normal"
-
-    # Help and intake must run before scope control, retrieval, and the LLM.
     if is_capabilities_help_message(user_message):
-        return record_deterministic_route(
-            user_message,
-            CAPABILITIES_HELP_RESPONSE,
-            "capabilities_help",
-            session_state,
-        )
-
+        return record_deterministic_route(user_message, CAPABILITIES_HELP_RESPONSE, "capabilities_help", session_state)
     if is_support_intake_message(user_message):
-        return record_deterministic_route(
-            user_message,
-            SUPPORT_INTAKE_RESPONSE,
-            "support_intake",
-            session_state,
-        )
-
+        return record_deterministic_route(user_message, SUPPORT_INTAKE_RESPONSE, "support_intake", session_state)
     if should_activate_escalation_mode(user_message):
         start_new_escalation(session_state)
         return handle_escalation_message(user_message, session_state)
-
     if not is_in_scope_message(user_message):
-        bot_message = OUT_OF_SCOPE_RESPONSE
-        return record_deterministic_route(
-            user_message,
-            bot_message,
-            "out_of_scope",
-            session_state,
-        )
-
+        return record_deterministic_route(user_message, OUT_OF_SCOPE_RESPONSE, "out_of_scope", session_state)
     return handle_normal_message(user_message, session_state)
 
 
