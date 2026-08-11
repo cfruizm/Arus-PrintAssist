@@ -177,25 +177,16 @@ def ensure_session_state_integrity(session_state: ChatSessionState):
 # Scope control
 # -----------------------------------------------------------------------------
 PRINT_SCOPE_KEYWORDS = [
-    # Devices and products
-    "impresora", "impresoras", "printer", "multifuncional", "copiadora", "mfp",
+    "impresora", "impresoras", "printer", "printers", "multifuncional", "copiadora", "mfp",
     "papercut", "sds", "hp", "epson", "web jetadmin", "wja", "jetadmin", "oxp",
-    "gav", "print evolve", "mfpsecure",
-
-    # Printing actions and common colloquial forms
-    "impresión", "impresion", "imprimir", "imprime", "imprimiendo", "la impre",
-    "trabajo de impresión", "trabajo de impresion", "trabajos de impresión",
-    "trabajos de impresion", "los trabajos", "el trabajo",
-
-    # Queues and technical components
-    "cola de impresión", "cola de impresion", "cola", "colas", "queue", "spooler",
-    "driver", "firmware", "servidor de impresión", "servidor de impresion",
-
-    # Scanning and supplies
-    "escaner", "escáner", "scanner", "toner", "tóner", "consumible", "suministro",
+    "gav", "print evolve", "mfpsecure", "impresión", "impresion", "imprimir", "imprime",
+    "imprimen", "imprimiendo", "la impre", "trabajo de impresión", "trabajo de impresion",
+    "trabajos de impresión", "trabajos de impresion", "los trabajos", "el trabajo",
+    "cola de impresión", "cola de impresion", "cola", "colas", "queue", "spooler", "driver",
+    "firmware", "servidor de impresión", "servidor de impresion", "escaner", "escáner",
+    "scanner", "escanear", "toner", "tóner", "consumible", "consumibles", "suministro",
 ]
 
-# Scope hints only. These expressions must never activate escalation by themselves.
 SUPPORT_FLOW_KEYWORDS = [
     "quiero escalar", "necesito escalar", "deseo escalar", "escalar el caso",
     "abrir un caso", "abrir caso", "crear incidente", "generar incidente",
@@ -313,13 +304,8 @@ def normalize_route_text(user_message: str) -> str:
 
 def is_capabilities_help_message(user_message: str) -> bool:
     text = normalize_route_text(user_message)
-
-    # Product-specific questions such as "¿qué funciones tiene HP Access Control?"
-    # must remain documentary queries, not assistant-capabilities requests.
-    detected_products = detect_entities_in_text(text, PRODUCT_ALIAS_INDEX)
-    if detected_products:
+    if has_explicit_product_entity(text):
         return False
-
     return text in CAPABILITIES_EXACT or any(pattern in text for pattern in CAPABILITIES_PATTERNS)
 
 
@@ -340,57 +326,89 @@ def is_acknowledgement_message(user_message: str) -> bool:
     return normalize_route_text(user_message) in ACKNOWLEDGEMENT_MESSAGES
 
 
-AMBIGUOUS_PRINT_ISSUE_PATTERNS = [
-    "no puedo imprimir", "no imprime", "no me imprime", "no deja imprimir",
-    "la impre no imprime", "la impresora no imprime", "los trabajos no aparecen",
-    "el trabajo no aparece", "trabajos no aparecen", "los trabajos desaparecen",
-    "el trabajo desaparece", "la cola está bloqueada", "la cola esta bloqueada",
-    "cola bloqueada", "cola atascada", "el monitor no funciona", "monitor no funciona",
+GENERIC_PRINT_ENTITY_TERMS = {
+    "impresora", "impresoras", "printer", "printers", "impresión", "impresion", "imprimir",
+    "multifuncional", "copiadora", "mfp", "monitor", "cola", "queue", "spooler", "driver",
+    "firmware", "escaner", "escáner", "scanner", "toner", "tóner",
+}
+
+AMBIGUOUS_PRINT_SYMPTOM_REGEXES = [
+    r"\bno\s+(?:puedo|puede|podemos|logro|logra|deja|permite)\s+(?:imprimir|escanear|liberar|ver|encontrar)",
+    r"\bno\s+(?:imprime|imprimen|funciona|funcionan|responde|responden|aparece|aparecen|sale|salen|carga|cargan|detecta|detectan|registra|registran)\b",
+    r"\b(?:bloquead|atascad|detenid|retenid|pendient|desaparec|perdid|offline|desconectad|lento|lenta|error|falla|fallo)\w*\b",
+    r"\b(?:trabajo|trabajos|documento|documentos)\b.*\b(?:no|sin|desaparec|pendient|retenid|atascad)\w*\b",
 ]
+
+PRINT_CONTEXT_REGEX = re.compile(
+    r"\b(?:impres\w*|imprim\w*|printer\w*|trabajo\w*|cola\w*|queue\w*|spooler|"
+    r"multifuncional\w*|copiadora\w*|monitor\w*|scanner\w*|escaner\w*|escáner\w*|"
+    r"papel|toner|tóner|driver\w*|firmware)\b",
+    re.IGNORECASE,
+)
+
+
+def get_explicit_product_reference(user_message: str) -> tuple[str, dict] | None:
+    """Return a specifically named registry product, excluding generic print nouns."""
+    text = normalize_route_text(user_message)
+    for product_id, registry_item in get_detected_product_entities_with_registry(text):
+        canonical = str(registry_item.get("canonical_name", "")).strip()
+        aliases = [str(value).strip() for value in registry_item.get("aliases", []) or []]
+        for candidate in [canonical] + aliases:
+            normalized = normalize_route_text(candidate)
+            if not normalized or normalized in GENERIC_PRINT_ENTITY_TERMS:
+                continue
+            if entity_alias_is_explicitly_mentioned(text, normalized):
+                return product_id, registry_item
+    return None
 
 
 def has_explicit_product_entity(user_message: str) -> bool:
-    text = normalize_route_text(user_message)
-    return bool(detect_entities_in_text(text, PRODUCT_ALIAS_INDEX))
+    return get_explicit_product_reference(user_message) is not None
 
 
 def is_ambiguous_print_issue(user_message: str) -> bool:
-    """Detect a print symptom that lacks the product/environment needed for safe RAG."""
+    """Detect broad print symptoms that lack a specifically named product/tool."""
     text = normalize_route_text(user_message)
     if has_explicit_product_entity(text):
         return False
-    return any(pattern in text for pattern in AMBIGUOUS_PRINT_ISSUE_PATTERNS)
+    has_context = bool(PRINT_CONTEXT_REGEX.search(text))
+    has_symptom = any(re.search(pattern, text, flags=re.IGNORECASE) for pattern in AMBIGUOUS_PRINT_SYMPTOM_REGEXES)
+    return has_context and has_symptom
 
 
 def build_ambiguous_print_issue_response(user_message: str) -> str:
     text = normalize_route_text(user_message)
-
-    if "cola" in text:
-        lead = (
-            "Para orientar la cola bloqueada necesito identificar el entorno. "
-            "¿La cola corresponde a Windows, PaperCut, GAV Tracking u otra herramienta?"
+    if re.search(r"\b(?:cola|queue|spooler)\w*\b", text):
+        return (
+            "Para orientar el problema de la cola necesito identificar el entorno. "
+            "Indícame si corresponde a Windows, PaperCut, GAV Tracking u otra herramienta.\n\n"
+            "Comparte también el estado visible del trabajo, por ejemplo Imprimiendo, En pausa o Error, "
+            "y si la afectación ocurre en una sola cola o en varias."
         )
-        extra = "Indica también el estado visible del trabajo, por ejemplo Imprimiendo, En pausa o Error."
-    elif "monitor" in text:
-        lead = (
-            "La palabra monitor puede referirse a diferentes componentes. "
-            "Indícame si se trata de HP SDS Monitor, un monitor físico u otra herramienta de impresión."
+    if re.search(r"\bmonitor\w*\b", text):
+        return (
+            "La palabra monitor puede referirse a componentes diferentes. "
+            "Indícame si se trata de HP SDS Monitor, un monitor físico u otra herramienta de impresión.\n\n"
+            "Comparte el mensaje de error y el equipo, servidor o dispositivo afectado, si los conoces."
         )
-        extra = "Si existe un mensaje de error, compártelo junto con el equipo o servidor afectado."
-    elif "trabajo" in text:
-        lead = (
-            "Para revisar por qué los trabajos no aparecen necesito saber en qué producto o cola ocurre, "
-            "por ejemplo PaperCut, GAV Tracking o una cola de Windows."
+    if re.search(r"\b(?:trabajo|trabajos|documento|documentos)\w*\b", text):
+        return (
+            "Para revisar el problema con los trabajos necesito saber en qué producto o cola ocurre, "
+            "por ejemplo PaperCut, GAV Tracking o una cola de Windows.\n\n"
+            "Indica la impresora o cola, la hora aproximada del envío, el estado visible del trabajo "
+            "y si afecta a uno o varios usuarios."
         )
-        extra = "Indica la impresora o cola, la hora aproximada del envío y si afecta a uno o varios usuarios."
-    else:
-        lead = (
-            "Para orientarte correctamente necesito identificar el entorno donde no puedes imprimir. "
-            "Indícame el producto o herramienta involucrada y la impresora o cola afectada."
+    if re.search(r"\b(?:escaner|escáner|scanner|escanear)\w*\b", text):
+        return (
+            "Para orientar el problema de escaneo necesito conocer el equipo y la función utilizada, "
+            "por ejemplo escaneo a carpeta, correo u otra aplicación.\n\n"
+            "Indica el modelo del dispositivo, el destino del escaneo y el mensaje de error, si existe."
         )
-        extra = "Comparte también el mensaje de error, si existe, y si el problema afecta a uno o varios usuarios."
-
-    return f"{lead}\n\n{extra}"
+    return (
+        "Para orientarte correctamente necesito identificar el entorno donde ocurre el problema de impresión. "
+        "Indícame el producto o herramienta involucrada y la impresora, dispositivo o cola afectada.\n\n"
+        "Comparte también el mensaje de error, el momento aproximado de la falla y si afecta a uno o varios usuarios."
+    )
 
 
 # -----------------------------------------------------------------------------
@@ -971,7 +989,7 @@ def compute_explicit_entity_identity_score(user_query: str, metadata: dict, cont
 # This layer is intentionally issue-oriented instead of product-question-specific.
 # It improves retrieval for recurring support symptoms through configurable packs.
 
-BACKEND_VNEXT_MARKER = "v11_routing_ambiguity_and_followup"
+BACKEND_VNEXT_MARKER = "v12_global_ambiguity_and_entity_followup"
 
 ISSUE_RETRIEVAL_PACKS = {
     "missing_print_jobs": {
@@ -2260,39 +2278,50 @@ def has_hard_documentary_anchor(user_query: str, docs: list, query_intent: str) 
     return False
 
 
+FOLLOW_UP_REGEXES = [
+    r"^(?:y\s+)?(?:eso|lo anterior|esa herramienta|ese software|ese sistema|ese producto|esa solución|esa solucion)$",
+    r"^(?:y\s+)?(?:cómo|como|cuándo|cuando|dónde|donde|por qué|por que|para qué|para que)\b",
+    r"^(?:qué|que|cuáles|cuales)\s+(?:requisitos|funciones|componentes|versiones|sistemas|plataformas|puertos|limitaciones)\b",
+    r"^(?:cómo|como)\s+(?:se\s+)?(?:instala|configura|usa|funciona|actualiza|registra|desinstala)\b",
+    r"^(?:qué|que)\s+versión\s+soporta\b",
+    r"^(?:también|tambien)\b",
+]
+
+
 def is_explicit_follow_up_query(user_query: str) -> bool:
     text = normalize_route_text(user_query)
-    follow_up_patterns = [
-        # Direct references
-        "y eso", "eso", "lo anterior", "esa herramienta", "ese software",
-        "ese sistema", "ese producto", "esa solución", "esa solucion",
-
-        # Continuations
-        "y como", "y cómo", "y para eso", "y en ese caso", "tambien", "también",
-
-        # Elliptical questions that depend on the immediately previous subject
-        "qué requisitos tiene", "que requisitos tiene", "cuáles son sus requisitos",
-        "cuales son sus requisitos", "cómo se instala", "como se instala",
-        "cómo se configura", "como se configura", "qué versión soporta",
-        "que version soporta", "para qué sirve", "para que sirve",
-        "qué funciones tiene", "que funciones tiene", "cómo funciona", "como funciona",
-    ]
-    return any(pattern in text for pattern in follow_up_patterns)
+    if has_explicit_product_entity(text):
+        return False
+    if len(text.split()) > 10:
+        return False
+    return any(re.search(pattern, text, flags=re.IGNORECASE) for pattern in FOLLOW_UP_REGEXES)
 
 
 def get_previous_documentary_user_message(session_state: ChatSessionState) -> str | None:
-    """Return the most recent documentary user query from session logs."""
     for entry in reversed(getattr(session_state, "logs", []) or []):
         if entry.get("route_type") == "rag_answer" and entry.get("user_message"):
             return str(entry["user_message"])
     return None
 
 
-def build_contextual_follow_up_query(user_message: str, session_state: ChatSessionState) -> str | None:
+def get_previous_documentary_entity(session_state: ChatSessionState) -> str | None:
     previous = get_previous_documentary_user_message(session_state)
     if not previous:
         return None
-    return f"{user_message}\n\nContexto de la consulta anterior: {previous}"
+    reference = get_explicit_product_reference(previous)
+    if not reference:
+        return None
+    product_id, registry_item = reference
+    return str(registry_item.get("canonical_name") or product_id).strip() or None
+
+
+def build_contextual_follow_up_query(user_message: str, session_state: ChatSessionState) -> str | None:
+    entity = get_previous_documentary_entity(session_state)
+    if not entity:
+        return None
+    # Inherit only the subject. Never append the prior installation/action query,
+    # which would contaminate requirements retrieval with procedural/SQL sources.
+    return f"{user_message} Producto o herramienta referida: {entity}"
 
 def should_use_memory_for_query(user_query: str, query_intent: str) -> bool:
     """
@@ -5147,12 +5176,7 @@ def handle_follow_up_message(user_message: str, session_state: ChatSessionState)
             "follow_up_needs_context",
             session_state,
         )
-
-    bot_message = generate_answer_with_rag(
-        user_query=contextual_query,
-        memory=session_state.memory,
-    )
-    # Keep the original user wording in logs while recording that context resolution was used.
+    bot_message = generate_answer_with_rag(user_query=contextual_query, memory=session_state.memory)
     session_state.log_turn(user_message, bot_message, "rag_answer")
     st.session_state["last_follow_up_resolution"] = {
         "original_query": user_message,
@@ -5165,11 +5189,9 @@ def route_user_message(user_message: str, session_state: ChatSessionState):
     session_state = ensure_session_state_integrity(session_state)
     workflow_state = getattr(session_state, "escalation_workflow_state", "normal")
 
-    # 1. An active escalation owns the turn until completed or cancelled.
     if workflow_state == "escalation_collecting" or session_state.mode == "escalation":
         return handle_escalation_message(user_message, session_state)
 
-    # 2. Close acknowledgements after a completed escalation without reopening it.
     if workflow_state == "escalation_completed" and (
         is_acknowledgement_message(user_message)
         or is_escalation_finish_command(user_message)
@@ -5188,7 +5210,6 @@ def route_user_message(user_message: str, session_state: ChatSessionState):
         session_state.escalation_workflow_state = "normal"
         session_state.mode = "normal"
 
-    # 3. Deterministic assistant routes run before scope and retrieval.
     if is_capabilities_help_message(user_message):
         return record_deterministic_route(
             user_message, CAPABILITIES_HELP_RESPONSE, "capabilities_help", session_state
@@ -5199,16 +5220,15 @@ def route_user_message(user_message: str, session_state: ChatSessionState):
             user_message, SUPPORT_INTAKE_RESPONSE, "support_intake", session_state
         )
 
-    # 4. Elliptical follow-ups are resolved before scope control.
+    # A self-contained product query bypasses this branch because the follow-up
+    # detector explicitly rejects messages with a named product.
     if is_explicit_follow_up_query(user_message):
         return handle_follow_up_message(user_message, session_state)
 
-    # 5. Escalation starts only from an explicit request.
     if should_activate_escalation_mode(user_message):
         start_new_escalation(session_state)
         return handle_escalation_message(user_message, session_state)
 
-    # 6. Ambiguous print symptoms request clarification without RAG or LLM.
     if is_ambiguous_print_issue(user_message):
         return record_deterministic_route(
             user_message,
@@ -5217,7 +5237,6 @@ def route_user_message(user_message: str, session_state: ChatSessionState):
             session_state,
         )
 
-    # 7. Reject truly out-of-domain requests; otherwise use normal RAG.
     if not is_in_scope_message(user_message):
         return record_deterministic_route(
             user_message, OUT_OF_SCOPE_RESPONSE, "out_of_scope", session_state
