@@ -177,17 +177,31 @@ def ensure_session_state_integrity(session_state: ChatSessionState):
 # Scope control
 # -----------------------------------------------------------------------------
 PRINT_SCOPE_KEYWORDS = [
-    "impresora", "printer", "papercut", "sds", "hp", "epson", "web jetadmin",
-    "cola de impresión", "cola de impresion", "cola", "spooler", "driver", "firmware",
-    "escaner", "scanner", "toner", "impresión", "impresion", "multifuncional",
-    "copiadora", "mfp", "oxp", "wja", "jetadmin",
+    # Devices and products
+    "impresora", "impresoras", "printer", "multifuncional", "copiadora", "mfp",
+    "papercut", "sds", "hp", "epson", "web jetadmin", "wja", "jetadmin", "oxp",
+    "gav", "print evolve", "mfpsecure",
+
+    # Printing actions and common colloquial forms
+    "impresión", "impresion", "imprimir", "imprime", "imprimiendo", "la impre",
+    "trabajo de impresión", "trabajo de impresion", "trabajos de impresión",
+    "trabajos de impresion", "los trabajos", "el trabajo",
+
+    # Queues and technical components
+    "cola de impresión", "cola de impresion", "cola", "colas", "queue", "spooler",
+    "driver", "firmware", "servidor de impresión", "servidor de impresion",
+
+    # Scanning and supplies
+    "escaner", "escáner", "scanner", "toner", "tóner", "consumible", "suministro",
 ]
 
+# Scope hints only. These expressions must never activate escalation by themselves.
 SUPPORT_FLOW_KEYWORDS = [
-    "escalar", "nivel 2", "abrir caso", "incidente", "ticket", "no funcionó",
-    "no funciona", "sigue igual", "sigue fallando", "ya hice eso", "ya lo intenté",
-    "ya intenté", "ya reinicié", "ya reinicie", "no se resolvió",
+    "quiero escalar", "necesito escalar", "deseo escalar", "escalar el caso",
+    "abrir un caso", "abrir caso", "crear incidente", "generar incidente",
+    "pasar a nivel 2", "enviar a nivel 2", "escalar a nivel 2", "escalar a nivel 3",
 ]
+
 
 OUT_OF_SCOPE_RESPONSE = (
     "Solo puedo ayudar con temas relacionados con el servicio de impresión, "
@@ -233,11 +247,45 @@ SUPPORT_INTAKE_RESPONSE = """Claro. Cuéntame qué problema de impresión estás
 Con esa información podré orientarte mejor o ayudarte a preparar un escalamiento si es necesario."""
 
 CAPABILITIES_PATTERNS = [
-    "qué puedes hacer", "que puedes hacer", "cómo me puedes ayudar", "como me puedes ayudar",
-    "en qué me puedes ayudar", "en que me puedes ayudar", "qué sabes hacer", "que sabes hacer",
-    "qué temas manejas", "que temas manejas", "qué soportas", "que soportas",
-    "necesito orientación", "necesito orientacion", "muéstrame las opciones", "muestrame las opciones",
+    # Capacidades generales
+    "qué puedes hacer",
+    "que puedes hacer",
+    "qué más puedes hacer",
+    "que mas puedes hacer",
+    "qué otras cosas puedes hacer",
+    "que otras cosas puedes hacer",
+    "qué funciones tienes",
+    "que funciones tienes",
+
+    # Formas de pedir ayuda
+    "cómo me puedes ayudar",
+    "como me puedes ayudar",
+    "de qué forma me puedes ayudar",
+    "de que forma me puedes ayudar",
+    "en qué me puedes ayudar",
+    "en que me puedes ayudar",
+
+    # Alcance del asistente
+    "qué sabes hacer",
+    "que sabes hacer",
+    "qué temas manejas",
+    "que temas manejas",
+    "qué temas puedes atender",
+    "que temas puedes atender",
+    "qué soportas",
+    "que soportas",
+    "cuál es tu alcance",
+    "cual es tu alcance",
+
+    # Orientación y opciones
+    "necesito orientación",
+    "necesito orientacion",
+    "muéstrame las opciones",
+    "muestrame las opciones",
+    "qué opciones tienes",
+    "que opciones tienes",
 ]
+
 CAPABILITIES_EXACT = {"ayuda", "menu", "menú", "opciones", "help"}
 SUPPORT_INTAKE_PATTERNS = [
     "tengo problemas", "tengo un problema", "necesito ayuda con una impresora", "necesito soporte",
@@ -265,6 +313,13 @@ def normalize_route_text(user_message: str) -> str:
 
 def is_capabilities_help_message(user_message: str) -> bool:
     text = normalize_route_text(user_message)
+
+    # Product-specific questions such as "¿qué funciones tiene HP Access Control?"
+    # must remain documentary queries, not assistant-capabilities requests.
+    detected_products = detect_entities_in_text(text, PRODUCT_ALIAS_INDEX)
+    if detected_products:
+        return False
+
     return text in CAPABILITIES_EXACT or any(pattern in text for pattern in CAPABILITIES_PATTERNS)
 
 
@@ -283,6 +338,59 @@ def is_escalation_finish_command(user_message: str) -> bool:
 
 def is_acknowledgement_message(user_message: str) -> bool:
     return normalize_route_text(user_message) in ACKNOWLEDGEMENT_MESSAGES
+
+
+AMBIGUOUS_PRINT_ISSUE_PATTERNS = [
+    "no puedo imprimir", "no imprime", "no me imprime", "no deja imprimir",
+    "la impre no imprime", "la impresora no imprime", "los trabajos no aparecen",
+    "el trabajo no aparece", "trabajos no aparecen", "los trabajos desaparecen",
+    "el trabajo desaparece", "la cola está bloqueada", "la cola esta bloqueada",
+    "cola bloqueada", "cola atascada", "el monitor no funciona", "monitor no funciona",
+]
+
+
+def has_explicit_product_entity(user_message: str) -> bool:
+    text = normalize_route_text(user_message)
+    return bool(detect_entities_in_text(text, PRODUCT_ALIAS_INDEX))
+
+
+def is_ambiguous_print_issue(user_message: str) -> bool:
+    """Detect a print symptom that lacks the product/environment needed for safe RAG."""
+    text = normalize_route_text(user_message)
+    if has_explicit_product_entity(text):
+        return False
+    return any(pattern in text for pattern in AMBIGUOUS_PRINT_ISSUE_PATTERNS)
+
+
+def build_ambiguous_print_issue_response(user_message: str) -> str:
+    text = normalize_route_text(user_message)
+
+    if "cola" in text:
+        lead = (
+            "Para orientar la cola bloqueada necesito identificar el entorno. "
+            "¿La cola corresponde a Windows, PaperCut, GAV Tracking u otra herramienta?"
+        )
+        extra = "Indica también el estado visible del trabajo, por ejemplo Imprimiendo, En pausa o Error."
+    elif "monitor" in text:
+        lead = (
+            "La palabra monitor puede referirse a diferentes componentes. "
+            "Indícame si se trata de HP SDS Monitor, un monitor físico u otra herramienta de impresión."
+        )
+        extra = "Si existe un mensaje de error, compártelo junto con el equipo o servidor afectado."
+    elif "trabajo" in text:
+        lead = (
+            "Para revisar por qué los trabajos no aparecen necesito saber en qué producto o cola ocurre, "
+            "por ejemplo PaperCut, GAV Tracking o una cola de Windows."
+        )
+        extra = "Indica la impresora o cola, la hora aproximada del envío y si afecta a uno o varios usuarios."
+    else:
+        lead = (
+            "Para orientarte correctamente necesito identificar el entorno donde no puedes imprimir. "
+            "Indícame el producto o herramienta involucrada y la impresora o cola afectada."
+        )
+        extra = "Comparte también el mensaje de error, si existe, y si el problema afecta a uno o varios usuarios."
+
+    return f"{lead}\n\n{extra}"
 
 
 # -----------------------------------------------------------------------------
@@ -863,7 +971,7 @@ def compute_explicit_entity_identity_score(user_query: str, metadata: dict, cont
 # This layer is intentionally issue-oriented instead of product-question-specific.
 # It improves retrieval for recurring support symptoms through configurable packs.
 
-BACKEND_VNEXT_MARKER = "v10_pdf_download_sources"
+BACKEND_VNEXT_MARKER = "v11_routing_ambiguity_and_followup"
 
 ISSUE_RETRIEVAL_PACKS = {
     "missing_print_jobs": {
@@ -2153,12 +2261,38 @@ def has_hard_documentary_anchor(user_query: str, docs: list, query_intent: str) 
 
 
 def is_explicit_follow_up_query(user_query: str) -> bool:
-    text = user_query.lower().strip()
+    text = normalize_route_text(user_query)
     follow_up_patterns = [
-        "y eso", "y como", "y cómo", "eso", "lo anterior", "esa herramienta", "ese software",
-        "ese sistema", "ese producto", "tambien", "también", "y en ese caso", "y para eso",
+        # Direct references
+        "y eso", "eso", "lo anterior", "esa herramienta", "ese software",
+        "ese sistema", "ese producto", "esa solución", "esa solucion",
+
+        # Continuations
+        "y como", "y cómo", "y para eso", "y en ese caso", "tambien", "también",
+
+        # Elliptical questions that depend on the immediately previous subject
+        "qué requisitos tiene", "que requisitos tiene", "cuáles son sus requisitos",
+        "cuales son sus requisitos", "cómo se instala", "como se instala",
+        "cómo se configura", "como se configura", "qué versión soporta",
+        "que version soporta", "para qué sirve", "para que sirve",
+        "qué funciones tiene", "que funciones tiene", "cómo funciona", "como funciona",
     ]
-    return any(p in text for p in follow_up_patterns)
+    return any(pattern in text for pattern in follow_up_patterns)
+
+
+def get_previous_documentary_user_message(session_state: ChatSessionState) -> str | None:
+    """Return the most recent documentary user query from session logs."""
+    for entry in reversed(getattr(session_state, "logs", []) or []):
+        if entry.get("route_type") == "rag_answer" and entry.get("user_message"):
+            return str(entry["user_message"])
+    return None
+
+
+def build_contextual_follow_up_query(user_message: str, session_state: ChatSessionState) -> str | None:
+    previous = get_previous_documentary_user_message(session_state)
+    if not previous:
+        return None
+    return f"{user_message}\n\nContexto de la consulta anterior: {previous}"
 
 def should_use_memory_for_query(user_query: str, query_intent: str) -> bool:
     """
@@ -4215,10 +4349,12 @@ def debug_query_diagnostics(user_query: str) -> dict[str, Any]:
 # Escalation logic
 # -----------------------------------------------------------------------------
 ESCALATION_TRIGGERS = [
-    "escalar", "nivel 2", "abrir caso", "incidente", "ticket", "no funcionó",
-    "no funciona", "sigue igual", "sigue fallando", "ya hice eso", "ya lo intenté",
-    "ya intenté", "ya reinicié", "ya reinicie", "no se resolvió",
+    "quiero escalar", "necesito escalar", "deseo escalar", "escalar el caso",
+    "escalar este caso", "abrir un caso", "abrir caso", "crear incidente",
+    "generar incidente", "pasar a nivel 2", "enviar a nivel 2",
+    "escalar a nivel 2", "escalar a nivel 3",
 ]
+
 
 CORE_INCIDENT_FIELDS = ["software_involved", "error_description", "actions_attempted", "printer_data"]
 ENRICHMENT_INCIDENT_FIELDS = ["software_version", "contract_client_location", "evidence", "impact_type"]
@@ -5002,29 +5138,91 @@ def handle_normal_message(user_message: str, session_state: ChatSessionState):
     return bot_message
 
 
+def handle_follow_up_message(user_message: str, session_state: ChatSessionState):
+    contextual_query = build_contextual_follow_up_query(user_message, session_state)
+    if not contextual_query:
+        return record_deterministic_route(
+            user_message,
+            "Necesito un poco más de contexto. Indícame a qué producto o herramienta te refieres.",
+            "follow_up_needs_context",
+            session_state,
+        )
+
+    bot_message = generate_answer_with_rag(
+        user_query=contextual_query,
+        memory=session_state.memory,
+    )
+    # Keep the original user wording in logs while recording that context resolution was used.
+    session_state.log_turn(user_message, bot_message, "rag_answer")
+    st.session_state["last_follow_up_resolution"] = {
+        "original_query": user_message,
+        "resolved_query": contextual_query,
+    }
+    return bot_message
+
+
 def route_user_message(user_message: str, session_state: ChatSessionState):
     session_state = ensure_session_state_integrity(session_state)
     workflow_state = getattr(session_state, "escalation_workflow_state", "normal")
+
+    # 1. An active escalation owns the turn until completed or cancelled.
     if workflow_state == "escalation_collecting" or session_state.mode == "escalation":
         return handle_escalation_message(user_message, session_state)
+
+    # 2. Close acknowledgements after a completed escalation without reopening it.
     if workflow_state == "escalation_completed" and (
-        is_acknowledgement_message(user_message) or is_escalation_finish_command(user_message) or is_escalation_cancel_command(user_message)
+        is_acknowledgement_message(user_message)
+        or is_escalation_finish_command(user_message)
+        or is_escalation_cancel_command(user_message)
     ):
         session_state.escalation_workflow_state = "normal"
         session_state.mode = "normal"
-        return record_deterministic_route(user_message, "El caso anterior quedó cerrado. Cuando quieras, puedes realizar una nueva consulta.", "escalation_completed_ack", session_state)
+        return record_deterministic_route(
+            user_message,
+            "El caso anterior quedó cerrado. Cuando quieras, puedes realizar una nueva consulta.",
+            "escalation_completed_ack",
+            session_state,
+        )
+
     if workflow_state == "escalation_completed":
         session_state.escalation_workflow_state = "normal"
         session_state.mode = "normal"
+
+    # 3. Deterministic assistant routes run before scope and retrieval.
     if is_capabilities_help_message(user_message):
-        return record_deterministic_route(user_message, CAPABILITIES_HELP_RESPONSE, "capabilities_help", session_state)
+        return record_deterministic_route(
+            user_message, CAPABILITIES_HELP_RESPONSE, "capabilities_help", session_state
+        )
+
     if is_support_intake_message(user_message):
-        return record_deterministic_route(user_message, SUPPORT_INTAKE_RESPONSE, "support_intake", session_state)
+        return record_deterministic_route(
+            user_message, SUPPORT_INTAKE_RESPONSE, "support_intake", session_state
+        )
+
+    # 4. Elliptical follow-ups are resolved before scope control.
+    if is_explicit_follow_up_query(user_message):
+        return handle_follow_up_message(user_message, session_state)
+
+    # 5. Escalation starts only from an explicit request.
     if should_activate_escalation_mode(user_message):
         start_new_escalation(session_state)
         return handle_escalation_message(user_message, session_state)
+
+    # 6. Ambiguous print symptoms request clarification without RAG or LLM.
+    if is_ambiguous_print_issue(user_message):
+        return record_deterministic_route(
+            user_message,
+            build_ambiguous_print_issue_response(user_message),
+            "ambiguous_print_issue",
+            session_state,
+        )
+
+    # 7. Reject truly out-of-domain requests; otherwise use normal RAG.
     if not is_in_scope_message(user_message):
-        return record_deterministic_route(user_message, OUT_OF_SCOPE_RESPONSE, "out_of_scope", session_state)
+        return record_deterministic_route(
+            user_message, OUT_OF_SCOPE_RESPONSE, "out_of_scope", session_state
+        )
+
     return handle_normal_message(user_message, session_state)
 
 
