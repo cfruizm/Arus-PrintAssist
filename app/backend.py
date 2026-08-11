@@ -185,6 +185,8 @@ PRINT_SCOPE_KEYWORDS = [
     "cola de impresión", "cola de impresion", "cola", "colas", "queue", "spooler", "driver",
     "firmware", "servidor de impresión", "servidor de impresion", "escaner", "escáner",
     "scanner", "escanear", "toner", "tóner", "consumible", "consumibles", "suministro",
+    "facturación", "facturacion", "prefactura", "pre-factura", "distribución de costos",
+    "distribucion de costos", "template", "tracking",
 ]
 
 SUPPORT_FLOW_KEYWORDS = [
@@ -304,7 +306,7 @@ def normalize_route_text(user_message: str) -> str:
 
 def is_capabilities_help_message(user_message: str) -> bool:
     text = normalize_route_text(user_message)
-    if has_explicit_product_entity(text):
+    if has_explicit_product_entity(text) or has_explicit_process_reference(text):
         return False
     return text in CAPABILITIES_EXACT or any(pattern in text for pattern in CAPABILITIES_PATTERNS)
 
@@ -346,9 +348,33 @@ PRINT_CONTEXT_REGEX = re.compile(
     re.IGNORECASE,
 )
 
+# Local process aliases supplement domain_registry without exposing or enumerating
+# documents. These are business subjects, not file names.
+INDEPENDENT_PROCESS_REGEXES = [
+    r"\bdistribuci[oó]n\s+de\s+facturaci[oó]n\b",
+    r"\bfacturaci[oó]n\s+con\s+template\b",
+    r"\bdistribuci[oó]n\s+de\s+costos?\b",
+    r"\bpre[- ]?factura\s*simp\b",
+    r"\btr[aá]mite\s+de\s+garant[ií]a\b",
+    r"\basignaci[oó]n\s+de\s+pin\b",
+]
+
+QUESTION_ACTION_WORDS = {
+    "que", "qué", "cual", "cuál", "cuales", "cuáles", "como", "cómo", "hacer", "hago",
+    "instalar", "instalo", "instala", "configurar", "configuro", "configura", "usar", "uso",
+    "funciona", "funciones", "tiene", "tienen", "necesita", "necesitan", "requisitos",
+    "sirve", "explica", "explicar", "quiero", "necesito", "puedo", "puede", "del", "de",
+    "la", "el", "los", "las", "un", "una", "con", "en", "para", "por", "y", "o",
+}
+
+SUBJECT_HINT_WORDS = {
+    "administrador", "admin", "monitor", "cliente", "servidor", "agente", "control",
+    "tracking", "facturacion", "facturación", "template", "garantia", "garantía", "pin",
+    "cuotas", "reportes", "impresora", "dispositivo", "cola", "dashboard", "suministros",
+}
+
 
 def get_explicit_product_reference(user_message: str) -> tuple[str, dict] | None:
-    """Return a specifically named registry product, excluding generic print nouns."""
     text = normalize_route_text(user_message)
     for product_id, registry_item in get_detected_product_entities_with_registry(text):
         canonical = str(registry_item.get("canonical_name", "")).strip()
@@ -366,8 +392,49 @@ def has_explicit_product_entity(user_message: str) -> bool:
     return get_explicit_product_reference(user_message) is not None
 
 
+def has_explicit_process_reference(user_message: str) -> bool:
+    text = normalize_route_text(user_message)
+    detected_processes = detect_entities_in_text(text, PROCESS_ALIAS_INDEX)
+    if detected_processes:
+        return True
+    return any(re.search(pattern, text, flags=re.IGNORECASE) for pattern in INDEPENDENT_PROCESS_REGEXES)
+
+
+def has_independent_question_subject(user_message: str) -> bool:
+    """Detect a self-contained topic so complete questions do not inherit stale memory."""
+    text = normalize_route_text(user_message)
+    if has_explicit_product_entity(text) or has_explicit_process_reference(text):
+        return True
+
+    tokens = re.findall(r"[a-záéíóúüñ0-9]+", text)
+    informative = [
+        token for token in tokens
+        if len(token) >= 4 and token not in QUESTION_ACTION_WORDS
+    ]
+    # Two informative words normally identify an object: "distribucion facturacion",
+    # "administrador gav", "cuotas impresion", etc.
+    return len(informative) >= 2
+
+
+def extract_conversation_subject_terms(user_message: str, product_name: str | None = None) -> list[str]:
+    """Extract lightweight subject terms without carrying the previous action/intention."""
+    text = normalize_route_text(user_message)
+    if product_name:
+        product_tokens = set(re.findall(r"[a-záéíóúüñ0-9]+", normalize_route_text(product_name)))
+    else:
+        product_tokens = set()
+
+    tokens = re.findall(r"[a-záéíóúüñ0-9]+", text)
+    candidates = []
+    for token in tokens:
+        if token in product_tokens or token in QUESTION_ACTION_WORDS or len(token) < 4:
+            continue
+        if token in SUBJECT_HINT_WORDS and token not in candidates:
+            candidates.append(token)
+    return candidates[:3]
+
+
 def is_ambiguous_print_issue(user_message: str) -> bool:
-    """Detect broad print symptoms that lack a specifically named product/tool."""
     text = normalize_route_text(user_message)
     if has_explicit_product_entity(text):
         return False
@@ -989,7 +1056,7 @@ def compute_explicit_entity_identity_score(user_query: str, metadata: dict, cont
 # This layer is intentionally issue-oriented instead of product-question-specific.
 # It improves retrieval for recurring support symptoms through configurable packs.
 
-BACKEND_VNEXT_MARKER = "v12_global_ambiguity_and_entity_followup"
+BACKEND_VNEXT_MARKER = "v13_topic_tracking_and_intent_alignment"
 
 ISSUE_RETRIEVAL_PACKS = {
     "missing_print_jobs": {
@@ -2280,48 +2347,69 @@ def has_hard_documentary_anchor(user_query: str, docs: list, query_intent: str) 
 
 FOLLOW_UP_REGEXES = [
     r"^(?:y\s+)?(?:eso|lo anterior|esa herramienta|ese software|ese sistema|ese producto|esa solución|esa solucion)$",
-    r"^(?:y\s+)?(?:cómo|como|cuándo|cuando|dónde|donde|por qué|por que|para qué|para que)\b",
-    r"^(?:qué|que|cuáles|cuales)\s+(?:requisitos|funciones|componentes|versiones|sistemas|plataformas|puertos|limitaciones)\b",
-    r"^(?:cómo|como)\s+(?:se\s+)?(?:instala|configura|usa|funciona|actualiza|registra|desinstala)\b",
-    r"^(?:qué|que)\s+versión\s+soporta\b",
-    r"^(?:también|tambien)\b",
+    r"^(?:qué|que|cuáles|cuales)\s+(?:requisitos|funciones|componentes|versiones|sistemas|plataformas|puertos|limitaciones)(?:\s+tiene|\s+necesita|\s+soporta)?$",
+    r"^(?:cómo|como)\s+(?:se\s+)?(?:instala|configura|usa|funciona|actualiza|registra|desinstala)$",
+    r"^(?:para\s+qué|para\s+que)\s+sirve$",
+    r"^(?:qué|que)\s+versión\s+soporta$",
+    r"^(?:y\s+)?(?:cómo|como|cuándo|cuando|dónde|donde|por qué|por que)$",
 ]
 
 
 def is_explicit_follow_up_query(user_query: str) -> bool:
     text = normalize_route_text(user_query)
-    if has_explicit_product_entity(text):
+    if has_independent_question_subject(text):
         return False
-    if len(text.split()) > 10:
+    if len(text.split()) > 8:
         return False
     return any(re.search(pattern, text, flags=re.IGNORECASE) for pattern in FOLLOW_UP_REGEXES)
 
 
-def get_previous_documentary_user_message(session_state: ChatSessionState) -> str | None:
-    for entry in reversed(getattr(session_state, "logs", []) or []):
-        if entry.get("route_type") == "rag_answer" and entry.get("user_message"):
-            return str(entry["user_message"])
-    return None
+def get_conversation_topic(session_state: ChatSessionState) -> dict:
+    topic = getattr(session_state, "conversation_topic", None)
+    return dict(topic) if isinstance(topic, dict) else {}
 
 
-def get_previous_documentary_entity(session_state: ChatSessionState) -> str | None:
-    previous = get_previous_documentary_user_message(session_state)
-    if not previous:
-        return None
-    reference = get_explicit_product_reference(previous)
-    if not reference:
-        return None
-    product_id, registry_item = reference
-    return str(registry_item.get("canonical_name") or product_id).strip() or None
+def update_conversation_topic(session_state: ChatSessionState, user_message: str, intent: str | None = None):
+    """Store structured subject context after a self-contained documentary query."""
+    product_reference = get_explicit_product_reference(user_message)
+    process_detected = has_explicit_process_reference(user_message)
+
+    product_id = None
+    product_name = None
+    if product_reference:
+        product_id, registry_item = product_reference
+        product_name = str(registry_item.get("canonical_name") or product_id).strip()
+
+    subject_terms = extract_conversation_subject_terms(user_message, product_name)
+    process_name = normalize_route_text(user_message) if process_detected and not product_name else None
+
+    if product_name or process_name:
+        session_state.conversation_topic = {
+            "product_id": product_id,
+            "product_name": product_name,
+            "process_name": process_name,
+            "subject_terms": subject_terms,
+            "intent": intent or classify_query_intent(user_message),
+            "source_query": user_message,
+        }
 
 
 def build_contextual_follow_up_query(user_message: str, session_state: ChatSessionState) -> str | None:
-    entity = get_previous_documentary_entity(session_state)
-    if not entity:
+    topic = get_conversation_topic(session_state)
+    product_name = topic.get("product_name")
+    process_name = topic.get("process_name")
+    subject_terms = topic.get("subject_terms") or []
+
+    if not product_name and not process_name:
         return None
-    # Inherit only the subject. Never append the prior installation/action query,
-    # which would contaminate requirements retrieval with procedural/SQL sources.
-    return f"{user_message} Producto o herramienta referida: {entity}"
+
+    subject = " ".join(str(value) for value in subject_terms if value).strip()
+    if product_name and subject:
+        reference = f"{subject} de {product_name}"
+    else:
+        reference = product_name or process_name
+
+    return f"{user_message} Tema referido: {reference}"
 
 def should_use_memory_for_query(user_query: str, query_intent: str) -> bool:
     """
@@ -3890,19 +3978,63 @@ def remove_internal_chunk_references(answer: str) -> str:
     text = re.sub(r"\n{3,}", "\n\n", text)
 
     return text.strip()
-def select_docs_for_llm_context(user_query: str, docs: list, query_intent: str) -> list:
-    """Keep debug retrieval broad while sending a smaller context to the LLM.
+REQUIREMENT_IDENTITY_TERMS = [
+    "requirements", "requirement", "requisitos", "requerimientos", "prerrequisitos",
+    "system requirements", "minimum requirements",
+]
+REQUIREMENT_TECHNICAL_TERMS = [
+    "operating system", "sistema operativo", "windows server", "windows 10", "windows 11",
+    "cpu", "processor", "procesador", "memory", "memoria", "ram", "disk", "disco",
+    "port", "ports", "puerto", "puertos", "firewall", "network", "red", "certificate",
+    "certificado", "permission", "permissions", "permisos", "virtualization", "virtualización",
+    "vmware", "hyper-v", "hyperv", "dependency", "dependencies", "dependencia", "dependencias",
+]
 
-    The incoming documents are already reranked. We preserve that order, prefer
-    title/action alignment for procedures, and cap the model context by intent.
-    """
+
+def get_query_subject_terms(user_query: str) -> list[str]:
+    text = normalize_route_text(user_query)
+    return [word for word in SUBJECT_HINT_WORDS if entity_alias_is_explicitly_mentioned(text, word)]
+
+
+def doc_supports_requirements_query(user_query: str, doc) -> bool:
+    metadata = doc.metadata or {}
+    title = str(metadata.get("title", "")).lower()
+    source = str(metadata.get("source", "")).lower()
+    component = str(metadata.get("component", "")).lower()
+    family = str(metadata.get("document_family", "")).lower()
+    content = str(doc.page_content or "").lower()
+    identity = f"{title} {source} {component} {family}"
+
+    identity_match = any(term in identity for term in REQUIREMENT_IDENTITY_TERMS)
+    technical_hits = sum(1 for term in REQUIREMENT_TECHNICAL_TERMS if term in content[:2600])
+
+    subject_terms = get_query_subject_terms(user_query)
+    if subject_terms:
+        subject_match = any(term in identity or term in content[:1800] for term in subject_terms)
+        if not subject_match:
+            return False
+
+    # Formal requirement docs always qualify. Other docs require multiple explicit
+    # technical requirement signals; a single incidental mention of SQL/IIS/ports
+    # is not enough to become a general requirements source.
+    return identity_match or technical_hits >= 3
+
+
+def select_docs_for_llm_context(user_query: str, docs: list, query_intent: str) -> list:
+    """Select a small, intent-aligned context without filling arbitrary source slots."""
     if not docs:
         return []
+
+    candidate_docs = list(docs)
+    if query_intent == "requirements":
+        candidate_docs = [doc for doc in candidate_docs if doc_supports_requirements_query(user_query, doc)]
+        if not candidate_docs:
+            return []
 
     max_docs_by_intent = {
         "troubleshooting": 4,
         "procedural": 3,
-        "requirements": 4,
+        "requirements": 3,
         "conceptual": 3,
         "warranty": 3,
         "architecture": 4,
@@ -3911,31 +4043,34 @@ def select_docs_for_llm_context(user_query: str, docs: list, query_intent: str) 
     }
     max_docs = max_docs_by_intent.get(query_intent, 3)
 
-    query_terms = [
-        token for token in re.findall(r"\w+", user_query.lower())
-        if len(token) >= 4
-    ]
-
+    query_terms = [token for token in re.findall(r"\w+", user_query.lower()) if len(token) >= 4]
     scored = []
-    for position, doc in enumerate(docs):
+    for position, doc in enumerate(candidate_docs):
         metadata = doc.metadata or {}
         identity = f"{metadata.get('title', '')} {metadata.get('source', '')}".lower()
-        action_alignment = sum(1 for token in query_terms if token in identity)
-        base_order_score = max(0, 20 - position)
-        score = base_order_score + action_alignment * (3 if query_intent == "procedural" else 1)
-        scored.append((doc, score, position))
+        alignment = sum(1 for token in query_terms if token in identity)
+        score = max(0, 20 - position) + alignment * (3 if query_intent == "procedural" else 1)
+        scored.append((doc, score, position, alignment))
 
     scored.sort(key=lambda item: (item[1], -item[2]), reverse=True)
 
+    # Strong exact procedural title/source alignment should not be padded with
+    # unrelated procedures. Keep at most two, and one when the lead is clearly dominant.
+    if query_intent == "procedural" and scored:
+        lead_alignment = scored[0][3]
+        second_alignment = scored[1][3] if len(scored) > 1 else -1
+        if lead_alignment >= 3 and lead_alignment >= second_alignment + 2:
+            max_docs = 1
+        elif lead_alignment >= 2:
+            max_docs = min(max_docs, 2)
+
     selected = []
     seen_sources = set()
-    for doc, _, _ in scored:
+    for doc, _, _, _ in scored:
         metadata = doc.metadata or {}
         source_key = str(
-            metadata.get("source")
-            or metadata.get("source_url")
-            or metadata.get("canonical_url")
-            or metadata.get("title")
+            metadata.get("source") or metadata.get("source_url")
+            or metadata.get("canonical_url") or metadata.get("title")
         )
         if source_key in seen_sources:
             continue
@@ -3943,7 +4078,6 @@ def select_docs_for_llm_context(user_query: str, docs: list, query_intent: str) 
         selected.append(doc)
         if len(selected) >= max_docs:
             break
-
     return selected
 
 
@@ -4084,9 +4218,12 @@ def generate_answer_with_rag(user_query: str, memory):
 
     if query_intent == "requirements":
         if (
-            support_info["support_level"] in {"weak", "none"}
-            and not hard_anchor
-            and not strong_entity_match
+            not llm_context_docs
+            or (
+                support_info["support_level"] in {"weak", "none"}
+                and not hard_anchor
+                and not strong_entity_match
+            )
         ):
             answer = build_conservative_no_support_answer(
                 user_query=user_query,
@@ -5164,6 +5301,11 @@ def handle_escalation_message(user_message: str, session_state: ChatSessionState
 def handle_normal_message(user_message: str, session_state: ChatSessionState):
     bot_message = generate_answer_with_rag(user_query=user_message, memory=session_state.memory)
     session_state.log_turn(user_message, bot_message, "rag_answer")
+    update_conversation_topic(
+        session_state,
+        user_message,
+        intent=classify_query_intent(user_message),
+    )
     return bot_message
 
 
@@ -5172,15 +5314,20 @@ def handle_follow_up_message(user_message: str, session_state: ChatSessionState)
     if not contextual_query:
         return record_deterministic_route(
             user_message,
-            "Necesito un poco más de contexto. Indícame a qué producto o herramienta te refieres.",
+            "Necesito un poco más de contexto. Indícame a qué producto, herramienta o proceso te refieres.",
             "follow_up_needs_context",
             session_state,
         )
     bot_message = generate_answer_with_rag(user_query=contextual_query, memory=session_state.memory)
     session_state.log_turn(user_message, bot_message, "rag_answer")
+    topic = get_conversation_topic(session_state)
+    topic["intent"] = classify_query_intent(user_message)
+    topic["last_follow_up"] = user_message
+    session_state.conversation_topic = topic
     st.session_state["last_follow_up_resolution"] = {
         "original_query": user_message,
         "resolved_query": contextual_query,
+        "topic": topic,
     }
     return bot_message
 
@@ -5220,8 +5367,6 @@ def route_user_message(user_message: str, session_state: ChatSessionState):
             user_message, SUPPORT_INTAKE_RESPONSE, "support_intake", session_state
         )
 
-    # A self-contained product query bypasses this branch because the follow-up
-    # detector explicitly rejects messages with a named product.
     if is_explicit_follow_up_query(user_message):
         return handle_follow_up_message(user_message, session_state)
 
