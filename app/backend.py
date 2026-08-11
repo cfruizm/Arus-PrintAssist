@@ -233,11 +233,45 @@ SUPPORT_INTAKE_RESPONSE = """Claro. Cuéntame qué problema de impresión estás
 Con esa información podré orientarte mejor o ayudarte a preparar un escalamiento si es necesario."""
 
 CAPABILITIES_PATTERNS = [
-    "qué puedes hacer", "que puedes hacer", "cómo me puedes ayudar", "como me puedes ayudar",
-    "en qué me puedes ayudar", "en que me puedes ayudar", "qué sabes hacer", "que sabes hacer",
-    "qué temas manejas", "que temas manejas", "qué soportas", "que soportas",
-    "necesito orientación", "necesito orientacion", "muéstrame las opciones", "muestrame las opciones",
+    # Capacidades generales
+    "qué puedes hacer",
+    "que puedes hacer",
+    "qué más puedes hacer",
+    "que mas puedes hacer",
+    "qué otras cosas puedes hacer",
+    "que otras cosas puedes hacer",
+    "qué funciones tienes",
+    "que funciones tienes",
+
+    # Formas de pedir ayuda
+    "cómo me puedes ayudar",
+    "como me puedes ayudar",
+    "de qué forma me puedes ayudar",
+    "de que forma me puedes ayudar",
+    "en qué me puedes ayudar",
+    "en que me puedes ayudar",
+
+    # Alcance del asistente
+    "qué sabes hacer",
+    "que sabes hacer",
+    "qué temas manejas",
+    "que temas manejas",
+    "qué temas puedes atender",
+    "que temas puedes atender",
+    "qué soportas",
+    "que soportas",
+    "cuál es tu alcance",
+    "cual es tu alcance",
+
+    # Orientación y opciones
+    "necesito orientación",
+    "necesito orientacion",
+    "muéstrame las opciones",
+    "muestrame las opciones",
+    "qué opciones tienes",
+    "que opciones tienes",
 ]
+
 CAPABILITIES_EXACT = {"ayuda", "menu", "menú", "opciones", "help"}
 SUPPORT_INTAKE_PATTERNS = [
     "tengo problemas", "tengo un problema", "necesito ayuda con una impresora", "necesito soporte",
