@@ -1,92 +1,65 @@
 from __future__ import annotations
-from dataclasses import asdict
-from typing import Any
+import statistics,time
+from app.agent_core.models import RetrievedDocument
+from app.integration.real_retrieval_bridge import LegacyRetrievalRunner
+from app.retrieval.candidate_planner import build_plan,build_safe_filter
 
-from app.integration.real_retrieval_bridge import RealRetrievalBridge
-from app.retrieval.candidate_planner import build_candidate_queries
+CONCEPTUAL_POSITIVE=("overview","introduction","introduccion","introducción","what is","que es","qué es","product overview","description","descripcion","descripción","purpose","proposito","propósito")
+CONCEPTUAL_NEGATIVE=("subscription","renew","activating","sso","single sign-on","download","release history","release note","troubleshooting","configuration steps")
 
+def source_key(doc):
+    md=doc.metadata or {}; return str(md.get("canonical_url") or md.get("source_url") or md.get("source") or md.get("title") or "")
+def canonical(value):return str(value or "").split("#",1)[0].rstrip("/")
+def intent_adjustment(query_intent,doc):
+    if query_intent!="conceptual":return 0.0
+    md = doc.metadata or {}
+    identity = " ".join([
+        str(md.get("title", "")),
+        str(md.get("document_family", "")),
+        str(md.get("source_type", "")),
+        str(doc.page_content or "")[:1200],
+    ]).lower()
+    return round((6.0 if any(t in identity for t in CONCEPTUAL_POSITIVE) else 0.0)+(-7.0 if any(t in identity for t in CONCEPTUAL_NEGATIVE) else 0.0),3)
+def dedupe(items):
+    out=[];seen=set()
+    for doc,vector_score in items:
+        key=canonical(source_key(doc)) or str(doc.page_content or "")[:160]
+        if key in seen:continue
+        seen.add(key);out.append((doc,vector_score))
+    return out
 
-def source_key(doc) -> str:
-    metadata = doc.metadata or {}
-    return str(metadata.get("canonical_url") or metadata.get("source_url") or metadata.get("source") or metadata.get("title") or "")
+def exact_documents(vectorstore,target):
+    collection=vectorstore._collection; data=collection.get(include=["documents","metadatas"],limit=20000); output=[]
+    for content,metadata in zip(data.get("documents",[]) or [],data.get("metadatas",[]) or []):
+        metadata=metadata or {}; value=canonical(metadata.get("canonical_url") or metadata.get("source_url") or metadata.get("source"))
+        if value==target: output.append((RetrievedDocument(str(content or ""),dict(metadata),1.0),1.0))
+    return output
 
+def candidate_once(query,vectorstore,metadata_counts,classify_intent,compute_rerank,top_k=6):
+    plan=build_plan(query); query_intent=classify_intent(query); metadata_filter=build_safe_filter(plan,metadata_counts)
+    if plan["exact_url"]: pairs=exact_documents(vectorstore,canonical(plan["exact_url"]))
+    else:
+        kwargs={"k":max(24,top_k*4)}
+        if metadata_filter:kwargs["filter"]=metadata_filter
+        try: raw=vectorstore.similarity_search_with_relevance_scores(query,**kwargs); pairs=[(RetrievedDocument(str(d.page_content or ""),dict(d.metadata or {}),float(score)),float(score)) for d,score in raw]
+        except Exception:
+            docs=vectorstore.as_retriever(search_kwargs=kwargs).invoke(query); pairs=[(RetrievedDocument(str(d.page_content or ""),dict(d.metadata or {}),0.0),0.0) for d in docs]
+    scored=[]
+    for neutral,vector_score in dedupe(pairs):
+        proxy=type("DocumentProxy",(),{"page_content":neutral.page_content,"metadata":neutral.metadata})()
+        backend_score=float(compute_rerank(query,proxy,query_intent)); adjustment=intent_adjustment(query_intent,neutral); final=backend_score+adjustment+(float(vector_score)*5.0)
+        scored.append((neutral,{"vector_relevance":round(float(vector_score),4),"backend_rerank_score":round(backend_score,3),"intent_adjustment":adjustment,"final_score":round(final,3)}))
+    scored.sort(key=lambda x:x[1]["final_score"],reverse=True)
+    return {"plan":plan,"query_intent":query_intent,"metadata_filter":metadata_filter,"documents":scored[:top_k]}
 
-def canonical_source(value: str) -> str:
-    return str(value or "").split("#", 1)[0].rstrip("/")
-
-
-def deduplicate_documents(documents: list) -> list:
-    result, seen = [], set()
-    for doc in documents:
-        key = canonical_source(source_key(doc)) or (doc.page_content or "")[:160]
-        if key in seen: continue
-        seen.add(key); result.append(doc)
-    return result
-
-
-def summarize_documents(documents: list, limit: int = 8) -> list[dict[str, Any]]:
-    summary = []
-    for rank, doc in enumerate(documents[:limit], start=1):
-        metadata = doc.metadata or {}
-        summary.append({
-            "rank": rank,
-            "title": str(metadata.get("title") or ""),
-            "source": source_key(doc),
-            "vendor": metadata.get("vendor"),
-            "product": metadata.get("product"),
-            "component": metadata.get("component"),
-            "source_type": metadata.get("source_type"),
-            "score": doc.score,
-            "content_preview": str(doc.page_content or "")[:300],
-        })
-    return summary
-
-
-def evaluate_query(query: str, retrieve_context_callable, top_k: int = 6) -> dict:
-    bridge = RealRetrievalBridge(retrieve_context_callable)
-    legacy = bridge.retrieve(query, top_k=top_k)
-    plan = build_candidate_queries(query)
-
-    candidate_docs, planned_runs = [], []
-    for planned_query in plan["queries"]:
-        run = bridge.retrieve(planned_query, top_k=top_k)
-        candidate_docs.extend(run["documents"])
-        planned_runs.append({
-            "query": planned_query,
-            "latency_seconds": run["latency_seconds"],
-            "document_count": len(run["documents"]),
-        })
-    candidate_docs = deduplicate_documents(candidate_docs)
-
-    exact_source_respected = None
-    if plan["exact_url"]:
-        target = canonical_source(plan["exact_url"])
-        candidate_docs = [doc for doc in candidate_docs if canonical_source(source_key(doc)) == target]
-        exact_source_respected = all(canonical_source(source_key(doc)) == target for doc in candidate_docs)
-
-    legacy_sources = [canonical_source(source_key(doc)) for doc in legacy["documents"] if source_key(doc)]
-    candidate_sources = [canonical_source(source_key(doc)) for doc in candidate_docs if source_key(doc)]
-    legacy_top3, candidate_top3 = set(legacy_sources[:3]), set(candidate_sources[:3])
-    union = legacy_top3 | candidate_top3
-
-    return {
-        "query": query,
-        "plan": plan,
-        "legacy": {
-            "latency_seconds": legacy["latency_seconds"],
-            "context_chars": legacy["context_chars"],
-            "documents": summarize_documents(legacy["documents"]),
-        },
-        "candidate": {
-            "runs": planned_runs,
-            "documents": summarize_documents(candidate_docs),
-        },
-        "metrics": {
-            "top1_match": bool(legacy_sources and candidate_sources and legacy_sources[0] == candidate_sources[0]),
-            "top3_overlap": round(len(legacy_top3 & candidate_top3) / max(1, len(union)), 4),
-            "legacy_top3_count": len(legacy_top3),
-            "candidate_top3_count": len(candidate_top3),
-            "exact_source_respected": exact_source_respected,
-        },
-        "llm_calls": 0,
-    }
+def summarize_legacy(docs):
+    return [{"rank":i,"title":d.metadata.get("title"),"source":source_key(d),"vendor":d.metadata.get("vendor"),"product":d.metadata.get("product"),"source_type":d.metadata.get("source_type"),"content_preview":d.page_content[:300]} for i,d in enumerate(docs,1)]
+def summarize_candidate(scored):
+    return [{"rank":i,"title":d.metadata.get("title"),"source":source_key(d),"vendor":d.metadata.get("vendor"),"product":d.metadata.get("product"),"source_type":d.metadata.get("source_type"),"scores":scores,"content_preview":d.page_content[:300]} for i,(d,scores) in enumerate(scored,1)]
+def evaluate_query(query,retrieve_context,vectorstore,metadata_counts,classify_intent,compute_rerank,top_k=6,repetitions=2):
+    legacy_runner=LegacyRetrievalRunner(retrieve_context); warmup=legacy_runner.warm_up(query); legacy=legacy_runner.run(query,top_k,repetitions)
+    candidate_samples=[]; candidate=None
+    for _ in range(max(1,repetitions)):
+        started=time.perf_counter(); candidate=candidate_once(query,vectorstore,metadata_counts,classify_intent,compute_rerank,top_k); candidate_samples.append(time.perf_counter()-started)
+    legacy_sources=[canonical(source_key(d)) for d in legacy["documents"] if source_key(d)]; candidate_sources=[canonical(source_key(d)) for d,_ in candidate["documents"] if source_key(d)]; left=set(legacy_sources[:3]);right=set(candidate_sources[:3])
+    return {"query":query,"warmup_seconds":warmup,"plan":candidate["plan"],"query_intent":candidate["query_intent"],"metadata_filter":candidate["metadata_filter"],"legacy":{"median_latency_seconds":legacy["median_latency_seconds"],"latency_samples":legacy["latency_samples"],"documents":summarize_legacy(legacy["documents"])},"candidate":{"median_latency_seconds":round(statistics.median(candidate_samples),4),"latency_samples":[round(v,4) for v in candidate_samples],"documents":summarize_candidate(candidate["documents"])},"metrics":{"top1_match":bool(legacy_sources and candidate_sources and legacy_sources[0]==candidate_sources[0]),"top3_overlap":round(len(left&right)/max(1,len(left|right)),4),"exact_source_respected":all(s==canonical(candidate["plan"]["exact_url"]) for s in candidate_sources) if candidate["plan"]["exact_url"] else None},"llm_calls":0}
