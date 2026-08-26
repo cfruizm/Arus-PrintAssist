@@ -1,0 +1,102 @@
+[
+  {
+    "id": "Q01",
+    "query": "¿Qué es PaperCut MF?",
+    "category": "conceptual"
+  },
+  {
+    "id": "Q02",
+    "query": "Los trabajos desaparecen de la cola en PaperCut MF",
+    "category": "troubleshooting"
+  },
+  {
+    "id": "Q03",
+    "query": "¿Cómo funciona PaperCut Hive?",
+    "category": "conceptual"
+  },
+  {
+    "id": "Q04",
+    "query": "¿Qué requisitos tiene HP Smart Device Services?",
+    "category": "requirements"
+  },
+  {
+    "id": "Q05",
+    "query": "¿Cómo funciona HP SDS Monitor?",
+    "category": "conceptual"
+  },
+  {
+    "id": "Q06",
+    "query": "¿Qué es HP Web Jetadmin?",
+    "category": "conceptual"
+  },
+  {
+    "id": "Q07",
+    "query": "¿Cómo agregar una impresora en HP Access Control?",
+    "category": "procedural"
+  },
+  {
+    "id": "Q08",
+    "query": "¿Para qué sirve GAV Tracking?",
+    "category": "conceptual"
+  },
+  {
+    "id": "Q09",
+    "query": "¿Cómo instalar el administrador de GAV Tracking?",
+    "category": "procedural"
+  },
+  {
+    "id": "Q10",
+    "query": "¿Cómo hacer la distribución de facturación?",
+    "category": "procedural"
+  },
+  {
+    "id": "Q11",
+    "query": "¿Cómo asignar un PIN de impresión?",
+    "category": "procedural"
+  },
+  {
+    "id": "Q12",
+    "query": "¿Cómo realizar una garantía de suministros?",
+    "category": "warranty"
+  },
+  {
+    "id": "Q13",
+    "query": "¿Cómo hacer escaneo a carpeta?",
+    "category": "procedural"
+  },
+  {
+    "id": "Q14",
+    "query": "¿Cómo actualizar firmware de una impresora HP?",
+    "category": "procedural"
+  },
+  {
+    "id": "Q15",
+    "query": "¿Qué es Epson Remote Services?",
+    "category": "conceptual"
+  },
+  {
+    "id": "Q16",
+    "query": "¿Qué es Epson Print Admin?",
+    "category": "conceptual"
+  },
+  {
+    "id": "Q17",
+    "query": "¿Qué es Print Evolve?",
+    "category": "conceptual"
+  },
+  {
+    "id": "Q18",
+    "query": "¿Qué es MFPsecure?",
+    "category": "conceptual"
+  },
+  {
+    "id": "Q19",
+    "query": "¿Qué es el agente MIPA?",
+    "category": "conceptual"
+  },
+  {
+    "id": "Q20",
+    "query": "https://www.papercut.com/kb/Main/MissingOrDisappearingPrintJobs/",
+    "category": "explicit_source"
+  }
+]
