@@ -1,39 +1,39 @@
 from __future__ import annotations
+import statistics
 import time
-from typing import Any, Callable
+from typing import Callable
 
 from app.agent_core.models import RetrievedDocument
 
 
-def convert_langchain_documents(items: list[Any]) -> list[RetrievedDocument]:
-    converted = []
+def convert_documents(items) -> list[RetrievedDocument]:
+    output=[]
     for item in items or []:
-        content = str(getattr(item, "page_content", "") or "")
-        metadata = dict(getattr(item, "metadata", {}) or {})
-        score = float(metadata.pop("_rerank_score", metadata.pop("_score", 0.0)) or 0.0)
-        converted.append(RetrievedDocument(content, metadata, score))
-    return converted
+        output.append(RetrievedDocument(
+            str(getattr(item,"page_content","") or ""),
+            dict(getattr(item,"metadata",{}) or {}),
+            float((getattr(item,"metadata",{}) or {}).get("_score",0.0) or 0.0),
+        ))
+    return output
 
 
-class RealRetrievalBridge:
-    """Read-only bridge around the deployed retrieve_context function.
+class LegacyRetrievalRunner:
+    def __init__(self,retrieve_context_callable:Callable):
+        self.retrieve_context=retrieve_context_callable
 
-    The bridge never calls generate_answer_with_rag and therefore never calls
-    the configured LLM. It only invokes the existing vector retrieval path.
-    """
+    def warm_up(self,query:str)->float:
+        started=time.perf_counter()
+        self.retrieve_context(query,top_k=1)
+        return round(time.perf_counter()-started,4)
 
-    def __init__(self, retrieve_context_callable: Callable):
-        self._retrieve_context = retrieve_context_callable
-
-    def retrieve(self, query: str, top_k: int = 6) -> dict:
-        started = time.perf_counter()
-        context, docs = self._retrieve_context(query, top_k=top_k)
-        elapsed = time.perf_counter() - started
-        converted = convert_langchain_documents(list(docs or []))
+    def run(self,query:str,top_k:int=6,repetitions:int=2)->dict:
+        samples=[]; last_context=""; last_docs=[]
+        for _ in range(max(1,repetitions)):
+            started=time.perf_counter(); last_context,last_docs=self.retrieve_context(query,top_k=top_k); samples.append(time.perf_counter()-started)
         return {
-            "query": query,
-            "documents": converted,
-            "context_chars": len(str(context or "")),
-            "latency_seconds": round(elapsed, 4),
-            "llm_calls": 0,
+            "documents":convert_documents(last_docs),
+            "context_chars":len(str(last_context or "")),
+            "latency_samples":[round(v,4) for v in samples],
+            "median_latency_seconds":round(statistics.median(samples),4),
+            "llm_calls":0,
         }
