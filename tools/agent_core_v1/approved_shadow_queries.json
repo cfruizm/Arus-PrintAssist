@@ -1,102 +1,82 @@
 [
   {
     "id": "Q01",
-    "query": "¿Qué es PaperCut MF?",
-    "category": "conceptual"
+    "query": "¿Qué es PaperCut MF?"
   },
   {
     "id": "Q02",
-    "query": "Los trabajos desaparecen de la cola en PaperCut MF",
-    "category": "troubleshooting"
+    "query": "¿Qué hacer si los trabajos desaparecen de la cola en PaperCut MF?"
   },
   {
     "id": "Q03",
-    "query": "¿Cómo funciona PaperCut Hive?",
-    "category": "conceptual"
+    "query": "¿Cómo funciona PaperCut Hive?"
   },
   {
     "id": "Q04",
-    "query": "¿Qué requisitos tiene HP Smart Device Services?",
-    "category": "requirements"
+    "query": "¿Qué requisitos tiene HP Smart Device Services?"
   },
   {
     "id": "Q05",
-    "query": "¿Cómo funciona HP SDS Monitor?",
-    "category": "conceptual"
+    "query": "¿Cómo funciona HP SDS Monitor?"
   },
   {
     "id": "Q06",
-    "query": "¿Qué es HP Web Jetadmin?",
-    "category": "conceptual"
+    "query": "¿Qué es HP Web Jetadmin?"
   },
   {
     "id": "Q07",
-    "query": "¿Cómo agregar una impresora en HP Access Control?",
-    "category": "procedural"
+    "query": "¿Cómo agregar una impresora en HP Access Control?"
   },
   {
     "id": "Q08",
-    "query": "¿Para qué sirve GAV Tracking?",
-    "category": "conceptual"
+    "query": "¿Para qué sirve GAV Tracking?"
   },
   {
     "id": "Q09",
-    "query": "¿Cómo instalar el administrador de GAV Tracking?",
-    "category": "procedural"
+    "query": "¿Cómo instalar el administrador de GAV Tracking?"
   },
   {
     "id": "Q10",
-    "query": "¿Cómo hacer la distribución de facturación?",
-    "category": "procedural"
+    "query": "¿Cómo realizar la distribución de facturación?"
   },
   {
     "id": "Q11",
-    "query": "¿Cómo asignar un PIN de impresión?",
-    "category": "procedural"
+    "query": "¿Cómo asignar un PIN de impresión?"
   },
   {
     "id": "Q12",
-    "query": "¿Cómo realizar una garantía de suministros?",
-    "category": "warranty"
+    "query": "¿Cómo tramitar una garantía de suministros?"
   },
   {
     "id": "Q13",
-    "query": "¿Cómo hacer escaneo a carpeta?",
-    "category": "procedural"
+    "query": "¿Cómo configurar escaneo a carpeta?"
   },
   {
     "id": "Q14",
-    "query": "¿Cómo actualizar firmware de una impresora HP?",
-    "category": "procedural"
+    "query": "¿Cómo actualizar el firmware de una impresora HP?"
   },
   {
     "id": "Q15",
-    "query": "¿Qué es Epson Remote Services?",
-    "category": "conceptual"
+    "query": "¿Qué es Epson Remote Services?"
   },
   {
     "id": "Q16",
-    "query": "¿Qué es Epson Print Admin?",
-    "category": "conceptual"
+    "query": "¿Qué es Epson Print Admin?"
   },
   {
     "id": "Q17",
-    "query": "¿Qué es Print Evolve?",
-    "category": "conceptual"
+    "query": "¿Qué es Print Evolve?"
   },
   {
     "id": "Q18",
-    "query": "¿Qué es MFPsecure?",
-    "category": "conceptual"
+    "query": "¿Qué es MFPsecure?"
   },
   {
     "id": "Q19",
-    "query": "¿Qué es el agente MIPA?",
-    "category": "conceptual"
+    "query": "¿Qué es el Agente MIPA?"
   },
   {
     "id": "Q20",
-    "query": "https://www.papercut.com/kb/Main/MissingOrDisappearingPrintJobs/",
-    "category": "explicit_source"
+    "query": "https://www.papercut.com/kb/Main/MissingOrDisappearingPrintJobs/"
   }
 ]
