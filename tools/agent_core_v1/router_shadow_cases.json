@@ -1,0 +1,116 @@
+[
+  {
+    "id": "SOC-001",
+    "message": "hola",
+    "expected": "social"
+  },
+  {
+    "id": "SOC-002",
+    "message": "gracias",
+    "expected": "social"
+  },
+  {
+    "id": "INT-001",
+    "message": "necesito ayuda",
+    "expected": "support_intake"
+  },
+  {
+    "id": "INT-002",
+    "message": "tengo problemas",
+    "expected": "support_intake"
+  },
+  {
+    "id": "CAP-001",
+    "message": "que funciones tienes",
+    "expected": "capabilities"
+  },
+  {
+    "id": "TECH-001",
+    "message": "la impresora no imprime",
+    "expected": "clarification"
+  },
+  {
+    "id": "TECH-002",
+    "message": "como agregar una impresora en HP Access Control",
+    "expected": "technical_query"
+  },
+  {
+    "id": "URL-001",
+    "message": "https://www.papercut.com/kb/Main/MissingOrDisappearingPrintJobs/",
+    "expected": "explicit_source"
+  },
+  {
+    "id": "OOS-001",
+    "message": "como preparo una receta",
+    "expected": "out_of_scope"
+  },
+  {
+    "id": "SEQ-001",
+    "sequence": [
+      "tengo problemas",
+      "el problema ocurre en PaperCut MF",
+      "ya realice el proceso pero no funciono"
+    ],
+    "expected_routes": [
+      "support_intake",
+      "case_update",
+      "case_update"
+    ]
+  },
+  {
+    "id": "SEQ-002",
+    "sequence": [
+      "tengo problemas",
+      "el problema ocurre en GAV Tracking",
+      "afecta a varios usuarios"
+    ],
+    "expected_routes": [
+      "support_intake",
+      "case_update",
+      "case_update"
+    ]
+  },
+  {
+    "id": "SEQ-003",
+    "sequence": [
+      "tengo problemas",
+      "el problema ocurre en HP Access Control",
+      "no aparece ningun mensaje de error"
+    ],
+    "expected_routes": [
+      "support_intake",
+      "case_update",
+      "case_update"
+    ]
+  },
+  {
+    "id": "FOLLOW-001",
+    "seed_topic": [
+      "PaperCut MF"
+    ],
+    "message": "que requisitos tiene",
+    "expected": "technical_follow_up"
+  },
+  {
+    "id": "FOLLOW-002",
+    "seed_topic": [
+      "PaperCut MF",
+      "PaperCut Hive"
+    ],
+    "message": "y como se configura",
+    "expected": "clarification"
+  },
+  {
+    "id": "SHIFT-001",
+    "seed_case": "diagnosing",
+    "message": "ahora quiero consultar otra herramienta",
+    "expected": "clarification"
+  },
+  {
+    "id": "CASE-RESOLVED",
+    "seed_case": "awaiting_validation",
+    "message": "ya funciono",
+    "expected": "case_update",
+    "expected_resolution": "resolved"
+  }
+]
