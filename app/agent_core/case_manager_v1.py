@@ -1,7 +1,7 @@
 from __future__ import annotations
 import re
 from app.agent_core.router_models import ContextFact, RouterShadowState
-from app.agent_core.router_normalizer import normalize_text
+from app.agent_core.router_normalizer import normalize_conversation_text
 
 FAILED_PATTERNS=(r"\bno funcion",r"\bsigue igual\b",r"\bcontinua igual\b",r"\bpersiste\b",r"\bno resolv",r"\bno sirvio\b")
 SUCCESS_PATTERNS=(r"\bya funciono\b",r"\bquedo resuelto\b",r"\bse soluciono\b",r"\bproblema resuelto\b")
@@ -10,16 +10,18 @@ DETAIL_PATTERNS=(r"\bsolo\b",r"\bsolamente\b",r"\bespecificamente\b",r"\bpero\b"
 IMPACT_PATTERNS=((r"\bvarios usuarios\b|\btodos los usuarios\b","multiple_users"),(r"\bun usuario\b|\bsolo un usuario\b","single_user"))
 NEGATIVE_EVIDENCE=(r"\bno aparece (?:ningun|un) (?:mensaje|codigo) de error\b",r"\bsin (?:mensaje|codigo) de error\b")
 
+
 def is_case_update_candidate(message: str, state: RouterShadowState) -> bool:
     if not state.technical_case.is_active: return False
-    text=normalize_text(message)
+    text=normalize_conversation_text(message)
     patterns=FAILED_PATTERNS+SUCCESS_PATTERNS+ACTION_PATTERNS+DETAIL_PATTERNS+NEGATIVE_EVIDENCE
     if any(re.search(pattern,text) for pattern in patterns): return True
     if any(re.search(pattern,text) for pattern,_ in IMPACT_PATTERNS): return True
-    return "?" not in message and len(text.split())<=14
+    return len(text.split()) <= 14 and not any(word in text.split()[:2] for word in ("que","como","cual","cuando","donde"))
+
 
 def infer_updates(message: str) -> tuple[list[ContextFact],dict]:
-    text=normalize_text(message); updates=[]; derived={}
+    text=normalize_conversation_text(message); updates=[]; derived={}
     failed=any(re.search(p,text) for p in FAILED_PATTERNS); succeeded=any(re.search(p,text) for p in SUCCESS_PATTERNS) and not failed
     attempted=any(re.search(p,text) for p in ACTION_PATTERNS)
     if attempted: updates.append(ContextFact("attempted_action",message.strip(),0.9))
@@ -31,6 +33,7 @@ def infer_updates(message: str) -> tuple[list[ContextFact],dict]:
     if any(re.search(p,text) for p in DETAIL_PATTERNS): updates.append(ContextFact("technical_context",message.strip(),0.8))
     if not updates: updates.append(ContextFact("technical_context",message.strip(),0.65))
     return updates,derived
+
 
 def apply_updates(state: RouterShadowState, updates: list[ContextFact], derived: dict) -> None:
     case=state.technical_case
