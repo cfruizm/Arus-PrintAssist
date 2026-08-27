@@ -5373,8 +5373,49 @@ def handle_follow_up_message(user_message: str, session_state: ChatSessionState)
     return bot_message
 
 
+def observe_agent_core_router_shadow(user_message: str, session_state: ChatSessionState):
+    """Observe the new router without affecting the production response path."""
+    try:
+        enabled = bool(st.secrets.get("AGENT_CORE_V1_ROUTER_REAL_CHAT_SHADOW_ENABLED", False))
+    except Exception:
+        enabled = False
+
+    if not enabled:
+        return None
+
+    try:
+        from app.integration.router_real_chat_shadow import (
+            append_session_shadow_record,
+            observe_real_chat_turn,
+        )
+
+        record = observe_real_chat_turn(user_message, session_state)
+        append_session_shadow_record(st.session_state, record)
+        return record
+    except Exception as exc:
+        # Shadow observation must never interrupt the legacy production route.
+        error_record = {
+            "timestamp": datetime.now().isoformat(),
+            "input": user_message,
+            "error": f"{type(exc).__name__}: {exc}",
+            "llm_calls": 0,
+            "retrieval_calls": 0,
+            "production_response_changed": False,
+            "observation_source": "real_chat_turn",
+        }
+        try:
+            records = list(st.session_state.get("agent_core_router_shadow_records", []) or [])
+            records.append(error_record)
+            st.session_state["agent_core_router_shadow_records"] = records[-100:]
+            st.session_state["agent_core_router_shadow_last_record"] = error_record
+        except Exception:
+            pass
+        return error_record
+
+
 def route_user_message(user_message: str, session_state: ChatSessionState):
     session_state = ensure_session_state_integrity(session_state)
+    observe_agent_core_router_shadow(user_message, session_state)
     workflow_state = getattr(session_state, "escalation_workflow_state", "normal")
 
     if workflow_state == "escalation_collecting" or session_state.mode == "escalation":
