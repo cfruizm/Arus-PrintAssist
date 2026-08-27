@@ -5428,7 +5428,6 @@ def try_agent_core_deterministic_response(user_message: str, session_state: Chat
 
 def route_user_message(user_message: str, session_state: ChatSessionState):
     session_state = ensure_session_state_integrity(session_state)
-    observe_agent_core_router_shadow(user_message, session_state)
     workflow_state = getattr(session_state, "escalation_workflow_state", "normal")
 
     if workflow_state == "escalation_collecting" or session_state.mode == "escalation":
