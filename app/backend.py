@@ -5424,8 +5424,9 @@ def try_agent_core_deterministic_response(user_message: str, session_state: Chat
         except Exception:
             pass
         return None
+
 def try_agent_core_contextual_rag_response(user_message: str, session_state: ChatSessionState):
-    """Use legacy RAG only for an explicit contextual-guidance route."""
+    """Use legacy RAG only when the existing router decision has enough technical context."""
     try:
         enabled = bool(st.secrets.get("AGENT_CORE_V1_CONTEXTUAL_RAG_ENABLED", False))
     except Exception:
@@ -5435,34 +5436,55 @@ def try_agent_core_contextual_rag_response(user_message: str, session_state: Cha
         return None
 
     try:
-        from app.agent_core.router_v1 import route_message
         from app.integration.contextual_rag_v1 import (
             append_contextual_record,
             build_contextual_query,
         )
-        from app.integration.session_adapter_v1 import (
-            get_or_create_router_shadow_state,
-        )
 
-        agent_state = get_or_create_router_shadow_state(session_state)
-        decision = route_message(user_message, agent_state)
+        # Reuse the decision already produced by deterministic activation.
+        # Do not call route_message() again because that increments state twice.
+        activation_record = st.session_state.get(
+            "agent_core_deterministic_last_record",
+            {},
+        ) or {}
+        decision = activation_record.get("decision") or {}
 
-        if decision.route != "contextual_guidance":
+        if decision.get("route") != "contextual_guidance":
             return None
 
-        payload = build_contextual_query(user_message, session_state)
-        contextual_query = payload["contextual_query"]
-        payload.update(
+        record = build_contextual_query(user_message, session_state)
+        readiness = record.get("readiness") or {}
+
+        if not readiness.get("ready_for_rag"):
+            record.update(
+                {
+                    "route": "contextual_guidance",
+                    "rag_called": False,
+                    "llm_called": False,
+                    "gate_result": "clarification_required",
+                }
+            )
+            append_contextual_record(st.session_state, record)
+            response = str(readiness.get("clarification_response") or "").strip()
+            return record_deterministic_route(
+                user_message,
+                response,
+                "agent_core_contextual_clarification",
+                session_state,
+            )
+
+        record.update(
             {
-                "route": decision.route,
+                "route": "contextual_guidance",
                 "rag_called": True,
                 "llm_called": True,
+                "gate_result": "rag_authorized",
             }
         )
-        append_contextual_record(st.session_state, payload)
+        append_contextual_record(st.session_state, record)
 
         bot_message = generate_answer_with_rag(
-            user_query=contextual_query,
+            user_query=record["contextual_query"],
             memory=session_state.memory,
         )
         session_state.log_turn(
@@ -5481,13 +5503,14 @@ def try_agent_core_contextual_rag_response(user_message: str, session_state: Cha
                     "input": user_message,
                     "error": f"{type(exc).__name__}: {exc}",
                     "fallback_to_legacy": True,
+                    "rag_called": False,
+                    "llm_called": False,
                 }
             )
             st.session_state["agent_core_contextual_records"] = records[-100:]
         except Exception:
             pass
         return None
-
 
 def route_user_message(user_message: str, session_state: ChatSessionState):
     session_state = ensure_session_state_integrity(session_state)
