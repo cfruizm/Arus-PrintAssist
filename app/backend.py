@@ -5424,6 +5424,69 @@ def try_agent_core_deterministic_response(user_message: str, session_state: Chat
         except Exception:
             pass
         return None
+def try_agent_core_contextual_rag_response(user_message: str, session_state: ChatSessionState):
+    """Use legacy RAG only for an explicit contextual-guidance route."""
+    try:
+        enabled = bool(st.secrets.get("AGENT_CORE_V1_CONTEXTUAL_RAG_ENABLED", False))
+    except Exception:
+        enabled = False
+
+    if not enabled:
+        return None
+
+    try:
+        from app.agent_core.router_v1 import route_message
+        from app.integration.contextual_rag_v1 import (
+            append_contextual_record,
+            build_contextual_query,
+        )
+        from app.integration.session_adapter_v1 import (
+            get_or_create_router_shadow_state,
+        )
+
+        agent_state = get_or_create_router_shadow_state(session_state)
+        decision = route_message(user_message, agent_state)
+
+        if decision.route != "contextual_guidance":
+            return None
+
+        payload = build_contextual_query(user_message, session_state)
+        contextual_query = payload["contextual_query"]
+        payload.update(
+            {
+                "route": decision.route,
+                "rag_called": True,
+                "llm_called": True,
+            }
+        )
+        append_contextual_record(st.session_state, payload)
+
+        bot_message = generate_answer_with_rag(
+            user_query=contextual_query,
+            memory=session_state.memory,
+        )
+        session_state.log_turn(
+            user_message,
+            bot_message,
+            "agent_core_contextual_rag",
+        )
+        return bot_message
+    except Exception as exc:
+        try:
+            records = list(
+                st.session_state.get("agent_core_contextual_records", []) or []
+            )
+            records.append(
+                {
+                    "input": user_message,
+                    "error": f"{type(exc).__name__}: {exc}",
+                    "fallback_to_legacy": True,
+                }
+            )
+            st.session_state["agent_core_contextual_records"] = records[-100:]
+        except Exception:
+            pass
+        return None
 
 
 def route_user_message(user_message: str, session_state: ChatSessionState):
@@ -5454,6 +5517,13 @@ def route_user_message(user_message: str, session_state: ChatSessionState):
     agent_core_response = try_agent_core_deterministic_response(user_message, session_state)
     if agent_core_response is not None:
         return agent_core_response
+
+    contextual_response = try_agent_core_contextual_rag_response(
+        user_message,
+        session_state,
+    )
+    if contextual_response is not None:
+        return contextual_response
 
     if is_capabilities_help_message(user_message):
         return record_deterministic_route(user_message, CAPABILITIES_HELP_RESPONSE, "capabilities_help", session_state)
