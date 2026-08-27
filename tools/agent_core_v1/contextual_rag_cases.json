@@ -1,0 +1,19 @@
+{
+  "deterministic_no_rag": [
+    "Tengo problemas.",
+    "El problema ocurre en PaperCut MF.",
+    "Ya realicé el proceso, pero no funcionó.",
+    "Afecta a varios usuarios."
+  ],
+  "contextual_rag": [
+    "¿Qué puedo hacer ahora?",
+    "¿Cuál es el siguiente paso?",
+    "¿Cómo continúo?",
+    "Sigue igual, ¿qué puedo hacer?"
+  ],
+  "legacy_fallback": [
+    "¿Cómo agregar una impresora en HP Access Control?",
+    "https://www.papercut.com/kb/Main/MissingOrDisappearingPrintJobs/",
+    "Quiero escalar este caso."
+  ]
+}
