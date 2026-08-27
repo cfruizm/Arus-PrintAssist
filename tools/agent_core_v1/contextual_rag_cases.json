@@ -1,19 +1,35 @@
 {
-  "deterministic_no_rag": [
-    "Tengo problemas.",
-    "El problema ocurre en PaperCut MF.",
-    "Ya realicé el proceso, pero no funcionó.",
-    "Afecta a varios usuarios."
-  ],
-  "contextual_rag": [
-    "¿Qué puedo hacer ahora?",
-    "¿Cuál es el siguiente paso?",
-    "¿Cómo continúo?",
-    "Sigue igual, ¿qué puedo hacer?"
-  ],
-  "legacy_fallback": [
-    "¿Cómo agregar una impresora en HP Access Control?",
-    "https://www.papercut.com/kb/Main/MissingOrDisappearingPrintJobs/",
-    "Quiero escalar este caso."
-  ]
+  "insufficient_context": {
+    "turns": [
+      "Tengo problemas.",
+      "El problema ocurre en PaperCut MF.",
+      "Ya realicé el proceso, pero no funcionó.",
+      "Afecta a varios usuarios.",
+      "¿Qué puedo hacer ahora?"
+    ],
+    "expected": {
+      "rag_called": false,
+      "llm_called": false,
+      "gate_result": "clarification_required",
+      "final_turn_number": 5
+    }
+  },
+  "sufficient_context": {
+    "turns": [
+      "Tengo problemas.",
+      "El problema ocurre en PaperCut MF.",
+      "Los trabajos desaparecen de la cola.",
+      "Ya reinicié el proveedor de impresión, pero no funcionó.",
+      "¿Qué puedo hacer ahora?"
+    ],
+    "expected": {
+      "rag_called": true,
+      "llm_called": true,
+      "forced_intent": "troubleshooting",
+      "final_turn_number": 5
+    }
+  },
+  "no_double_routing": {
+    "expected_increment_per_user_message": 1
+  }
 }
