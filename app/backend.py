@@ -5373,6 +5373,59 @@ def handle_follow_up_message(user_message: str, session_state: ChatSessionState)
     return bot_message
 
 
+def try_agent_core_deterministic_response(user_message: str, session_state: ChatSessionState):
+    """Return an authorized deterministic response or None for legacy fallback."""
+    try:
+        enabled = bool(st.secrets.get("AGENT_CORE_V1_DETERMINISTIC_ENABLED", False))
+    except Exception:
+        enabled = False
+
+    if not enabled:
+        return None
+
+    try:
+        from app.integration.deterministic_activation_v1 import (
+            append_activation_record,
+            evaluate_deterministic_activation,
+        )
+
+        record = evaluate_deterministic_activation(user_message, session_state)
+        append_activation_record(st.session_state, record)
+        if not record.get("authorized"):
+            return None
+
+        response = str(record.get("response") or "").strip()
+        if not response:
+            return None
+
+        route = str((record.get("decision") or {}).get("route") or "deterministic")
+        return record_deterministic_route(
+            user_message,
+            response,
+            f"agent_core_{route}",
+            session_state,
+        )
+    except Exception as exc:
+        # Any Agent Core error falls back to the unchanged legacy route.
+        error_record = {
+            "timestamp": datetime.now().isoformat(),
+            "input": user_message,
+            "error": f"{type(exc).__name__}: {exc}",
+            "authorized": False,
+            "fallback_to_legacy": True,
+            "additional_llm_calls": 0,
+            "additional_retrieval_calls": 0,
+        }
+        try:
+            records = list(st.session_state.get("agent_core_deterministic_records", []) or [])
+            records.append(error_record)
+            st.session_state["agent_core_deterministic_records"] = records[-100:]
+            st.session_state["agent_core_deterministic_last_record"] = error_record
+        except Exception:
+            pass
+        return None
+
+
 def route_user_message(user_message: str, session_state: ChatSessionState):
     session_state = ensure_session_state_integrity(session_state)
     workflow_state = getattr(session_state, "escalation_workflow_state", "normal")
@@ -5397,6 +5450,10 @@ def route_user_message(user_message: str, session_state: ChatSessionState):
     if workflow_state == "escalation_completed":
         session_state.escalation_workflow_state = "normal"
         session_state.mode = "normal"
+
+    agent_core_response = try_agent_core_deterministic_response(user_message, session_state)
+    if agent_core_response is not None:
+        return agent_core_response
 
     if is_capabilities_help_message(user_message):
         return record_deterministic_route(user_message, CAPABILITIES_HELP_RESPONSE, "capabilities_help", session_state)
