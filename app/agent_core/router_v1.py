@@ -11,6 +11,16 @@ CAPABILITY=(r"\bque (?:puedes|sabes) hacer\b",r"\bque funciones tienes\b",r"\bcu
 INTAKE=(r"^(?:necesito|requiero) ayuda$",r"^(?:necesito|requiero) soporte$",r"^tengo problemas?$",r"^algo no funciona$")
 ESCALATION=(r"\bquiero escalar\b",r"\bnecesito escalar\b",r"\bescalar (?:este|el) caso\b",r"\babrir (?:un )?caso\b",r"\bcrear incidente\b")
 FOLLOW=(r"^(?:que|cuales) (?:requisitos|funciones|componentes|versiones|limitaciones)(?: tiene)?$",r"^(?:y )?como (?:se )?(?:instala|configura|usa|funciona|actualiza|registra)$",r"^para que sirve$",r"^(?:y )?(?:como|cuando|donde|por que)$")
+CONTEXTUAL_GUIDANCE=(
+    r"^(?:y )?ahora que (?:hago|puedo hacer)$",
+    r"^(?:entonces )?que (?:hago|puedo hacer) ahora$",
+    r"^(?:cual|cuál) es el siguiente paso$",
+    r"^como (?:continuo|sigo)$",
+    r"^que mas (?:puedo hacer|valido|reviso)$",
+    r"^necesito (?:otra|una nueva) validacion$",
+    r"^no funciono que (?:hago|puedo hacer)$",
+    r"^sigue igual que (?:hago|puedo hacer)$",
+)
 PRINT_TERMS={"impresora","impresion","imprimir","imprime","multifuncional","cola","trabajo","driver","firmware","escaner","escaneo","servidor","pin","codigo","papel","toner","software","plataforma","dispositivo","red","usb","error","falla"}
 ACTION_TERMS={"como","que","cual","configurar","instalar","agregar","asignar","revisar","hacer"}
 
@@ -25,6 +35,8 @@ def route_message(message: str,state: RouterShadowState) -> RouteDecision:
     elif urls: decision=RouteDecision("explicit_source","explicit_url",1.0,use_retrieval=True,use_llm=True,metadata={"urls":urls})
     elif matches(ESCALATION,text): decision=RouteDecision("escalation","explicit_escalation",1.0,inherit_context=state.technical_case.is_active)
     elif re.search(r"\bahora (?:quiero|necesito) (?:consultar|preguntar|hablar) (?:otro|otra)\b",text): decision=RouteDecision("clarification","explicit_topic_shift_without_subject",0.98,needs_clarification=True)
+    elif state.technical_case.is_active and matches(CONTEXTUAL_GUIDANCE,text):
+        decision=RouteDecision("contextual_guidance","explicit_request_for_next_documented_guidance",0.98,use_retrieval=True,use_llm=True,inherit_context=True)
     elif is_case_update_candidate(raw,state):
         updates,derived=infer_updates(raw);apply_updates(state,updates,derived);decision=RouteDecision("case_update","active_case_update",0.9,inherit_context=True,case_updates=updates,metadata=derived)
     elif matches(CAPABILITY,text): decision=RouteDecision("capabilities","capability_request",1.0)
