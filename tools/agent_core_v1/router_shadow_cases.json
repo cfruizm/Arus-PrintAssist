@@ -6,63 +6,145 @@
   },
   {
     "id": "SOC-002",
-    "message": "gracias",
+    "message": "Hola.",
+    "expected": "social"
+  },
+  {
+    "id": "SOC-003",
+    "message": "¡Hola!",
+    "expected": "social"
+  },
+  {
+    "id": "SOC-004",
+    "message": "Buenas tardes.",
+    "expected": "social"
+  },
+  {
+    "id": "SOC-005",
+    "message": "Gracias!",
+    "expected": "social"
+  },
+  {
+    "id": "SOC-006",
+    "message": "Ok.",
+    "expected": "social"
+  },
+  {
+    "id": "SOC-007",
+    "message": "Listo.",
     "expected": "social"
   },
   {
     "id": "INT-001",
-    "message": "necesito ayuda",
+    "message": "Tengo problemas",
     "expected": "support_intake"
   },
   {
     "id": "INT-002",
-    "message": "tengo problemas",
+    "message": "Tengo problemas.",
+    "expected": "support_intake"
+  },
+  {
+    "id": "INT-003",
+    "message": "Tengo problemas!",
+    "expected": "support_intake"
+  },
+  {
+    "id": "INT-004",
+    "message": "Necesito ayuda.",
+    "expected": "support_intake"
+  },
+  {
+    "id": "INT-005",
+    "message": "Necesito soporte, por favor.",
+    "expected": "support_intake"
+  },
+  {
+    "id": "INT-006",
+    "message": "Por favor necesito soporte.",
     "expected": "support_intake"
   },
   {
     "id": "CAP-001",
-    "message": "que funciones tienes",
+    "message": "¿Qué funciones tienes?",
     "expected": "capabilities"
   },
   {
     "id": "TECH-001",
-    "message": "la impresora no imprime",
+    "message": "La impresora no imprime.",
     "expected": "clarification"
   },
   {
     "id": "TECH-002",
-    "message": "como agregar una impresora en HP Access Control",
+    "message": "¿Cómo agregar una impresora en HP Access Control?",
     "expected": "technical_query"
   },
   {
     "id": "URL-001",
-    "message": "https://www.papercut.com/kb/Main/MissingOrDisappearingPrintJobs/",
-    "expected": "explicit_source"
+    "message": "Revisa https://www.papercut.com/kb/Main/MissingOrDisappearingPrintJobs/.",
+    "expected": "explicit_source",
+    "url_suffix": "/MissingOrDisappearingPrintJobs/"
   },
   {
     "id": "OOS-001",
-    "message": "como preparo una receta",
+    "message": "¿Cómo preparo una receta?",
     "expected": "out_of_scope"
+  },
+  {
+    "id": "FOLLOW-001",
+    "seed_topic": [
+      "PaperCut MF"
+    ],
+    "message": "¿Qué requisitos tiene?",
+    "expected": "technical_follow_up"
+  },
+  {
+    "id": "FOLLOW-002",
+    "seed_topic": [
+      "PaperCut MF",
+      "PaperCut Hive"
+    ],
+    "message": "Y, ¿cómo se configura?",
+    "expected": "clarification"
+  },
+  {
+    "id": "FOLLOW-003",
+    "message": "¿Cómo así?",
+    "expected": "clarification"
+  },
+  {
+    "id": "FOLLOW-004",
+    "message": "No entiendo.",
+    "expected": "clarification"
   },
   {
     "id": "SEQ-001",
     "sequence": [
-      "tengo problemas",
-      "el problema ocurre en PaperCut MF",
-      "ya realice el proceso pero no funciono"
+      "Tengo problemas.",
+      "El problema ocurre en PaperCut MF.",
+      "Ya realicé el proceso, pero no funcionó.",
+      "Afecta a varios usuarios."
     ],
     "expected_routes": [
       "support_intake",
       "case_update",
+      "case_update",
       "case_update"
-    ]
+    ],
+    "final": {
+      "turn_number": 4,
+      "product": "PaperCut MF",
+      "status": "unresolved",
+      "resolution_status": "unresolved",
+      "affected_users": "multiple_users"
+    }
   },
   {
     "id": "SEQ-002",
     "sequence": [
-      "tengo problemas",
-      "el problema ocurre en GAV Tracking",
-      "afecta a varios usuarios"
+      "Necesito soporte, por favor.",
+      "El problema ocurre en GAV Tracking.",
+      "No aparece ningún mensaje de error."
     ],
     "expected_routes": [
       "support_intake",
@@ -73,9 +155,9 @@
   {
     "id": "SEQ-003",
     "sequence": [
-      "tengo problemas",
-      "el problema ocurre en HP Access Control",
-      "no aparece ningun mensaje de error"
+      "Tengo problemas!",
+      "El problema ocurre en HP Access Control.",
+      "Sigue igual."
     ],
     "expected_routes": [
       "support_intake",
@@ -84,33 +166,41 @@
     ]
   },
   {
-    "id": "FOLLOW-001",
-    "seed_topic": [
-      "PaperCut MF"
-    ],
-    "message": "que requisitos tiene",
-    "expected": "technical_follow_up"
+    "id": "CASE-001",
+    "seed_case": "diagnosing",
+    "message": "Ya lo hice.",
+    "expected": "case_update"
   },
   {
-    "id": "FOLLOW-002",
-    "seed_topic": [
-      "PaperCut MF",
-      "PaperCut Hive"
-    ],
-    "message": "y como se configura",
-    "expected": "clarification"
+    "id": "CASE-002",
+    "seed_case": "awaiting_validation",
+    "message": "Ya lo hice, pero no funcionó.",
+    "expected": "case_update",
+    "resolution": "unresolved"
+  },
+  {
+    "id": "CASE-003",
+    "seed_case": "diagnosing",
+    "message": "Sigue igual.",
+    "expected": "case_update",
+    "resolution": "unresolved"
+  },
+  {
+    "id": "CASE-004",
+    "seed_case": "diagnosing",
+    "message": "Afecta a varios usuarios.",
+    "expected": "case_update"
+  },
+  {
+    "id": "CASE-005",
+    "seed_case": "diagnosing",
+    "message": "No aparece ningún mensaje de error.",
+    "expected": "case_update"
   },
   {
     "id": "SHIFT-001",
     "seed_case": "diagnosing",
-    "message": "ahora quiero consultar otra herramienta",
+    "message": "Ahora quiero consultar otra herramienta.",
     "expected": "clarification"
-  },
-  {
-    "id": "CASE-RESOLVED",
-    "seed_case": "awaiting_validation",
-    "message": "ya funciono",
-    "expected": "case_update",
-    "expected_resolution": "resolved"
   }
 ]
