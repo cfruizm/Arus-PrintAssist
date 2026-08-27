@@ -4,23 +4,68 @@ from app.llm_gateway.errors import LLMGatewayError,normalize_error
 from app.llm_gateway.models import LLMResult
 from app.llm_gateway.providers.base import BaseProvider
 
+MODELS_URL="https://api.groq.com/openai/v1/models"
+CHAT_URL="https://api.groq.com/openai/v1/chat/completions"
+
+def inspect_key(api_key)->dict:
+    raw="" if api_key is None else str(api_key)
+    stripped=raw.strip()
+    return {
+        "key_present":bool(raw),
+        "key_length":len(raw),
+        "stripped_length":len(stripped),
+        "prefix_valid":stripped.startswith("gsk_"),
+        "leading_or_trailing_whitespace":raw!=stripped,
+        "contains_line_break":("\n" in raw or "\r" in raw),
+        "contains_internal_whitespace":any(ch.isspace() for ch in stripped),
+        "contains_literal_bearer_prefix":stripped.lower().startswith("bearer "),
+    }
+
+def _request_json(url,api_key,method="GET",body=None,timeout=30):
+    data=None if body is None else json.dumps(body,ensure_ascii=False).encode("utf-8")
+    request=urllib.request.Request(url,data=data,headers={"Authorization":f"Bearer {str(api_key).strip()}","Accept":"application/json","Content-Type":"application/json","User-Agent":"Arus-PrintAssist/1.0"},method=method)
+    try:
+        with urllib.request.urlopen(request,timeout=timeout) as response:
+            return response.status,json.loads(response.read().decode("utf-8")),dict(response.headers.items())
+    except urllib.error.HTTPError as exc:
+        try:
+            raw=exc.read().decode("utf-8",errors="replace");payload=json.loads(raw)
+        except Exception:
+            payload={"error":{"message":"Provider returned a non-JSON error response."}}
+        return exc.code,payload,dict(exc.headers.items()) if exc.headers else {}
+
+def diagnose_groq(api_key,configured_model)->dict:
+    local=inspect_key(api_key)
+    result={"endpoint":MODELS_URL,"configured_model":configured_model,"local_validation":local,"request_attempted":False,"status_code":None,"authenticated":False,"model_available":False,"available_model_count":0,"provider_error_type":None,"provider_error_message":None}
+    invalid=not local["key_present"] or not local["prefix_valid"] or local["leading_or_trailing_whitespace"] or local["contains_line_break"] or local["contains_internal_whitespace"] or local["contains_literal_bearer_prefix"]
+    if invalid:
+        result["error_code"]="invalid_secret_format";return result
+    result["request_attempted"]=True
+    status,payload,headers=_request_json(MODELS_URL,str(api_key).strip())
+    result["status_code"]=status
+    result["request_id"]=headers.get("x-request-id") or headers.get("X-Request-Id")
+    if status==200:
+        models=[str(item.get("id")) for item in payload.get("data",[]) if isinstance(item,dict) and item.get("id")]
+        result.update({"authenticated":True,"available_model_count":len(models),"model_available":configured_model in models,"available_models":models,"error_code":None if configured_model in models else "configured_model_unavailable"})
+        return result
+    error=payload.get("error") if isinstance(payload,dict) else None
+    message=(error or {}).get("message") if isinstance(error,dict) else None
+    err_type=(error or {}).get("type") if isinstance(error,dict) else None
+    result["provider_error_type"]=str(err_type or "")[:100] or None
+    result["provider_error_message"]=str(message or "Authentication request was rejected.")[:500]
+    result["error_code"]="groq_key_rejected" if status in {401,403} else "groq_models_endpoint_failed"
+    return result
+
 class GroqProvider(BaseProvider):
-    def __init__(self,api_key:str,base_url:str,structured_mode:str="best_effort"):
+    def __init__(self,api_key:str,base_url:str=CHAT_URL,structured_mode:str="best_effort"):
         if not api_key:raise LLMGatewayError("missing_api_key","Falta GROQ_API_KEY.")
-        self.api_key=api_key;self.base_url=base_url;self.structured_mode=structured_mode
+        self.api_key=str(api_key).strip();self.base_url=base_url;self.structured_mode=structured_mode
     def complete(self,request,model):
         body={"model":model,"messages":request.messages,"max_tokens":max(32,min(4096,int(request.max_tokens))),"temperature":max(1e-8,float(request.temperature)),"stream":False}
-        if request.response_schema:
-            body["response_format"]={"type":"json_schema","json_schema":{"name":"structured_response","strict":self.structured_mode=="strict","schema":request.response_schema}}
-        raw=json.dumps(body,ensure_ascii=False).encode("utf-8")
-        req=urllib.request.Request(self.base_url,data=raw,headers={"Authorization":f"Bearer {self.api_key}","Content-Type":"application/json"},method="POST")
-        started=time.perf_counter()
-        try:
-            with urllib.request.urlopen(req,timeout=45) as response:data=json.loads(response.read().decode("utf-8"));headers=dict(response.headers.items())
-        except urllib.error.HTTPError as exc:
-            try:detail=exc.read().decode("utf-8")
-            except Exception:detail=str(exc)
-            wrapped=RuntimeError(detail);wrapped.response=type("R",(),{"status_code":exc.code})();raise normalize_error(wrapped) from exc
-        except Exception as exc:raise normalize_error(exc) from exc
+        if request.response_schema:body["response_format"]={"type":"json_schema","json_schema":{"name":"structured_response","strict":self.structured_mode=="strict","schema":request.response_schema}}
+        started=time.perf_counter();status,data,headers=_request_json(self.base_url,self.api_key,"POST",body,45)
+        if status!=200:
+            error=data.get("error") if isinstance(data,dict) else {};message=(error or {}).get("message") if isinstance(error,dict) else "Groq request failed"
+            wrapped=RuntimeError(str(message));wrapped.response=type("R",(),{"status_code":status})();raise normalize_error(wrapped)
         choice=(data.get("choices") or [{}])[0];message=choice.get("message") or {};usage=data.get("usage") or {}
         return LLMResult(True,str(message.get("content") or ""),"groq",model,request.purpose,round((time.perf_counter()-started)*1000,3),{"prompt_tokens":int(usage.get("prompt_tokens") or 0),"completion_tokens":int(usage.get("completion_tokens") or 0),"total_tokens":int(usage.get("total_tokens") or 0)},choice.get("finish_reason"),metadata={"structured_mode":self.structured_mode,"rate_limit_remaining_requests":headers.get("x-ratelimit-remaining-requests"),"rate_limit_remaining_tokens":headers.get("x-ratelimit-remaining-tokens")})
