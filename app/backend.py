@@ -5373,10 +5373,10 @@ def handle_follow_up_message(user_message: str, session_state: ChatSessionState)
     return bot_message
 
 
-def observe_agent_core_router_shadow(user_message: str, session_state: ChatSessionState):
-    """Observe the new router without affecting the production response path."""
+def try_agent_core_deterministic_response(user_message: str, session_state: ChatSessionState):
+    """Return an authorized deterministic response or None for legacy fallback."""
     try:
-        enabled = bool(st.secrets.get("AGENT_CORE_V1_ROUTER_REAL_CHAT_SHADOW_ENABLED", False))
+        enabled = bool(st.secrets.get("AGENT_CORE_V1_DETERMINISTIC_ENABLED", False))
     except Exception:
         enabled = False
 
@@ -5384,33 +5384,46 @@ def observe_agent_core_router_shadow(user_message: str, session_state: ChatSessi
         return None
 
     try:
-        from app.integration.router_real_chat_shadow import (
-            append_session_shadow_record,
-            observe_real_chat_turn,
+        from app.integration.deterministic_activation_v1 import (
+            append_activation_record,
+            evaluate_deterministic_activation,
         )
 
-        record = observe_real_chat_turn(user_message, session_state)
-        append_session_shadow_record(st.session_state, record)
-        return record
+        record = evaluate_deterministic_activation(user_message, session_state)
+        append_activation_record(st.session_state, record)
+        if not record.get("authorized"):
+            return None
+
+        response = str(record.get("response") or "").strip()
+        if not response:
+            return None
+
+        route = str((record.get("decision") or {}).get("route") or "deterministic")
+        return record_deterministic_route(
+            user_message,
+            response,
+            f"agent_core_{route}",
+            session_state,
+        )
     except Exception as exc:
-        # Shadow observation must never interrupt the legacy production route.
+        # Any Agent Core error falls back to the unchanged legacy route.
         error_record = {
             "timestamp": datetime.now().isoformat(),
             "input": user_message,
             "error": f"{type(exc).__name__}: {exc}",
-            "llm_calls": 0,
-            "retrieval_calls": 0,
-            "production_response_changed": False,
-            "observation_source": "real_chat_turn",
+            "authorized": False,
+            "fallback_to_legacy": True,
+            "additional_llm_calls": 0,
+            "additional_retrieval_calls": 0,
         }
         try:
-            records = list(st.session_state.get("agent_core_router_shadow_records", []) or [])
+            records = list(st.session_state.get("agent_core_deterministic_records", []) or [])
             records.append(error_record)
-            st.session_state["agent_core_router_shadow_records"] = records[-100:]
-            st.session_state["agent_core_router_shadow_last_record"] = error_record
+            st.session_state["agent_core_deterministic_records"] = records[-100:]
+            st.session_state["agent_core_deterministic_last_record"] = error_record
         except Exception:
             pass
-        return error_record
+        return None
 
 
 def route_user_message(user_message: str, session_state: ChatSessionState):
@@ -5438,6 +5451,10 @@ def route_user_message(user_message: str, session_state: ChatSessionState):
     if workflow_state == "escalation_completed":
         session_state.escalation_workflow_state = "normal"
         session_state.mode = "normal"
+
+    agent_core_response = try_agent_core_deterministic_response(user_message, session_state)
+    if agent_core_response is not None:
+        return agent_core_response
 
     if is_capabilities_help_message(user_message):
         return record_deterministic_route(user_message, CAPABILITIES_HELP_RESPONSE, "capabilities_help", session_state)
