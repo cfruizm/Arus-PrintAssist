@@ -21,11 +21,11 @@ def warnings_for(data):
  if data.get("route")=="clarification" and not data.get("requires_clarification"):warnings.append("clarification_route_without_flag")
  if data.get("route")=="escalation" and not data.get("requires_escalation"):warnings.append("escalation_route_without_flag")
  if data.get("route")=="case_update" and any(x.get("type")=="affected_scope" for x in data.get("case_updates",[])) and data.get("intent")!="troubleshooting":warnings.append("impact_update_wrong_intent")
- if data.get("next_action")=="ask_clarification" and data.get("clarification_question") and any(word in data["clarification_question"].lower() for word in ["verificado","reiniciado","espacio disponible","servicio activo","puerto","firewall"]):warnings.append("clarification_suggests_technical_check")
+ if data.get("next_action")=="ask_clarification" and data.get("clarification_question") and any(w in data["clarification_question"].lower() for w in ["verificado","reiniciado","espacio disponible","servicio activo","puerto","firewall"]):warnings.append("clarification_suggests_technical_check")
  return warnings
 
 def evaluate_case(gateway,case,max_tokens=220):
- started=time.perf_counter();request=LLMRequest(build_messages(case["message"],case.get("state") or {}),"semantic_orchestrator",max_tokens,0.0,SEMANTIC_DECISION_SCHEMA);result=gateway.complete(request)
+ started=time.perf_counter();result=gateway.complete(LLMRequest(build_messages(case["message"],case.get("state") or {}),"semantic_orchestrator",max_tokens,0.0,SEMANTIC_DECISION_SCHEMA))
  rec={"id":case["id"],"category":case["category"],"message":case["message"],"provider_result":result.to_dict(),"passed":False,"mismatches":[]}
  if not result.ok:return rec
  try:data=validate_semantic_decision(extract_json(result.text)).to_dict()
@@ -36,7 +36,8 @@ def evaluate_case(gateway,case,max_tokens=220):
    actual=[x.get("type") for x in data.get("case_updates",[])]
    if value not in actual:rec["mismatches"].append(f"update_type expected={value} actual={actual}")
   elif data.get(key)!=value:rec["mismatches"].append(f"{key} expected={value} actual={data.get(key)}")
- rec["passed"]=not rec["mismatches"] and not rec["consistency_warnings"];rec["evaluation_latency_ms"]=round((time.perf_counter()-started)*1000,3);return rec
+ rec["passed"]=not rec["mismatches"] and not rec["consistency_warnings"]
+ rec["evaluation_latency_ms"]=round((time.perf_counter()-started)*1000,3);return rec
 
 def summarize(records):
  usage={"prompt_tokens":0,"completion_tokens":0,"total_tokens":0};categories={}
