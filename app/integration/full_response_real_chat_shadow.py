@@ -43,20 +43,41 @@ def observe_full_response_real_chat_shadow(user_message,production_answer,chat_s
     if not semantic_record:
         shadow={**base,"status":"skipped","reason":"semantic_record_not_available"}
     else:
-        derived=semantic_record.get("derived_decision") or {};decision=semantic_record.get("normalized_decision") or semantic_record.get("model_decision") or {};case_state=_temporary_case_state(chat_session_state,semantic_record)
-        if not derived.get("requires_retrieval"):
-            shadow={**base,"status":"skipped","reason":"semantic_decision_does_not_require_retrieval","semantic_decision":decision,"derived_decision":derived,"case_state":case_state}
+        derived=semantic_record.get("derived_decision") or {}
+        normalized_decision=semantic_record.get("normalized_decision") or {}
+        model_decision=semantic_record.get("model_decision") or {}
+        decision=normalized_decision or model_decision
+        case_state=_temporary_case_state(chat_session_state,semantic_record)
+
+        # A structured model output can contain a complete retrieval request while
+        # classifying the same turn as provide_case_detail. In full-response shadow
+        # mode, recover that explicit request instead of discarding it. This does not
+        # change the productive route or the persisted productive state.
+        raw_retrieval_request=model_decision.get("retrieval_request") or {}
+        normalized_retrieval_request=normalized_decision.get("retrieval_request") or {}
+        retrieval_request=normalized_retrieval_request or raw_retrieval_request
+        request_question=str(retrieval_request.get("question") or "").strip()
+        request_problem=str(retrieval_request.get("problem_statement") or "").strip()
+        recovery_applied=bool(
+            not derived.get("requires_retrieval")
+            and request_question
+            and (request_problem or retrieval_request.get("products"))
+        )
+        should_retrieve=bool(derived.get("requires_retrieval") or recovery_applied)
+
+        if not should_retrieve:
+            shadow={**base,"status":"skipped","reason":"semantic_decision_does_not_require_retrieval","semantic_decision":decision,"model_decision":model_decision,"derived_decision":derived,"case_state":case_state,"retrieval_recovery_applied":False}
         else:
-            retrieval_request=decision.get("retrieval_request") or {};query=str(retrieval_request.get("question") or user_message).strip()
-            problem=str(retrieval_request.get("problem_statement") or "").strip()
+            query=str(request_question or user_message).strip()
+            problem=str(request_problem or "").strip()
             if problem and problem.casefold() not in query.casefold():query=f"{problem}. {query}"
             retrieval=retrieve_from_existing_backend(query,6);base["retrieval_executed_by_shadow"]=True
             if not retrieval.get("ok"):
-                shadow={**base,"status":"retrieval_error","semantic_decision":decision,"derived_decision":derived,"case_state":case_state,"retrieval":retrieval}
+                shadow={**base,"status":"retrieval_error","semantic_decision":decision,"model_decision":model_decision,"derived_decision":derived,"case_state":case_state,"retrieval":retrieval,"retrieval_recovery_applied":recovery_applied}
             else:
                 config=load_gateway_config(secrets);gateway=LLMGateway(config,streamlit_state);intent=str(derived.get("intent") or "troubleshooting");policy=str(secrets.get("LLM_INTERNAL_KNOWLEDGE_POLICY","hybrid_guarded"));max_tokens=max(250,min(500,int(secrets.get("LLM_ANSWER_MAX_TOKENS",400))))
                 proposal=run_hybrid_response_lab(gateway,retrieval,query,case_state,intent,policy,max_tokens)
-                shadow={**base,"status":"ok","semantic_decision":decision,"derived_decision":derived,"case_state":case_state,"query_used":query,"proposal":proposal,"proposed_answer":proposal.get("answer_result",{}).get("text","")}
+                shadow={**base,"status":"ok","semantic_decision":decision,"model_decision":model_decision,"derived_decision":derived,"case_state":case_state,"query_used":query,"proposal":proposal,"proposed_answer":proposal.get("answer_result",{}).get("text",""),"retrieval_recovery_applied":recovery_applied,"retrieval_recovery_reason":"explicit_model_retrieval_request" if recovery_applied else None}
     shadow["total_shadow_latency_ms"]=round((time.perf_counter()-started)*1000,3)
     if semantic_record is not None:
         semantic_record["full_response_shadow"]=shadow
