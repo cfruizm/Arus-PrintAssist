@@ -22,9 +22,10 @@
       "resolution_status": "unresolved"
     },
     "expected": {
+      "conversation_act": "report_failed_attempt",
+      "response_mode": "deterministic",
       "route": "case_update",
       "intent": "troubleshooting",
-      "response_mode": "deterministic",
       "requires_retrieval": false,
       "update_type": "attempt_result"
     }
@@ -52,9 +53,10 @@
       "resolution_status": "unresolved"
     },
     "expected": {
+      "conversation_act": "report_failed_attempt",
+      "response_mode": "deterministic",
       "route": "case_update",
       "intent": "troubleshooting",
-      "response_mode": "deterministic",
       "requires_retrieval": false,
       "update_type": "attempt_result"
     }
@@ -82,9 +84,10 @@
       "resolution_status": "unresolved"
     },
     "expected": {
+      "conversation_act": "report_failed_attempt",
+      "response_mode": "deterministic",
       "route": "case_update",
       "intent": "troubleshooting",
-      "response_mode": "deterministic",
       "requires_retrieval": false,
       "update_type": "attempt_result"
     }
@@ -112,9 +115,10 @@
       "resolution_status": "unresolved"
     },
     "expected": {
+      "conversation_act": "report_failed_attempt_and_request_next_step",
+      "response_mode": "retrieve",
       "route": "technical_follow_up",
       "intent": "troubleshooting",
-      "response_mode": "retrieve",
       "requires_retrieval": true,
       "update_type": "attempt_result"
     }
@@ -142,9 +146,10 @@
       "resolution_status": "unresolved"
     },
     "expected": {
+      "conversation_act": "report_failed_attempt_and_request_next_step",
+      "response_mode": "retrieve",
       "route": "technical_follow_up",
       "intent": "troubleshooting",
-      "response_mode": "retrieve",
       "requires_retrieval": true,
       "update_type": "attempt_result"
     }
@@ -172,9 +177,10 @@
       "resolution_status": "unresolved"
     },
     "expected": {
+      "conversation_act": "report_failed_attempt_and_request_next_step",
+      "response_mode": "retrieve",
       "route": "technical_follow_up",
       "intent": "troubleshooting",
-      "response_mode": "retrieve",
       "requires_retrieval": true,
       "update_type": "attempt_result"
     }
@@ -202,9 +208,10 @@
       "resolution_status": "unresolved"
     },
     "expected": {
+      "conversation_act": "request_next_step",
+      "response_mode": "retrieve",
       "route": "technical_follow_up",
       "intent": "troubleshooting",
-      "response_mode": "retrieve",
       "requires_retrieval": true
     }
   },
@@ -231,9 +238,10 @@
       "resolution_status": "unresolved"
     },
     "expected": {
+      "conversation_act": "request_next_step",
+      "response_mode": "retrieve",
       "route": "technical_follow_up",
       "intent": "troubleshooting",
-      "response_mode": "retrieve",
       "requires_retrieval": true
     }
   },
@@ -260,9 +268,10 @@
       "resolution_status": "unresolved"
     },
     "expected": {
+      "conversation_act": "request_next_step",
+      "response_mode": "retrieve",
       "route": "technical_follow_up",
       "intent": "troubleshooting",
-      "response_mode": "retrieve",
       "requires_retrieval": true
     }
   },
@@ -283,9 +292,10 @@
       "resolution_status": null
     },
     "expected": {
+      "conversation_act": "provide_case_detail",
+      "response_mode": "deterministic",
       "route": "case_update",
       "intent": "troubleshooting",
-      "response_mode": "deterministic",
       "requires_retrieval": false,
       "update_type": "symptom"
     }
@@ -307,9 +317,10 @@
       "resolution_status": null
     },
     "expected": {
+      "conversation_act": "provide_case_detail",
+      "response_mode": "deterministic",
       "route": "case_update",
       "intent": "troubleshooting",
-      "response_mode": "deterministic",
       "requires_retrieval": false,
       "update_type": "affected_scope"
     }
@@ -329,9 +340,10 @@
       "resolution_status": null
     },
     "expected": {
+      "conversation_act": "social_message",
+      "response_mode": "deterministic",
       "route": "social",
       "intent": "social",
-      "response_mode": "deterministic",
       "requires_retrieval": false
     }
   },
@@ -350,8 +362,10 @@
       "resolution_status": null
     },
     "expected": {
-      "route": "support_intake",
+      "conversation_act": "request_support",
       "response_mode": "deterministic",
+      "route": "support_intake",
+      "intent": "unknown",
       "requires_retrieval": false
     }
   },
@@ -378,10 +392,10 @@
       "resolution_status": "unresolved"
     },
     "expected": {
+      "conversation_act": "request_escalation",
+      "response_mode": "escalate",
       "route": "escalation",
       "intent": "escalation",
-      "response_mode": "escalate",
-      "requires_escalation": true,
       "requires_retrieval": false
     }
   },
@@ -400,9 +414,10 @@
       "resolution_status": null
     },
     "expected": {
-      "route": "clarification",
+      "conversation_act": "ambiguous_reference",
       "response_mode": "clarification",
-      "requires_clarification": true,
+      "route": "clarification",
+      "intent": "unknown",
       "requires_retrieval": false
     }
   }
