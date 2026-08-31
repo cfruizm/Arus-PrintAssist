@@ -1,0 +1,409 @@
+[
+  {
+    "id": "ACT-01",
+    "category": "failed_action",
+    "message": "Hice lo anterior y continúa exactamente igual.",
+    "state": {
+      "status": "unresolved",
+      "products": [
+        "PaperCut MF"
+      ],
+      "processes": [],
+      "symptoms": [
+        "Los trabajos dejan de verse después del envío"
+      ],
+      "attempted_actions": [
+        "Reinicio del proveedor de impresión"
+      ],
+      "failed_actions": [
+        "Reinicio del proveedor de impresión"
+      ],
+      "affected_scope": "multiple_users",
+      "resolution_status": "unresolved"
+    },
+    "expected": {
+      "route": "case_update",
+      "intent": "troubleshooting",
+      "response_mode": "deterministic",
+      "requires_retrieval": false,
+      "update_type": "attempt_result"
+    }
+  },
+  {
+    "id": "ACT-02",
+    "category": "failed_action",
+    "message": "Lo probé, pero el resultado fue el mismo.",
+    "state": {
+      "status": "unresolved",
+      "products": [
+        "PaperCut MF"
+      ],
+      "processes": [],
+      "symptoms": [
+        "Los trabajos dejan de verse después del envío"
+      ],
+      "attempted_actions": [
+        "Reinicio del proveedor de impresión"
+      ],
+      "failed_actions": [
+        "Reinicio del proveedor de impresión"
+      ],
+      "affected_scope": "multiple_users",
+      "resolution_status": "unresolved"
+    },
+    "expected": {
+      "route": "case_update",
+      "intent": "troubleshooting",
+      "response_mode": "deterministic",
+      "requires_retrieval": false,
+      "update_type": "attempt_result"
+    }
+  },
+  {
+    "id": "ACT-03",
+    "category": "failed_action",
+    "message": "Nada cambió después de esa validación.",
+    "state": {
+      "status": "unresolved",
+      "products": [
+        "PaperCut MF"
+      ],
+      "processes": [],
+      "symptoms": [
+        "Los trabajos dejan de verse después del envío"
+      ],
+      "attempted_actions": [
+        "Reinicio del proveedor de impresión"
+      ],
+      "failed_actions": [
+        "Reinicio del proveedor de impresión"
+      ],
+      "affected_scope": "multiple_users",
+      "resolution_status": "unresolved"
+    },
+    "expected": {
+      "route": "case_update",
+      "intent": "troubleshooting",
+      "response_mode": "deterministic",
+      "requires_retrieval": false,
+      "update_type": "attempt_result"
+    }
+  },
+  {
+    "id": "ACTNEXT-01",
+    "category": "failed_action_with_request",
+    "message": "Hice lo anterior y sigue igual, ¿qué más hago?",
+    "state": {
+      "status": "unresolved",
+      "products": [
+        "PaperCut MF"
+      ],
+      "processes": [],
+      "symptoms": [
+        "Los trabajos dejan de verse después del envío"
+      ],
+      "attempted_actions": [
+        "Reinicio del proveedor de impresión"
+      ],
+      "failed_actions": [
+        "Reinicio del proveedor de impresión"
+      ],
+      "affected_scope": "multiple_users",
+      "resolution_status": "unresolved"
+    },
+    "expected": {
+      "route": "technical_follow_up",
+      "intent": "troubleshooting",
+      "response_mode": "retrieve",
+      "requires_retrieval": true,
+      "update_type": "attempt_result"
+    }
+  },
+  {
+    "id": "ACTNEXT-02",
+    "category": "failed_action_with_request",
+    "message": "La prueba no resolvió nada, dime cómo continúo.",
+    "state": {
+      "status": "unresolved",
+      "products": [
+        "PaperCut MF"
+      ],
+      "processes": [],
+      "symptoms": [
+        "Los trabajos dejan de verse después del envío"
+      ],
+      "attempted_actions": [
+        "Reinicio del proveedor de impresión"
+      ],
+      "failed_actions": [
+        "Reinicio del proveedor de impresión"
+      ],
+      "affected_scope": "multiple_users",
+      "resolution_status": "unresolved"
+    },
+    "expected": {
+      "route": "technical_follow_up",
+      "intent": "troubleshooting",
+      "response_mode": "retrieve",
+      "requires_retrieval": true,
+      "update_type": "attempt_result"
+    }
+  },
+  {
+    "id": "ACTNEXT-03",
+    "category": "failed_action_with_request",
+    "message": "Sigue igual después de intentarlo, ¿cuál es el siguiente paso?",
+    "state": {
+      "status": "unresolved",
+      "products": [
+        "PaperCut MF"
+      ],
+      "processes": [],
+      "symptoms": [
+        "Los trabajos dejan de verse después del envío"
+      ],
+      "attempted_actions": [
+        "Reinicio del proveedor de impresión"
+      ],
+      "failed_actions": [
+        "Reinicio del proveedor de impresión"
+      ],
+      "affected_scope": "multiple_users",
+      "resolution_status": "unresolved"
+    },
+    "expected": {
+      "route": "technical_follow_up",
+      "intent": "troubleshooting",
+      "response_mode": "retrieve",
+      "requires_retrieval": true,
+      "update_type": "attempt_result"
+    }
+  },
+  {
+    "id": "NEXT-01",
+    "category": "next_step",
+    "message": "¿Y ahora qué más puedo intentar?",
+    "state": {
+      "status": "unresolved",
+      "products": [
+        "PaperCut MF"
+      ],
+      "processes": [],
+      "symptoms": [
+        "Los trabajos dejan de verse después del envío"
+      ],
+      "attempted_actions": [
+        "Reinicio del proveedor de impresión"
+      ],
+      "failed_actions": [
+        "Reinicio del proveedor de impresión"
+      ],
+      "affected_scope": "multiple_users",
+      "resolution_status": "unresolved"
+    },
+    "expected": {
+      "route": "technical_follow_up",
+      "intent": "troubleshooting",
+      "response_mode": "retrieve",
+      "requires_retrieval": true
+    }
+  },
+  {
+    "id": "NEXT-02",
+    "category": "next_step",
+    "message": "¿Cuál sería la siguiente validación?",
+    "state": {
+      "status": "unresolved",
+      "products": [
+        "PaperCut MF"
+      ],
+      "processes": [],
+      "symptoms": [
+        "Los trabajos dejan de verse después del envío"
+      ],
+      "attempted_actions": [
+        "Reinicio del proveedor de impresión"
+      ],
+      "failed_actions": [
+        "Reinicio del proveedor de impresión"
+      ],
+      "affected_scope": "multiple_users",
+      "resolution_status": "unresolved"
+    },
+    "expected": {
+      "route": "technical_follow_up",
+      "intent": "troubleshooting",
+      "response_mode": "retrieve",
+      "requires_retrieval": true
+    }
+  },
+  {
+    "id": "NEXT-03",
+    "category": "next_step",
+    "message": "¿Qué otra acción documentada puedo revisar?",
+    "state": {
+      "status": "unresolved",
+      "products": [
+        "PaperCut MF"
+      ],
+      "processes": [],
+      "symptoms": [
+        "Los trabajos dejan de verse después del envío"
+      ],
+      "attempted_actions": [
+        "Reinicio del proveedor de impresión"
+      ],
+      "failed_actions": [
+        "Reinicio del proveedor de impresión"
+      ],
+      "affected_scope": "multiple_users",
+      "resolution_status": "unresolved"
+    },
+    "expected": {
+      "route": "technical_follow_up",
+      "intent": "troubleshooting",
+      "response_mode": "retrieve",
+      "requires_retrieval": true
+    }
+  },
+  {
+    "id": "SYM-01",
+    "category": "symptom",
+    "message": "Después de enviarlos ya no veo los documentos.",
+    "state": {
+      "status": "diagnosing",
+      "products": [
+        "PaperCut MF"
+      ],
+      "processes": [],
+      "symptoms": [],
+      "attempted_actions": [],
+      "failed_actions": [],
+      "affected_scope": null,
+      "resolution_status": null
+    },
+    "expected": {
+      "route": "case_update",
+      "intent": "troubleshooting",
+      "response_mode": "deterministic",
+      "requires_retrieval": false,
+      "update_type": "symptom"
+    }
+  },
+  {
+    "id": "IMP-01",
+    "category": "impact",
+    "message": "Esto ya le pasa a toda el área.",
+    "state": {
+      "status": "diagnosing",
+      "products": [
+        "PaperCut MF"
+      ],
+      "processes": [],
+      "symptoms": [],
+      "attempted_actions": [],
+      "failed_actions": [],
+      "affected_scope": null,
+      "resolution_status": null
+    },
+    "expected": {
+      "route": "case_update",
+      "intent": "troubleshooting",
+      "response_mode": "deterministic",
+      "requires_retrieval": false,
+      "update_type": "affected_scope"
+    }
+  },
+  {
+    "id": "SOC-01",
+    "category": "social",
+    "message": "Hola, buenas tardes.",
+    "state": {
+      "status": "idle",
+      "products": [],
+      "processes": [],
+      "symptoms": [],
+      "attempted_actions": [],
+      "failed_actions": [],
+      "affected_scope": null,
+      "resolution_status": null
+    },
+    "expected": {
+      "route": "social",
+      "intent": "social",
+      "response_mode": "deterministic",
+      "requires_retrieval": false
+    }
+  },
+  {
+    "id": "INT-01",
+    "category": "intake",
+    "message": "Necesito una mano con un tema de impresión.",
+    "state": {
+      "status": "idle",
+      "products": [],
+      "processes": [],
+      "symptoms": [],
+      "attempted_actions": [],
+      "failed_actions": [],
+      "affected_scope": null,
+      "resolution_status": null
+    },
+    "expected": {
+      "route": "support_intake",
+      "response_mode": "deterministic",
+      "requires_retrieval": false
+    }
+  },
+  {
+    "id": "ESC-01",
+    "category": "escalation",
+    "message": "Necesito que este caso pase al siguiente nivel.",
+    "state": {
+      "status": "unresolved",
+      "products": [
+        "PaperCut MF"
+      ],
+      "processes": [],
+      "symptoms": [
+        "Los trabajos dejan de verse después del envío"
+      ],
+      "attempted_actions": [
+        "Reinicio del proveedor de impresión"
+      ],
+      "failed_actions": [
+        "Reinicio del proveedor de impresión"
+      ],
+      "affected_scope": "multiple_users",
+      "resolution_status": "unresolved"
+    },
+    "expected": {
+      "route": "escalation",
+      "intent": "escalation",
+      "response_mode": "escalate",
+      "requires_escalation": true,
+      "requires_retrieval": false
+    }
+  },
+  {
+    "id": "AMB-01",
+    "category": "ambiguous",
+    "message": "Eso sigue fallando.",
+    "state": {
+      "status": "idle",
+      "products": [],
+      "processes": [],
+      "symptoms": [],
+      "attempted_actions": [],
+      "failed_actions": [],
+      "affected_scope": null,
+      "resolution_status": null
+    },
+    "expected": {
+      "route": "clarification",
+      "response_mode": "clarification",
+      "requires_clarification": true,
+      "requires_retrieval": false
+    }
+  }
+]
