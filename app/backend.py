@@ -5562,7 +5562,7 @@ def observe_agent_core_semantic_real_chat_shadow(
         ] = records[-100:]
         return None
 
-def _route_user_message_productive(user_message: str, session_state: ChatSessionState):
+def _route_user_message_legacy(user_message: str, session_state: ChatSessionState):
     session_state = ensure_session_state_integrity(session_state)
     observe_agent_core_semantic_real_chat_shadow(
         user_message,
@@ -5624,41 +5624,34 @@ def _route_user_message_productive(user_message: str, session_state: ChatSession
 
 
 def route_user_message(user_message: str, session_state: ChatSessionState):
-    """Preserve the productive answer and optionally observe a full Agent Core response."""
-    production_answer = _route_user_message_productive(user_message, session_state)
+    """Use Agent Core for authorized technical answers and legacy as safe fallback."""
+    session_state = ensure_session_state_integrity(session_state)
     try:
-        enabled = bool(
-            st.secrets.get(
-                "AGENT_CORE_FULL_RESPONSE_REAL_CHAT_SHADOW_ENABLED",
-                False,
-            )
-        )
+        enabled = bool(st.secrets.get("AGENT_CORE_PRODUCTION_PILOT_ENABLED", False))
     except Exception:
         enabled = False
 
     if enabled:
         try:
-            from app.integration.full_response_real_chat_shadow import (
-                observe_full_response_real_chat_shadow,
+            from app.integration.agent_core_production_pilot import (
+                try_agent_core_production_pilot,
             )
-            observe_full_response_real_chat_shadow(
+            pilot_answer, _pilot_record = try_agent_core_production_pilot(
                 user_message,
-                production_answer,
                 session_state,
                 st.session_state,
                 st.secrets,
             )
+            if pilot_answer:
+                session_state.memory.add_turn(user_message, pilot_answer)
+                session_state.log_turn(user_message, pilot_answer, "agent_core_production_pilot")
+                return pilot_answer
         except Exception as exc:
-            st.session_state["agent_core_full_response_shadow_last_record"] = {
-                "input": user_message,
-                "status": "observer_error",
-                "error": f"{type(exc).__name__}: {exc}",
-                "production_response_changed": False,
-                "retrieval_executed_by_shadow": False,
-                "state_applied_to_production": False,
-            }
+            st.session_state["agent_core_production_pilot_wrapper_error"] = (
+                f"{type(exc).__name__}: {exc}"
+            )
 
-    return production_answer
+    return _route_user_message_legacy(user_message, session_state)
 
 def get_backend_status():
     status = {
