@@ -22,15 +22,18 @@ class LLMGateway:
         self.session["llm_gateway_calls"]=int(self.session.get("llm_gateway_calls",0))+1
         self.session["llm_gateway_tokens"]=int(self.session.get("llm_gateway_tokens",0))+int(result.usage.get("total_tokens",0))
         history=list(self.session.get("llm_gateway_history",[]) or []);history.append(result.to_dict());self.session["llm_gateway_history"]=history[-100:]
+    def _error_result(self,provider,model,purpose,exc,fallback_used=False,fallback_provider=None):
+        metadata=dict(getattr(exc,"metadata",{}) or {});metadata.setdefault("attempted_model",model);metadata.setdefault("status_code",getattr(exc,"status_code",None))
+        return LLMResult(False,provider=provider,model=model,purpose=purpose,error_code=exc.code,error_message=str(exc),fallback_used=fallback_used,fallback_provider=fallback_provider,metadata=metadata)
     def complete(self,request):
-        self._budget();primary=self.config["provider"]
+        self._budget();primary=self.config["provider"];primary_model=model_for(self.config,primary,request.purpose)
         try:
-            result=self._provider(primary).complete(request,model_for(self.config,primary,request.purpose));self._record(result);return result
+            result=self._provider(primary).complete(request,primary_model);self._record(result);return result
         except LLMGatewayError as exc:
             if not (exc.recoverable and self.config["fallback_enabled"] and self.config["fallback_provider"]!=primary):
-                result=LLMResult(False,provider=primary,purpose=request.purpose,error_code=exc.code,error_message=str(exc));self._record(result);return result
-            fallback=self.config["fallback_provider"]
+                result=self._error_result(primary,primary_model,request.purpose,exc);self._record(result);return result
+            fallback=self.config["fallback_provider"];fallback_model=model_for(self.config,fallback,request.purpose)
             try:
-                result=self._provider(fallback).complete(request,model_for(self.config,fallback,request.purpose));result.fallback_used=True;result.fallback_provider=fallback;self._record(result);return result
+                result=self._provider(fallback).complete(request,fallback_model);result.fallback_used=True;result.fallback_provider=fallback;self._record(result);return result
             except LLMGatewayError as second:
-                result=LLMResult(False,provider=fallback,purpose=request.purpose,error_code=second.code,error_message=str(second),fallback_used=True,fallback_provider=fallback);self._record(result);return result
+                result=self._error_result(fallback,fallback_model,request.purpose,second,True,fallback);self._record(result);return result
