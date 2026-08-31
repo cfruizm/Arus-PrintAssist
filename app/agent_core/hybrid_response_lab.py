@@ -267,7 +267,31 @@ def assess_evidence(query, product, intent, evidence):
         f"{item.get('title', '')} {item.get('url', '')} {item.get('text', '')}"
         for item in selected
     )
-    identity = 1.0 if product and product.casefold() in combined.casefold() else (0.5 if not product else 0.2)
+    metadata_identity = " ".join(
+        " ".join(
+            str((item.get("metadata") or {}).get(key) or "")
+            for key in ("product", "vendor", "component", "collection_name", "folder_origin")
+        )
+        for item in selected
+    )
+
+    def canonical_identity(value):
+        normalized = _plain(value).casefold().replace("_", " ").replace("-", " ")
+        return " ".join(re.findall(r"[a-záéíóúñ0-9]+", normalized))
+
+    expected_product = canonical_identity(product)
+    searchable_identity = canonical_identity(f"{combined} {metadata_identity}")
+    compact_expected = expected_product.replace(" ", "")
+    compact_searchable = searchable_identity.replace(" ", "")
+    if not product:
+        identity = 0.5
+    elif expected_product and (
+        expected_product in searchable_identity
+        or compact_expected in compact_searchable
+    ):
+        identity = 1.0
+    else:
+        identity = 0.2
     lexical = _overlap(query, combined)
     semantic = _semantic_alignment(query, combined)
     topic = 1.0 if _topics(query) and _topics(query) & _topics(combined) else 0.0
@@ -290,6 +314,8 @@ def assess_evidence(query, product, intent, evidence):
         "lexical_alignment": round(lexical, 3),
         "multilingual_concept_alignment": round(semantic, 3),
         "topic_alignment": round(topic, 3),
+        "expected_product_identity": expected_product,
+        "metadata_identity_match": identity == 1.0,
     }
 
 
