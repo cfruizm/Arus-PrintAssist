@@ -5562,7 +5562,7 @@ def observe_agent_core_semantic_real_chat_shadow(
         ] = records[-100:]
         return None
 
-def route_user_message(user_message: str, session_state: ChatSessionState):
+def _route_user_message_productive(user_message: str, session_state: ChatSessionState):
     session_state = ensure_session_state_integrity(session_state)
     observe_agent_core_semantic_real_chat_shadow(
         user_message,
@@ -5621,6 +5621,44 @@ def route_user_message(user_message: str, session_state: ChatSessionState):
     return handle_normal_message(user_message, session_state)
 
 
+
+
+def route_user_message(user_message: str, session_state: ChatSessionState):
+    """Preserve the productive answer and optionally observe a full Agent Core response."""
+    production_answer = _route_user_message_productive(user_message, session_state)
+    try:
+        enabled = bool(
+            st.secrets.get(
+                "AGENT_CORE_FULL_RESPONSE_REAL_CHAT_SHADOW_ENABLED",
+                False,
+            )
+        )
+    except Exception:
+        enabled = False
+
+    if enabled:
+        try:
+            from app.integration.full_response_real_chat_shadow import (
+                observe_full_response_real_chat_shadow,
+            )
+            observe_full_response_real_chat_shadow(
+                user_message,
+                production_answer,
+                session_state,
+                st.session_state,
+                st.secrets,
+            )
+        except Exception as exc:
+            st.session_state["agent_core_full_response_shadow_last_record"] = {
+                "input": user_message,
+                "status": "observer_error",
+                "error": f"{type(exc).__name__}: {exc}",
+                "production_response_changed": False,
+                "retrieval_executed_by_shadow": False,
+                "state_applied_to_production": False,
+            }
+
+    return production_answer
 
 def get_backend_status():
     status = {
