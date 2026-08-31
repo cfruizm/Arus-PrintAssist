@@ -1,61 +1,121 @@
 from __future__ import annotations
-from dataclasses import dataclass,asdict
+from dataclasses import dataclass, asdict
 from typing import Any
-import inspect
 
 @dataclass
 class RetrievedEvidence:
-    text:str
-    title:str=""
-    source:str=""
-    url:str=""
-    score:float|None=None
-    metadata:dict|None=None
-    def to_dict(self):return asdict(self)
+    text: str
+    title: str = ""
+    source: str = ""
+    url: str = ""
+    score: float | None = None
+    metadata: dict | None = None
 
-def _read(item:Any,name:str,default=None):
-    if isinstance(item,dict):return item.get(name,default)
-    return getattr(item,name,default)
+    def to_dict(self) -> dict:
+        return asdict(self)
 
-def _normalize_item(item:Any)->RetrievedEvidence:
-    metadata=_read(item,"metadata",{}) or {}
-    if not isinstance(metadata,dict):metadata={}
-    text=_read(item,"page_content",None) or _read(item,"text",None) or _read(item,"content",None) or _read(item,"document",None) or ""
-    title=_read(item,"title",None) or metadata.get("title") or metadata.get("name") or ""
-    source=_read(item,"source",None) or metadata.get("source") or metadata.get("file") or ""
-    url=_read(item,"url",None) or metadata.get("url") or metadata.get("source_url") or ""
-    score=_read(item,"score",None)
-    if score is None:score=_read(item,"relevance_score",None)
-    try:score=None if score is None else float(score)
-    except Exception:score=None
-    return RetrievedEvidence(str(text or "")[:12000],str(title or "")[:500],str(source or "")[:1000],str(url or "")[:2000],score,metadata)
 
-def _invoke(fn,query,k):
-    signature=inspect.signature(fn);params=signature.parameters
-    kwargs={}
-    if "query" in params:kwargs["query"]=query
-    elif "user_query" in params:kwargs["user_query"]=query
-    elif "question" in params:kwargs["question"]=query
-    if "k" in params:kwargs["k"]=k
-    elif "top_k" in params:kwargs["top_k"]=k
-    elif "limit" in params:kwargs["limit"]=k
-    if kwargs:return fn(**kwargs)
-    return fn(query)
+def _normalize_document(doc: Any) -> RetrievedEvidence:
+    metadata = getattr(doc, "metadata", {}) or {}
+    if not isinstance(metadata, dict):
+        metadata = {}
 
-def retrieve_from_existing_backend(query:str,k:int=6)->dict:
-    """Read-only adapter. It never calls generate_answer_with_rag or an LLM."""
-    import app.backend as backend
-    candidates=("retrieve_and_rerank","retrieve_relevant_documents","retrieve_documents","search_documents","semantic_search","search_knowledge_base")
-    errors=[]
-    for name in candidates:
-        fn=getattr(backend,name,None)
-        if not callable(fn):continue
-        try:
-            raw=_invoke(fn,query,k)
-            if isinstance(raw,tuple):raw=raw[0]
-            if isinstance(raw,dict):raw=raw.get("documents") or raw.get("results") or raw.get("items") or []
-            evidence=[_normalize_item(item) for item in list(raw or [])[:k]]
-            evidence=[item for item in evidence if item.text.strip()]
-            return {"ok":True,"adapter":name,"query":query,"evidence":[item.to_dict() for item in evidence],"count":len(evidence),"errors":errors}
-        except Exception as exc:errors.append(f"{name}:{type(exc).__name__}:{exc}")
-    return {"ok":False,"adapter":None,"query":query,"evidence":[],"count":0,"errors":errors,"error_code":"compatible_retriever_not_found"}
+    text = str(getattr(doc, "page_content", "") or "").strip()
+    title = str(metadata.get("title") or metadata.get("name") or "").strip()
+    source = str(
+        metadata.get("source")
+        or metadata.get("source_url")
+        or metadata.get("canonical_url")
+        or ""
+    ).strip()
+    url = str(
+        metadata.get("source_url")
+        or metadata.get("canonical_url")
+        or metadata.get("url")
+        or ""
+    ).strip()
+
+    raw_score = metadata.get("rerank_score")
+    if raw_score is None:
+        raw_score = metadata.get("score")
+    try:
+        score = None if raw_score is None else float(raw_score)
+    except (TypeError, ValueError):
+        score = None
+
+    return RetrievedEvidence(
+        text=text[:12000],
+        title=title[:500],
+        source=source[:2000],
+        url=url[:2000],
+        score=score,
+        metadata=metadata,
+    )
+
+
+def retrieve_from_existing_backend(query: str, k: int = 6) -> dict:
+    """Use PrintAssist's real retrieval pipeline without calling an LLM.
+
+    backend.retrieve_context returns:
+        (retrieved_context_text, retrieved_documents)
+
+    Only retrieved_documents are converted into laboratory evidence.
+    The function does not call generate_answer_with_rag and does not alter chat state.
+    """
+    try:
+        from app.backend import retrieve_context
+    except Exception as exc:
+        return {
+            "ok": False,
+            "adapter": "app.backend.retrieve_context",
+            "query": query,
+            "evidence": [],
+            "count": 0,
+            "error_code": "retriever_import_failed",
+            "errors": [f"{type(exc).__name__}: {exc}"],
+        }
+
+    try:
+        raw_result = retrieve_context(query, top_k=max(1, min(10, int(k))))
+    except Exception as exc:
+        return {
+            "ok": False,
+            "adapter": "app.backend.retrieve_context",
+            "query": query,
+            "evidence": [],
+            "count": 0,
+            "error_code": "retrieval_execution_failed",
+            "errors": [f"{type(exc).__name__}: {exc}"],
+        }
+
+    if not isinstance(raw_result, tuple) or len(raw_result) < 2:
+        return {
+            "ok": False,
+            "adapter": "app.backend.retrieve_context",
+            "query": query,
+            "evidence": [],
+            "count": 0,
+            "error_code": "unexpected_retrieval_contract",
+            "errors": [f"Expected tuple(context, docs), received {type(raw_result).__name__}"],
+        }
+
+    retrieved_context, retrieved_docs = raw_result[0], raw_result[1]
+    docs = list(retrieved_docs or [])
+    evidence = [
+        _normalize_document(doc).to_dict()
+        for doc in docs[: max(1, min(10, int(k)))]
+        if str(getattr(doc, "page_content", "") or "").strip()
+    ]
+
+    return {
+        "ok": True,
+        "adapter": "app.backend.retrieve_context",
+        "query": query,
+        "evidence": evidence,
+        "count": len(evidence),
+        "retrieved_context_chars": len(str(retrieved_context or "")),
+        "document_count_before_normalization": len(docs),
+        "errors": [],
+        "llm_called": False,
+        "production_state_changed": False,
+    }
