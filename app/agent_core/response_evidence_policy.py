@@ -1,5 +1,6 @@
 from __future__ import annotations
 from dataclasses import dataclass,asdict
+import re
 
 @dataclass
 class EvidenceDecision:
@@ -22,20 +23,17 @@ def evaluate_document_support(metrics:dict,policy:str,intent:str)->EvidenceDecis
     if contradictions:return EvidenceDecision("conflicting","escalate",False,True,True,["no_unverified_procedure","collect_evidence_only"],"Retrieved sources conflict.")
     if sensitive and coverage<0.75:return EvidenceDecision("insufficient","escalate",False,True,True,["no_sensitive_changes","collect_evidence_only"],"Sensitive action lacks sufficient documentation.")
     sufficient=identity>=0.75 and alignment>=0.60 and coverage>=0.60
-    partial=identity>=0.65 and alignment>=0.30 and coverage>=0.30
+    partial=identity>=0.65 and alignment>=0.25 and coverage>=0.25
     if sufficient:return EvidenceDecision("sufficient","documented",False,False,False,["documented_claims_only","real_source_ids_only"],"Documentation sufficiently supports the answer.")
-    # Troubleshooting cannot become a free technical procedure when evidence is weak.
-    if intent=="troubleshooting" and not partial:
-        return EvidenceDecision("insufficient","escalate",False,True,True,["collect_evidence_only","no_product_specific_procedure","no_configuration_changes","no_service_restart","no_network_commands","no_unverified_logs"],"Troubleshooting lacks sufficient documentary support.")
+    if intent=="troubleshooting" and not partial:return EvidenceDecision("insufficient","escalate",False,True,True,["collect_evidence_only","no_product_specific_procedure","no_configuration_changes","no_service_restart","no_network_commands","no_unverified_logs"],"Troubleshooting lacks sufficient documentary support.")
     if partial:
         allow=policy=="hybrid_guarded"
         return EvidenceDecision("partial","hybrid" if allow else "escalate",allow,True,True,["general_guidance_only","observable_or_reversible_steps_only","no_sensitive_changes","no_document_citations_for_model_knowledge"],"Documentation partially supports the answer.")
-    if intent in {"conceptual","architecture"} and policy=="hybrid_guarded":
-        return EvidenceDecision("insufficient","internal_general",True,True,True,["conceptual_explanation_only","no_product_specific_procedure","no_sensitive_changes","no_document_citations_for_model_knowledge"],"Conceptual guidance may be provided with disclosure.")
+    if intent in {"conceptual","architecture"} and policy=="hybrid_guarded":return EvidenceDecision("insufficient","internal_general",True,True,True,["conceptual_explanation_only","no_product_specific_procedure","no_sensitive_changes","no_document_citations_for_model_knowledge"],"Conceptual guidance may be provided with disclosure.")
     return EvidenceDecision("insufficient","escalate",False,True,True,["collect_evidence_only","no_product_specific_procedure","no_sensitive_changes"],"Documentation does not sufficiently support a technical answer.")
 
 def build_response_contract(decision:EvidenceDecision)->dict:
-    disclosure="La documentación disponible no cubre completamente este escenario. La orientación no documentada, si está permitida, debe validarse antes de aplicarse."
+    disclosure="La documentación disponible no cubre completamente este escenario. La orientación complementaria se basa en conocimiento general del modelo y debe validarse antes de aplicarse."
     if decision.response_mode=="documented":sections=[{"type":"documented","heading":"Información respaldada por documentación","source_ids_required":True},{"type":"sources","heading":"Fuentes","source_ids_required":True}]
     elif decision.response_mode=="hybrid":sections=[{"type":"documented","heading":"Información respaldada por documentación","source_ids_required":True},{"type":"disclosure","heading":"Cobertura documental","required_text":disclosure},{"type":"model_knowledge","heading":"Orientación general complementaria","source_ids_required":False},{"type":"escalation","heading":"Validación o escalamiento","source_ids_required":False}]
     elif decision.response_mode=="internal_general":sections=[{"type":"disclosure","heading":"Cobertura documental","required_text":disclosure},{"type":"model_knowledge","heading":"Orientación general complementaria","source_ids_required":False},{"type":"escalation","heading":"Validación o escalamiento","source_ids_required":False}]
