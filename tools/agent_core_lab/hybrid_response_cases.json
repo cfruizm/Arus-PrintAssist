@@ -1,0 +1,18 @@
+{
+  "documented": {
+    "query": "consulta con alta cobertura",
+    "expected": "documented"
+  },
+  "hybrid": {
+    "query": "consulta parcialmente cubierta",
+    "expected": "hybrid"
+  },
+  "internal_general": {
+    "query": "consulta sin fuentes suficientes",
+    "expected": "internal_general"
+  },
+  "sensitive": {
+    "query": "cambio sensible sin respaldo",
+    "expected": "escalate"
+  }
+}
