@@ -5511,9 +5511,63 @@ def try_agent_core_contextual_rag_response(user_message: str, session_state: Cha
         except Exception:
             pass
         return None
+def observe_agent_core_semantic_real_chat_shadow(
+    user_message: str,
+    session_state: ChatSessionState,
+):
+    try:
+        enabled = bool(
+            st.secrets.get(
+                "AGENT_CORE_SEMANTIC_REAL_CHAT_SHADOW_ENABLED",
+                False,
+            )
+        )
+    except Exception:
+        enabled = False
+
+    if not enabled:
+        return None
+
+    try:
+        from app.integration.semantic_real_chat_shadow import (
+            observe_semantic_real_chat_turn,
+        )
+
+        return observe_semantic_real_chat_turn(
+            user_message,
+            session_state,
+            st.session_state,
+            st.secrets,
+        )
+    except Exception as exc:
+        records = list(
+            st.session_state.get(
+                "agent_core_semantic_real_chat_records",
+                [],
+            )
+            or []
+        )
+        records.append(
+            {
+                "input": user_message,
+                "status": "observer_error",
+                "error": f"{type(exc).__name__}: {exc}",
+                "production_response_changed": False,
+                "retrieval_executed": False,
+                "state_applied_to_production": False,
+            }
+        )
+        st.session_state[
+            "agent_core_semantic_real_chat_records"
+        ] = records[-100:]
+        return None
 
 def route_user_message(user_message: str, session_state: ChatSessionState):
     session_state = ensure_session_state_integrity(session_state)
+    observe_agent_core_semantic_real_chat_shadow(
+        user_message,
+        session_state,
+    )
     workflow_state = getattr(session_state, "escalation_workflow_state", "normal")
 
     if workflow_state == "escalation_collecting" or session_state.mode == "escalation":
