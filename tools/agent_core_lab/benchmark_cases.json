@@ -24,9 +24,9 @@
     "expected": {
       "route": "case_update",
       "intent": "troubleshooting",
-      "next_action": "update_case",
-      "update_type": "attempt_result",
-      "requires_retrieval": false
+      "response_mode": "deterministic",
+      "requires_retrieval": false,
+      "update_type": "attempt_result"
     }
   },
   {
@@ -54,9 +54,39 @@
     "expected": {
       "route": "case_update",
       "intent": "troubleshooting",
-      "next_action": "update_case",
-      "update_type": "attempt_result",
-      "requires_retrieval": false
+      "response_mode": "deterministic",
+      "requires_retrieval": false,
+      "update_type": "attempt_result"
+    }
+  },
+  {
+    "id": "ACT-03",
+    "category": "failed_action",
+    "message": "Nada cambió después de esa validación.",
+    "state": {
+      "status": "unresolved",
+      "products": [
+        "PaperCut MF"
+      ],
+      "processes": [],
+      "symptoms": [
+        "Los trabajos dejan de verse después del envío"
+      ],
+      "attempted_actions": [
+        "Reinicio del proveedor de impresión"
+      ],
+      "failed_actions": [
+        "Reinicio del proveedor de impresión"
+      ],
+      "affected_scope": "multiple_users",
+      "resolution_status": "unresolved"
+    },
+    "expected": {
+      "route": "case_update",
+      "intent": "troubleshooting",
+      "response_mode": "deterministic",
+      "requires_retrieval": false,
+      "update_type": "attempt_result"
     }
   },
   {
@@ -84,9 +114,69 @@
     "expected": {
       "route": "technical_follow_up",
       "intent": "troubleshooting",
-      "next_action": "retrieve",
-      "update_type": "attempt_result",
-      "requires_retrieval": true
+      "response_mode": "retrieve",
+      "requires_retrieval": true,
+      "update_type": "attempt_result"
+    }
+  },
+  {
+    "id": "ACTNEXT-02",
+    "category": "failed_action_with_request",
+    "message": "La prueba no resolvió nada, dime cómo continúo.",
+    "state": {
+      "status": "unresolved",
+      "products": [
+        "PaperCut MF"
+      ],
+      "processes": [],
+      "symptoms": [
+        "Los trabajos dejan de verse después del envío"
+      ],
+      "attempted_actions": [
+        "Reinicio del proveedor de impresión"
+      ],
+      "failed_actions": [
+        "Reinicio del proveedor de impresión"
+      ],
+      "affected_scope": "multiple_users",
+      "resolution_status": "unresolved"
+    },
+    "expected": {
+      "route": "technical_follow_up",
+      "intent": "troubleshooting",
+      "response_mode": "retrieve",
+      "requires_retrieval": true,
+      "update_type": "attempt_result"
+    }
+  },
+  {
+    "id": "ACTNEXT-03",
+    "category": "failed_action_with_request",
+    "message": "Sigue igual después de intentarlo, ¿cuál es el siguiente paso?",
+    "state": {
+      "status": "unresolved",
+      "products": [
+        "PaperCut MF"
+      ],
+      "processes": [],
+      "symptoms": [
+        "Los trabajos dejan de verse después del envío"
+      ],
+      "attempted_actions": [
+        "Reinicio del proveedor de impresión"
+      ],
+      "failed_actions": [
+        "Reinicio del proveedor de impresión"
+      ],
+      "affected_scope": "multiple_users",
+      "resolution_status": "unresolved"
+    },
+    "expected": {
+      "route": "technical_follow_up",
+      "intent": "troubleshooting",
+      "response_mode": "retrieve",
+      "requires_retrieval": true,
+      "update_type": "attempt_result"
     }
   },
   {
@@ -114,7 +204,7 @@
     "expected": {
       "route": "technical_follow_up",
       "intent": "troubleshooting",
-      "next_action": "retrieve",
+      "response_mode": "retrieve",
       "requires_retrieval": true
     }
   },
@@ -143,49 +233,37 @@
     "expected": {
       "route": "technical_follow_up",
       "intent": "troubleshooting",
-      "next_action": "retrieve",
+      "response_mode": "retrieve",
       "requires_retrieval": true
     }
   },
   {
-    "id": "SOC-01",
-    "category": "social",
-    "message": "Hola, buenas tardes.",
+    "id": "NEXT-03",
+    "category": "next_step",
+    "message": "¿Qué otra acción documentada puedo revisar?",
     "state": {
-      "status": "idle",
-      "products": [],
+      "status": "unresolved",
+      "products": [
+        "PaperCut MF"
+      ],
       "processes": [],
-      "symptoms": [],
-      "attempted_actions": [],
-      "failed_actions": [],
-      "affected_scope": null,
-      "resolution_status": null
+      "symptoms": [
+        "Los trabajos dejan de verse después del envío"
+      ],
+      "attempted_actions": [
+        "Reinicio del proveedor de impresión"
+      ],
+      "failed_actions": [
+        "Reinicio del proveedor de impresión"
+      ],
+      "affected_scope": "multiple_users",
+      "resolution_status": "unresolved"
     },
     "expected": {
-      "route": "social",
-      "intent": "social",
-      "next_action": "respond_deterministically",
-      "requires_retrieval": false
-    }
-  },
-  {
-    "id": "INT-01",
-    "category": "intake",
-    "message": "Necesito una mano con un tema de impresión.",
-    "state": {
-      "status": "idle",
-      "products": [],
-      "processes": [],
-      "symptoms": [],
-      "attempted_actions": [],
-      "failed_actions": [],
-      "affected_scope": null,
-      "resolution_status": null
-    },
-    "expected": {
-      "route": "support_intake",
-      "next_action": "respond_deterministically",
-      "requires_retrieval": false
+      "route": "technical_follow_up",
+      "intent": "troubleshooting",
+      "response_mode": "retrieve",
+      "requires_retrieval": true
     }
   },
   {
@@ -207,8 +285,9 @@
     "expected": {
       "route": "case_update",
       "intent": "troubleshooting",
-      "update_type": "symptom",
-      "requires_retrieval": false
+      "response_mode": "deterministic",
+      "requires_retrieval": false,
+      "update_type": "symptom"
     }
   },
   {
@@ -230,14 +309,15 @@
     "expected": {
       "route": "case_update",
       "intent": "troubleshooting",
-      "update_type": "affected_scope",
-      "requires_retrieval": false
+      "response_mode": "deterministic",
+      "requires_retrieval": false,
+      "update_type": "affected_scope"
     }
   },
   {
-    "id": "TECH-01",
-    "category": "technical",
-    "message": "¿Cómo agrego una impresora en HP Access Control?",
+    "id": "SOC-01",
+    "category": "social",
+    "message": "Hola, buenas tardes.",
     "state": {
       "status": "idle",
       "products": [],
@@ -249,10 +329,30 @@
       "resolution_status": null
     },
     "expected": {
-      "route": "technical_query",
-      "intent": "procedural",
-      "next_action": "retrieve",
-      "requires_retrieval": true
+      "route": "social",
+      "intent": "social",
+      "response_mode": "deterministic",
+      "requires_retrieval": false
+    }
+  },
+  {
+    "id": "INT-01",
+    "category": "intake",
+    "message": "Necesito una mano con un tema de impresión.",
+    "state": {
+      "status": "idle",
+      "products": [],
+      "processes": [],
+      "symptoms": [],
+      "attempted_actions": [],
+      "failed_actions": [],
+      "affected_scope": null,
+      "resolution_status": null
+    },
+    "expected": {
+      "route": "support_intake",
+      "response_mode": "deterministic",
+      "requires_retrieval": false
     }
   },
   {
@@ -280,8 +380,9 @@
     "expected": {
       "route": "escalation",
       "intent": "escalation",
-      "next_action": "escalate",
-      "requires_escalation": true
+      "response_mode": "escalate",
+      "requires_escalation": true,
+      "requires_retrieval": false
     }
   },
   {
@@ -300,7 +401,8 @@
     },
     "expected": {
       "route": "clarification",
-      "next_action": "ask_clarification",
+      "response_mode": "clarification",
+      "requires_clarification": true,
       "requires_retrieval": false
     }
   }

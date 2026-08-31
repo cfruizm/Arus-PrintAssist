@@ -38,17 +38,5 @@
     ],
     "affected_scope": "multiple_users",
     "resolution_status": "unresolved"
-  },
-  "hpac": {
-    "status": "diagnosing",
-    "products": [
-      "HP Access Control"
-    ],
-    "processes": [],
-    "symptoms": [],
-    "attempted_actions": [],
-    "failed_actions": [],
-    "affected_scope": null,
-    "resolution_status": null
   }
 }
