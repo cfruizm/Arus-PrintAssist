@@ -3,6 +3,7 @@ import json, re, time
 from app.agent_core.semantic_gateway_prompt import build_messages
 from app.agent_core.semantic_gateway_schema import SEMANTIC_DECISION_SCHEMA
 from app.llm_gateway.models import LLMRequest
+from app.agent_core.conversation_act_runtime import sanitize_semantic_decision
 
 ACT_PROTOCOL = {
     "social_message": ("social", "social", "deterministic"),
@@ -116,10 +117,13 @@ def evaluate_case(gateway, case, max_tokens=180):
     try:
         data = normalize(extract_json(result.text))
         derived = derive_protocol(data, case.get("state") or {})
+        sanitation = sanitize_semantic_decision(data, derived, case.get("state") or {})
+        data = sanitation["normalized_decision"]
     except Exception as exc:
         record["mismatches"].append(f"invalid_semantic_json:{type(exc).__name__}:{exc}")
         return record
     record["model_decision"] = data
+    record["normalization"] = sanitation
     record["derived_decision"] = derived
     record["consistency_warnings"] = consistency_warnings(data, derived)
     expected = case.get("expected") or {}

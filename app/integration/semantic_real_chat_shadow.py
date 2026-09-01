@@ -5,6 +5,7 @@ from app.agent_core.semantic_gateway_evaluator import extract_json,normalize,der
 from app.agent_core.semantic_gateway_prompt import build_messages
 from app.agent_core.semantic_gateway_schema import SEMANTIC_DECISION_SCHEMA
 from app.agent_core.conversation_act_runtime import compact_case_state,sanitize_semantic_decision
+from app.agent_core.semantic_state_runtime import apply_semantic_state_updates
 from app.integration.session_adapter_v1 import get_or_create_router_shadow_state
 from app.llm_gateway.config import load_gateway_config
 from app.llm_gateway.gateway import LLMGateway
@@ -20,7 +21,14 @@ def observe_semantic_real_chat_turn(user_message,chat_session_state,streamlit_se
     if result.ok:
         try:
             raw=normalize(extract_json(result.text));derived=derive_protocol(raw,case_state);clean=sanitize_semantic_decision(raw,derived,case_state)
-            record.update({"status":"ok","model_decision":raw,"derived_decision":derived,**clean})
+            normalized=clean["normalized_decision"]
+            apply_enabled=bool(secrets.get("AGENT_CORE_SEMANTIC_APPLY_STATE",False))
+            try: minimum_confidence=max(0.5,min(1.0,float(secrets.get("AGENT_CORE_SEMANTIC_STATE_MIN_CONFIDENCE",0.75))))
+            except Exception: minimum_confidence=0.75
+            application={"attempted":0,"applied":[],"skipped":[],"changed":False,"minimum_confidence":minimum_confidence,"enabled":apply_enabled}
+            if apply_enabled:
+                application.update(apply_semantic_state_updates(router_state,normalized,minimum_confidence=minimum_confidence))
+            record.update({"status":"ok","model_decision":raw,"derived_decision":derived,**clean,"state_application":application,"state_applied_to_production":bool(application.get("changed")),"case_state_after":compact_case_state(router_state)})
         except Exception as exc:record.update({"status":"invalid_output","validation_error":f"{type(exc).__name__}: {exc}"})
     else:record["status"]="provider_error"
     record["total_shadow_latency_ms"]=round((time.perf_counter()-started)*1000,3)
