@@ -5562,12 +5562,28 @@ def observe_agent_core_semantic_real_chat_shadow(
         ] = records[-100:]
         return None
 
-def _route_user_message_legacy(user_message: str, session_state: ChatSessionState):
+def route_user_message(user_message: str, session_state: ChatSessionState):
     session_state = ensure_session_state_integrity(session_state)
-    observe_agent_core_semantic_real_chat_shadow(
+    semantic_record = observe_agent_core_semantic_real_chat_shadow(
         user_message,
         session_state,
     )
+    try:
+        bridge_enabled = bool(st.secrets.get("AGENT_CORE_SEMANTIC_CONTEXTUAL_BRIDGE_ENABLED", False))
+    except Exception:
+        bridge_enabled = False
+    if bridge_enabled and semantic_record:
+        try:
+            from app.integration.semantic_contextual_bridge import try_semantic_contextual_bridge
+            semantic_answer, bridge_record = try_semantic_contextual_bridge(
+                user_message, session_state, st.session_state, st.secrets, semantic_record
+            )
+            if semantic_answer is not None:
+                session_state.memory.add_turn(user_message, semantic_answer)
+                session_state.log_turn(user_message, semantic_answer, "semantic_contextual_bridge")
+                return semantic_answer
+        except Exception as exc:
+            st.session_state["agent_core_semantic_contextual_bridge_error"] = f"{type(exc).__name__}: {exc}"
     workflow_state = getattr(session_state, "escalation_workflow_state", "normal")
 
     if workflow_state == "escalation_collecting" or session_state.mode == "escalation":
@@ -5621,37 +5637,6 @@ def _route_user_message_legacy(user_message: str, session_state: ChatSessionStat
     return handle_normal_message(user_message, session_state)
 
 
-
-
-def route_user_message(user_message: str, session_state: ChatSessionState):
-    """Use Agent Core for authorized technical answers and legacy as safe fallback."""
-    session_state = ensure_session_state_integrity(session_state)
-    try:
-        enabled = bool(st.secrets.get("AGENT_CORE_PRODUCTION_PILOT_ENABLED", False))
-    except Exception:
-        enabled = False
-
-    if enabled:
-        try:
-            from app.integration.agent_core_production_pilot import (
-                try_agent_core_production_pilot,
-            )
-            pilot_answer, _pilot_record = try_agent_core_production_pilot(
-                user_message,
-                session_state,
-                st.session_state,
-                st.secrets,
-            )
-            if pilot_answer:
-                session_state.memory.add_turn(user_message, pilot_answer)
-                session_state.log_turn(user_message, pilot_answer, "agent_core_production_pilot")
-                return pilot_answer
-        except Exception as exc:
-            st.session_state["agent_core_production_pilot_wrapper_error"] = (
-                f"{type(exc).__name__}: {exc}"
-            )
-
-    return _route_user_message_legacy(user_message, session_state)
 
 def get_backend_status():
     status = {
