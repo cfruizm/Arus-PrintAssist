@@ -1,0 +1,36 @@
+{
+  "query": "Necesito realizar una configuraci\u00f3n en Producto X",
+  "intent": "procedural",
+  "documents": [
+    {
+      "title": "System Requirements",
+      "url": "https://example/requirements",
+      "text": "Supported operating systems and hardware requirements",
+      "score": 0.9,
+      "metadata": {
+        "product": "product_x",
+        "content_hash": "a"
+      }
+    },
+    {
+      "title": "Configuration procedure",
+      "url": "https://example/procedure",
+      "text": "Steps to configure and enable the requested function",
+      "score": 0.85,
+      "metadata": {
+        "product": "product_x",
+        "content_hash": "b"
+      }
+    },
+    {
+      "title": "Unrelated troubleshooting",
+      "url": "https://example/other",
+      "text": "Error in another product",
+      "score": 0.8,
+      "metadata": {
+        "product": "product_y",
+        "content_hash": "c"
+      }
+    }
+  ]
+}
