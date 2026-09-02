@@ -1,0 +1,276 @@
+[
+  {
+    "id": "console_access",
+    "turns": [
+      {
+        "message": "Problema con producto A, no accedo a la consola",
+        "proposal": {
+          "conversation_act": "provide_case_detail",
+          "intent": "troubleshooting",
+          "requested_action": "record_case_detail",
+          "topic_relation": "new_topic",
+          "entities": [
+            {
+              "kind": "product",
+              "canonical_id": "product_a",
+              "canonical_name": "Producto A"
+            }
+          ],
+          "facts": [
+            {
+              "type": "symptom",
+              "value": "No accede a la consola"
+            }
+          ],
+          "confidence": 0.96
+        }
+      },
+      {
+        "message": "¿Qué debo validar?",
+        "proposal": {
+          "conversation_act": "request_next_step",
+          "intent": "troubleshooting",
+          "requested_action": "retrieve",
+          "topic_relation": "same_topic",
+          "confidence": 0.94
+        }
+      }
+    ]
+  },
+  {
+    "id": "missing_jobs",
+    "turns": [
+      {
+        "message": "Trabajos desaparecen en producto B",
+        "proposal": {
+          "conversation_act": "provide_case_detail",
+          "intent": "troubleshooting",
+          "requested_action": "record_case_detail",
+          "topic_relation": "new_topic",
+          "entities": [
+            {
+              "kind": "product",
+              "canonical_id": "product_b",
+              "canonical_name": "Producto B"
+            }
+          ],
+          "facts": [
+            {
+              "type": "symptom",
+              "value": "Trabajos desaparecen"
+            }
+          ],
+          "confidence": 0.95
+        }
+      },
+      {
+        "message": "Ya reinicié el servicio",
+        "proposal": {
+          "conversation_act": "provide_case_detail",
+          "intent": "troubleshooting",
+          "requested_action": "record_attempt",
+          "topic_relation": "same_topic",
+          "facts": [
+            {
+              "type": "attempted_action",
+              "value": "Reiniciar servicio"
+            }
+          ],
+          "confidence": 0.95
+        }
+      },
+      {
+        "message": "Sigue igual",
+        "proposal": {
+          "conversation_act": "report_failed_attempt",
+          "intent": "troubleshooting",
+          "requested_action": "record_attempt_result",
+          "topic_relation": "same_topic",
+          "facts": [
+            {
+              "type": "attempt_result",
+              "value": "failed"
+            }
+          ],
+          "confidence": 0.95
+        }
+      },
+      {
+        "message": "¿Qué sigue?",
+        "proposal": {
+          "conversation_act": "request_next_step",
+          "intent": "troubleshooting",
+          "requested_action": "retrieve",
+          "topic_relation": "same_topic",
+          "confidence": 0.95
+        }
+      }
+    ]
+  },
+  {
+    "id": "procedural_equivalence",
+    "turns": [
+      {
+        "message": "¿Cómo creo una credencial?",
+        "proposal": {
+          "conversation_act": "request_procedure",
+          "intent": "procedural",
+          "requested_action": "retrieve",
+          "topic_relation": "new_topic",
+          "entities": [
+            {
+              "kind": "product",
+              "canonical_id": "product_c",
+              "canonical_name": "Producto C"
+            }
+          ],
+          "confidence": 0.95
+        }
+      },
+      {
+        "message": "Necesito crear una credencial",
+        "proposal": {
+          "conversation_act": "request_procedure",
+          "intent": "procedural",
+          "requested_action": "retrieve",
+          "topic_relation": "same_topic",
+          "confidence": 0.95
+        }
+      }
+    ]
+  },
+  {
+    "id": "monitoring_scope",
+    "turns": [
+      {
+        "message": "Monitor no reporta",
+        "proposal": {
+          "conversation_act": "provide_case_detail",
+          "intent": "troubleshooting",
+          "requested_action": "record_case_detail",
+          "topic_relation": "new_topic",
+          "entities": [
+            {
+              "kind": "product",
+              "canonical_id": "product_d",
+              "canonical_name": "Producto D"
+            }
+          ],
+          "facts": [
+            {
+              "type": "symptom",
+              "value": "No reporta"
+            }
+          ],
+          "confidence": 0.95
+        }
+      },
+      {
+        "message": "Afecta varios equipos",
+        "proposal": {
+          "conversation_act": "provide_case_detail",
+          "intent": "troubleshooting",
+          "requested_action": "record_case_detail",
+          "topic_relation": "same_topic",
+          "facts": [
+            {
+              "type": "affected_scope",
+              "value": "multiple_devices"
+            }
+          ],
+          "confidence": 0.95
+        }
+      }
+    ]
+  },
+  {
+    "id": "topic_shift",
+    "turns": [
+      {
+        "message": "Caso producto A",
+        "proposal": {
+          "conversation_act": "provide_case_detail",
+          "intent": "troubleshooting",
+          "requested_action": "record_case_detail",
+          "topic_relation": "new_topic",
+          "entities": [
+            {
+              "kind": "product",
+              "canonical_id": "product_a",
+              "canonical_name": "Producto A"
+            }
+          ],
+          "facts": [
+            {
+              "type": "symptom",
+              "value": "Falla A"
+            }
+          ],
+          "confidence": 0.95
+        }
+      },
+      {
+        "message": "Ahora producto B",
+        "proposal": {
+          "conversation_act": "switch_topic",
+          "intent": "conceptual",
+          "requested_action": "switch_topic",
+          "topic_relation": "new_topic",
+          "entities": [
+            {
+              "kind": "product",
+              "canonical_id": "product_b",
+              "canonical_name": "Producto B"
+            }
+          ],
+          "confidence": 0.95
+        }
+      }
+    ]
+  },
+  {
+    "id": "escalation_lifecycle",
+    "turns": [
+      {
+        "message": "Quiero escalar",
+        "proposal": {
+          "conversation_act": "start_escalation",
+          "intent": "escalation",
+          "requested_action": "start_escalation",
+          "topic_relation": "same_topic",
+          "confidence": 0.95
+        }
+      },
+      {
+        "message": "Pregunta independiente",
+        "proposal": {
+          "conversation_act": "ask_concept",
+          "intent": "conceptual",
+          "requested_action": "retrieve",
+          "topic_relation": "independent_question",
+          "confidence": 0.95
+        }
+      },
+      {
+        "message": "Retomar",
+        "proposal": {
+          "conversation_act": "resume_escalation",
+          "intent": "resume",
+          "requested_action": "resume_escalation",
+          "topic_relation": "same_topic",
+          "confidence": 0.95
+        }
+      },
+      {
+        "message": "Salir",
+        "proposal": {
+          "conversation_act": "cancel_all",
+          "intent": "cancel",
+          "requested_action": "cancel_all",
+          "topic_relation": "same_topic",
+          "confidence": 1.0
+        }
+      }
+    ]
+  }
+]
