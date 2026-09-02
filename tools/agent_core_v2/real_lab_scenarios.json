@@ -1,0 +1,83 @@
+[
+  {
+    "id": "console_access",
+    "name": "Acceso a consola",
+    "messages": [
+      "Tengo un problema con HP Access Control y no puedo acceder a la consola de administración. ¿Qué debo validar?"
+    ],
+    "expected": {
+      "intent": "troubleshooting",
+      "action": "retrieve",
+      "product_id": "hp_access_control"
+    }
+  },
+  {
+    "id": "missing_jobs",
+    "name": "Trabajos desaparecidos",
+    "messages": [
+      "En PaperCut MF los trabajos desaparecen después de enviarlos. ¿Qué debo validar?"
+    ],
+    "expected": {
+      "intent": "troubleshooting",
+      "action": "retrieve",
+      "product_id": "papercut_mf"
+    }
+  },
+  {
+    "id": "hive_pin_question",
+    "name": "Procedimiento en pregunta",
+    "messages": [
+      "¿Cómo puedo asignar un PIN de impresión en PaperCut Hive?"
+    ],
+    "expected": {
+      "intent": "procedural",
+      "action": "retrieve",
+      "product_id": "papercut_hive"
+    }
+  },
+  {
+    "id": "hive_pin_statement",
+    "name": "Procedimiento en afirmación",
+    "messages": [
+      "Necesito asignar un PIN de impresión en PaperCut Hive."
+    ],
+    "expected": {
+      "intent": "procedural",
+      "action": "retrieve",
+      "product_id": "papercut_hive"
+    }
+  },
+  {
+    "id": "monitoring",
+    "name": "Monitoreo y alcance",
+    "messages": [
+      "HP SDS Monitor dejó de reportar información y afecta a varios equipos. ¿Qué validaciones corresponden?"
+    ],
+    "expected": {
+      "intent": "troubleshooting",
+      "action": "retrieve"
+    }
+  },
+  {
+    "id": "requirements",
+    "name": "Requisitos",
+    "messages": [
+      "¿Cuáles son los requisitos documentados para implementar GAV Tracking?"
+    ],
+    "expected": {
+      "intent": "requirements",
+      "action": "retrieve"
+    }
+  },
+  {
+    "id": "out_of_scope",
+    "name": "Fuera de alcance",
+    "messages": [
+      "¿Quién es Shakira?"
+    ],
+    "expected": {
+      "intent": "out_of_scope",
+      "action": "out_of_scope"
+    }
+  }
+]
