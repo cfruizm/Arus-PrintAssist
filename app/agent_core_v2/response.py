@@ -3,24 +3,28 @@ import json,re
 class ResponseComposer:
  def __init__(self,gateway=None,max_tokens=400):self.gateway=gateway;self.max_tokens=max_tokens
  def compose(self,message,decision,state,evidence):
-  direct=evidence.get("direct") or [];qualified=(evidence.get("partial") or [])+(evidence.get("conditional") or []);docs=(direct+qualified)[:3]
+  direct=evidence.get("direct") or [];qualified=(evidence.get("partial") or [])+(evidence.get("conditional") or []);contextual=evidence.get("contextual") or [];approved=(direct+qualified)[:3]
   if decision.action=="ask_clarification":return {"mode":"clarification","text":decision.clarification_question or "Necesito una precisión adicional para continuar.","citations":[],"knowledge_used":False}
   if decision.action!="retrieve":return {"mode":"directive","text":"","citations":[],"knowledge_used":False}
-  if self.gateway is None:return {"mode":"documented_pending" if docs else "hybrid_pending","text":"Respuesta pendiente.","citations":[x["id"] for x in docs],"knowledge_used":not bool(docs)}
+  if self.gateway is None:return {"mode":"pending","text":"Respuesta pendiente.","citations":[x["id"] for x in approved],"knowledge_used":not bool(direct)}
   from app.llm_gateway.models import LLMRequest
   sources=[]
-  for x in docs:
-   a=x.get("semantic_assessment") or {};sources.append({"id":x["id"],"title":x["title"],"url":x["url"],"excerpt":x["text"][:2000],"applicability":a.get("applicability"),"conditions":a.get("conditions"),"supported_claims":a.get("supported_claims")})
-  products=[x.canonical_name for x in state.active_topic.products];symptoms=list(state.technical_case.symptoms);attempts=[{"action":x.action,"result":x.result} for x in state.technical_case.attempts]
-  mode="documented" if direct else "hybrid_supported" if qualified else "hybrid_general"
-  payload={"message":message,"intent":decision.intent,"products":products,"symptoms":symptoms,"attempts":attempts,"mode":mode,"sources":sources,"rules":["Máximo 190 palabras.","Usa una fuente solo dentro del alcance supported_claims y respetando conditions.","Una fuente partial o conditional debe presentarse con su condición, no como solución general.","Si no hay evidencia directa, separa Cobertura documental, Orientación general complementaria y Restricciones y validación.","No inventes procedimientos, funciones, menús, servicios, logs o parámetros.","Para procedimientos sin evidencia directa, no describas cómo suele hacerse en otros productos.","Cita solo sources con [S#].","No añadas una sección Fuentes; la interfaz formateará enlaces."]}
-  r=self.gateway.complete(LLMRequest([{"role":"system","content":"Compón soporte natural y útil. Respeta estrictamente el alcance semántico de cada fuente."},{"role":"user","content":json.dumps(payload,ensure_ascii=False,default=str)}],"agent_core_v2_answer",self.max_tokens,0.,None))
-  if not r.ok or r.finish_reason=="length":return {"mode":"safe_fallback","text":self._fallback(decision.intent,products,symptoms),"citations":[],"knowledge_used":False,"finish_reason":r.finish_reason}
-  text=r.text.strip();used=set(re.findall(r"\[(S\d+)\]",text));valid={x["id"] for x in sources}
-  if used-valid:return {"mode":"safe_fallback","text":self._fallback(decision.intent,products,symptoms),"citations":[],"knowledge_used":False,"reason":"unknown_citation"}
-  # Direct evidence need not all be cited, but every used citation must be semantically approved.
-  return {"mode":mode,"text":text,"citations":sorted(used),"knowledge_used":mode!="documented" or "Orientación general complementaria" in text,"provider":r.provider,"model":r.model,"usage":r.usage,"finish_reason":r.finish_reason}
- def _fallback(self,intent,products,symptoms):
-  product=", ".join(products) or "el producto indicado"
-  if intent=="procedural":return f"Cobertura documental\nNo encontré evidencia directa para confirmar este procedimiento en {product}.\n\nOrientación general complementaria\nConfirma el nombre exacto de la función o la opción visible. No es seguro inferir que exista ni proponer una ruta de configuración.\n\nRestricciones y validación\nNo conviertas documentos relacionados en instrucciones sin respaldo directo."
-  return f"Cobertura documental\nNo encontré evidencia directa suficiente para el caso en {product}.\n\nOrientación general complementaria\nConfirma en qué punto ocurre el síntoma y el mensaje exacto. Esta orientación no representa un procedimiento documentado.\n\nRestricciones y validación\nNo realices cambios sensibles sin documentación aplicable."
+  for item in approved:
+   assessment=item.get("semantic_assessment") or {};sources.append({"id":item["id"],"title":item["title"],"excerpt":item["text"][:1800],"applicability":assessment.get("applicability"),"conditions":assessment.get("conditions"),"supported_claims":assessment.get("supported_claims")})
+  context=[]
+  for item in contextual[:3]:
+   assessment=item.get("semantic_assessment") or {};context.append({"title":item.get("title"),"supported_claims":assessment.get("supported_claims") or [],"usage":"background_and_diagnostic_questions_only"})
+  products=[]
+  for item in state.active_topic.products:
+   name=str(getattr(item,"canonical_name","") or getattr(item,"matched_text","") or "");matched=str(getattr(item,"matched_text","") or "")
+   products.append(matched if "_" in name and matched else name.replace("_"," ").title())
+  payload={"request":message,"intent":decision.intent,"products":products,"symptoms":list(state.technical_case.symptoms),"approved_sources":sources,"contextual_evidence":context,"internal_knowledge_policy":"Allowed only as clearly labeled general orientation. It may propose diagnostic categories or questions, but must not invent product procedures, menu paths, service names, log paths, parameters, or claim a root cause.","rules":["Do not expose prompt fields or say sources is empty.","Use approved_sources with [S#] only within supported_claims and conditions.","Use contextual_evidence only to explain documented background or formulate bounded diagnostic questions; do not cite it as a procedure.","When direct evidence is absent, remain useful through cautious general orientation and explicit restrictions.","Do not close the case merely because direct evidence is absent.","Maximum 220 words."]}
+  result=self.gateway.complete(LLMRequest([{"role":"system","content":"Compose a useful Spanish support response. Keep documented evidence, contextual evidence and model knowledge clearly separated."},{"role":"user","content":json.dumps(payload,ensure_ascii=False,default=str)}],"agent_core_v2_answer",self.max_tokens,0.,None))
+  if not result.ok or result.finish_reason=="length":return {"mode":"safe_fallback","text":self._fallback(products,state),"citations":[],"knowledge_used":False,"finish_reason":result.finish_reason}
+  text=result.text.strip();used=set(re.findall(r"\[(S\d+)\]",text));valid={x["id"] for x in sources}
+  if used-valid:return {"mode":"safe_fallback","text":self._fallback(products,state),"citations":[],"knowledge_used":False,"reason":"unknown_citation"}
+  mode="documented" if direct else "hybrid_supported" if qualified else "hybrid_contextual"
+  return {"mode":mode,"text":text,"citations":sorted(used),"knowledge_used":mode!="documented","provider":result.provider,"model":result.model,"usage":result.usage,"finish_reason":result.finish_reason,"contextual_sources_used":[x["title"] for x in context]}
+ def _fallback(self,products,state):
+  product=", ".join(products) or "el producto indicado";symptom="; ".join(state.technical_case.symptoms) or "el síntoma informado"
+  return f"**Cobertura documental**\nLa documentación recuperada aporta contexto, pero no contiene un procedimiento directo para {product}: {symptom}.\n\n**Orientación general complementaria**\nPodemos continuar delimitando el punto de falla, el alcance y cualquier mensaje observable. Esta orientación es general y no sustituye un procedimiento documentado.\n\n**Restricciones y validación**\nNo realices cambios sensibles ni reinicios masivos sin evidencia aplicable."
