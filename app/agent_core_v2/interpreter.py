@@ -10,6 +10,13 @@ PROBLEM_PATTERNS=(r"\berror\b",r"\bfalla",r"\bdejó\s+de\b",r"\bdejo\s+de\b",r"\
 SCOPE_PATTERNS=(r"\bvarios\s+equipos\b",r"\bmúltiples\s+equipos\b",r"\bmultiples\s+equipos\b",r"\btodos\s+los\s+equipos\b",r"\bun\s+equipo\b",r"\bvarios\s+usuarios\b",r"\btodos\s+los\s+usuarios\b",r"\bun\s+usuario\b",r"\btoda\s+la\s+sede\b")
 SCHEMA={"type":"object","properties":{"conversation_act":{"type":"string"},"intent":{"type":"string","enum":sorted(ALLOWED_INTENTS)},"requested_action":{"type":"string","enum":sorted(ALLOWED_ACTIONS)},"topic_relation":{"type":"string","enum":sorted(ALLOWED_RELATIONS)},"entities":{"type":"array","items":{"type":"object"}},"facts":{"type":"array","items":{"type":"object"}},"clarification_question":{"type":["string","null"]},"confidence":{"type":"number"},"reasoning_summary":{"type":"string"}},"required":["conversation_act","intent","requested_action","topic_relation","entities","facts","clarification_question","confidence","reasoning_summary"]}
 INTENT_ALIASES={"troubleshoot_access":"troubleshooting","troubleshoot":"troubleshooting","procedure":"procedural","concept":"conceptual"};RELATION_ALIASES={"related":"same_topic","same":"same_topic","new":"new_topic"}
+INTERPRETER_PROPOSAL_FIELDS=("conversation_act","intent","requested_action","topic_relation","entities","facts","clarification_question","confidence","reasoning_summary")
+
+def project_interpreter_payload(payload):
+ return {field:payload.get(field) for field in INTERPRETER_PROPOSAL_FIELDS}
+
+def ignored_interpreter_fields(payload):
+ return sorted(set(payload or {})-set(INTERPRETER_PROPOSAL_FIELDS))
 def _matches(patterns,text):return any(re.search(p,text,re.I) for p in patterns)
 def _extract(t):
  t=str(t or "").strip();a=t.find("{");b=t.rfind("}")
@@ -28,19 +35,16 @@ def _scope(message):
 def normalize_payload(raw,message=""):
  raw=dict(raw or {});text=str(message or "").casefold();confidence=float(raw.get("confidence",0) or 0);has_problem=_matches(PROBLEM_PATTERNS,text);has_procedure=_matches(PROCEDURAL_PATTERNS,text)
  raw["intent"]=INTENT_ALIASES.get(str(raw.get("intent") or ""),str(raw.get("intent") or "unknown"));raw["topic_relation"]=RELATION_ALIASES.get(str(raw.get("topic_relation") or ""),str(raw.get("topic_relation") or "unknown"))
- # Failure signals have priority over the grammatical form of the request.
- if has_problem:
-  raw["intent"]="troubleshooting";raw["requested_action"]="retrieve";raw["conversation_act"]="troubleshooting";raw["clarification_question"]=None
- elif has_procedure:
-  raw["intent"]="procedural";raw["requested_action"]="retrieve";raw["conversation_act"]="request_procedure";raw["clarification_question"]=None
+ if has_problem:raw["intent"]="troubleshooting";raw["requested_action"]="retrieve";raw["conversation_act"]="troubleshooting";raw["clarification_question"]=None
+ elif has_procedure:raw["intent"]="procedural";raw["requested_action"]="retrieve";raw["conversation_act"]="request_procedure";raw["clarification_question"]=None
  if raw["intent"] not in ALLOWED_INTENTS:raw["intent"]="unknown"
  if raw.get("requested_action") not in ALLOWED_ACTIONS:raw["requested_action"]="ask_clarification"
  if raw["topic_relation"] not in ALLOWED_RELATIONS:raw["topic_relation"]="unknown"
  entities=[];facts=[]
  for x in raw.get("entities") or []:
   if not isinstance(x,dict):continue
-  kind=str(x.get("kind") or x.get("type") or "product");name=str(x.get("canonical_name") or x.get("name") or x.get("value") or "").strip()
-  if kind in ALLOWED_ENTITY_KINDS and name:entities.append({"kind":kind,"canonical_id":str(x.get("canonical_id") or x.get("id") or _id(name)),"canonical_name":name,"matched_text":str(x.get("matched_text") or x.get("mention") or name),"confidence":float(x.get("confidence",confidence or .7))})
+  kind=str(x.get("kind") or x.get("type") or "product");name=str(x.get("canonical_name") or x.get("name") or x.get("text") or x.get("value") or "").strip()
+  if kind in ALLOWED_ENTITY_KINDS and name:entities.append({"kind":kind,"canonical_id":str(x.get("canonical_id") or x.get("id") or _id(name)),"canonical_name":name,"matched_text":str(x.get("matched_text") or x.get("mention") or x.get("text") or name),"confidence":float(x.get("confidence",confidence or .7))})
  raw["entities"]=entities
  for x in raw.get("facts") or []:
   if not isinstance(x,dict):continue
@@ -63,11 +67,11 @@ class QwenInterpreter:
  def __init__(self,gateway,max_tokens=220):self.gateway=gateway;self.max_tokens=max(240,min(320,int(max_tokens)))
  def interpret(self,message,state):
   from app.llm_gateway.models import LLMRequest
-  system="""Classify one printing-support turn. Return compact JSON only. Failure or lost-function signals always mean troubleshooting, even when the user asks what to validate. Put the malfunction in facts type symptom and impact such as several devices or users in facts type affected_scope. Entity kinds only product, component, process. A create/configure/assign request without failure is procedural. Do not answer technically."""
+  system="Classify one printing-support turn. Return compact JSON only. Failure or lost-function signals always mean troubleshooting, even when the user asks what to validate. Put malfunction in facts type symptom and impact in affected_scope. Entity kinds only product, component, process. Do not answer technically."
   payload=json.dumps({"message":message,"state":state.to_dict()},ensure_ascii=False,separators=(",",":"));r=self.gateway.complete(LLMRequest([{"role":"system","content":system},{"role":"user","content":payload}],"agent_core_v2_interpreter",self.max_tokens,0.,SCHEMA))
   if not r.ok:raise RuntimeError(r.error_message or "interpreter_provider_failed")
   if r.finish_reason=="length":raise ValueError("Interpreter output was truncated")
-  return InterpreterProposal(**normalize_payload(_extract(r.text),message))
+  normalized=normalize_payload(_extract(r.text),message);return InterpreterProposal(**project_interpreter_payload(normalized))
 class ScriptedInterpreter:
  def __init__(self,outputs):self.outputs=list(outputs);self.i=0
- def interpret(self,message,state):r=self.outputs[self.i];self.i+=1;return InterpreterProposal(**normalize_payload(r,message))
+ def interpret(self,message,state):r=self.outputs[self.i];self.i+=1;normalized=normalize_payload(r,message);return InterpreterProposal(**project_interpreter_payload(normalized))
