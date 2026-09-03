@@ -1,0 +1,119 @@
+[
+  {
+    "id": "diagnostic_continuity",
+    "name": "Continuidad de diagnóstico",
+    "messages": [
+      "HP SDS Monitor dejó de reportar información en varios equipos.",
+      "El mensaje comenzó esta mañana y no hemos realizado cambios.",
+      "¿Qué puedo validar primero?"
+    ],
+    "turn_expectations": [
+      {
+        "intent": "troubleshooting",
+        "products": [
+          "hp_sds_monitor"
+        ],
+        "symptom_contains": "report",
+        "scope_contains": "equip"
+      },
+      {
+        "preserve_previous_product": true
+      },
+      {
+        "preserve_previous_product": true
+      }
+    ],
+    "conversation_expectations": {
+      "min_topic_history": 0
+    }
+  },
+  {
+    "id": "attempt_followup",
+    "name": "Intento y resultado",
+    "messages": [
+      "En PaperCut MF los trabajos desaparecen después de enviarlos.",
+      "Ya validé la cola de impresión.",
+      "La validación no resolvió el problema."
+    ],
+    "turn_expectations": [
+      {
+        "intent": "troubleshooting",
+        "products": [
+          "papercut_mf"
+        ],
+        "symptom_contains": "desapare"
+      },
+      {
+        "preserve_previous_product": true,
+        "attempt_count": 1
+      },
+      {
+        "preserve_previous_product": true,
+        "attempt_count": 1
+      }
+    ]
+  },
+  {
+    "id": "topic_switch",
+    "name": "Cambio de producto sin contaminación",
+    "messages": [
+      "HP Access Control no permite acceder a la consola.",
+      "Ahora necesito saber los requisitos de GAV Tracking."
+    ],
+    "turn_expectations": [
+      {
+        "intent": "troubleshooting",
+        "products": [
+          "hp_access_control"
+        ]
+      },
+      {
+        "intent": "requirements",
+        "products": [
+          "gav_tracking"
+        ],
+        "products_absent": [
+          "hp_access_control"
+        ]
+      }
+    ],
+    "conversation_expectations": {
+      "min_topic_history": 1
+    }
+  },
+  {
+    "id": "independent_and_return",
+    "name": "Pregunta independiente y retorno",
+    "messages": [
+      "En PaperCut MF los trabajos desaparecen después de enviarlos.",
+      "¿Cuáles son los requisitos de GAV Tracking?",
+      "Volvamos al problema anterior de PaperCut MF."
+    ],
+    "turn_expectations": [
+      {
+        "products": [
+          "papercut_mf"
+        ]
+      },
+      {
+        "products": [
+          "gav_tracking"
+        ],
+        "products_absent": [
+          "papercut_mf"
+        ]
+      },
+      {
+        "products": [
+          "papercut_mf"
+        ],
+        "products_absent": [
+          "gav_tracking"
+        ]
+      }
+    ],
+    "conversation_expectations": {
+      "min_topic_history": 2
+    }
+  }
+]
