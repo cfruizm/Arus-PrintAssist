@@ -8,6 +8,8 @@ class TurnEngine:
  def process_turn(self,message,state):
   before=snapshot(state);p=self.interpreter.interpret(message,state);entities=self.resolver.resolve(message,p.entities);d=self.reconciler.reconcile(p,state,entities);audit=self.transitions.apply(state,d) if d.state_mutation_allowed else {"applied":[],"skipped":["read_only"]};ev={};ans={}
   if d.requires_retrieval and self.evidence_engine:
+   compat=getattr(self.evidence_engine,"compatibility",None)
+   if compat is not None and getattr(compat,"registry",None) is None:compat.registry=getattr(self.resolver,"registry",None)
    ev=self.evidence_engine.evaluate(message,d,state)
    if self.response_composer:ans=self.response_composer.compose(message,d,state,ev)
   directive={"action":d.action,"intent":d.intent,"requires_retrieval":d.requires_retrieval,"citable_source_ids":[x["id"] for x in ev.get("citable",[])]}
