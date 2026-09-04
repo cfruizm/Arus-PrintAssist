@@ -3,28 +3,31 @@ import json,re
 class ResponseComposer:
  def __init__(self,gateway=None,max_tokens=400):self.gateway=gateway;self.max_tokens=max_tokens
  def compose(self,message,decision,state,evidence):
-  direct=evidence.get("direct") or [];qualified=(evidence.get("partial") or [])+(evidence.get("conditional") or []);contextual=evidence.get("contextual") or [];approved=(direct+qualified)[:3]
-  if decision.action=="ask_clarification":return {"mode":"clarification","text":decision.clarification_question or "Necesito una precisión adicional para continuar.","citations":[],"knowledge_used":False}
-  if decision.action!="retrieve":return {"mode":"directive","text":"","citations":[],"knowledge_used":False}
-  if self.gateway is None:return {"mode":"pending","text":"Respuesta pendiente.","citations":[x["id"] for x in approved],"knowledge_used":not bool(direct)}
+  direct=evidence.get("direct") or [];qualified=(evidence.get("partial") or [])+(evidence.get("conditional") or []);contextual=evidence.get("contextual") or [];approved=(direct+qualified)[:3];coverage=evidence.get("coverage") or {}
+  if decision.action=="ask_clarification":return {"mode":"clarification","text":decision.clarification_question or "Necesito una precisión adicional para continuar.","citations":[],"knowledge_used":False,"coverage_mode":"not_applicable"}
+  if decision.action!="retrieve":return {"mode":"directive","text":"","citations":[],"knowledge_used":False,"coverage_mode":"not_applicable"}
+  if self.gateway is None:return {"mode":"pending","text":"Respuesta pendiente.","citations":[x["id"] for x in approved],"knowledge_used":not bool(direct),"coverage_mode":coverage.get("coverage_mode")}
   from app.llm_gateway.models import LLMRequest
   sources=[]
   for item in approved:
-   assessment=item.get("semantic_assessment") or {};sources.append({"id":item["id"],"title":item["title"],"excerpt":item["text"][:1800],"applicability":assessment.get("applicability"),"conditions":assessment.get("conditions"),"supported_claims":assessment.get("supported_claims")})
+   assessment=item.get("semantic_assessment") or {};sources.append({"id":item["id"],"title":item["title"],"applicability":assessment.get("applicability"),"scope_relation":assessment.get("scope_relation"),"requested_object":assessment.get("requested_object"),"source_object":assessment.get("source_object"),"conditions":assessment.get("conditions"),"supported_claims":assessment.get("supported_claims")})
   context=[]
   for item in contextual[:3]:
-   assessment=item.get("semantic_assessment") or {};context.append({"title":item.get("title"),"supported_claims":assessment.get("supported_claims") or [],"usage":"background_and_diagnostic_questions_only"})
+   assessment=item.get("semantic_assessment") or {};context.append({"title":item.get("title"),"reason":assessment.get("reason"),"supported_claims":assessment.get("supported_claims")})
   products=[]
   for item in state.active_topic.products:
-   name=str(getattr(item,"canonical_name","") or getattr(item,"matched_text","") or "");matched=str(getattr(item,"matched_text","") or "")
-   products.append(matched if "_" in name and matched else name.replace("_"," ").title())
-  payload={"request":message,"intent":decision.intent,"products":products,"symptoms":list(state.technical_case.symptoms),"approved_sources":sources,"contextual_evidence":context,"internal_knowledge_policy":"Allowed only as clearly labeled general orientation. It may propose diagnostic categories or questions, but must not invent product procedures, menu paths, service names, log paths, parameters, or claim a root cause.","rules":["Do not expose prompt fields or say sources is empty.","Use approved_sources with [S#] only within supported_claims and conditions.","Use contextual_evidence only to explain documented background or formulate bounded diagnostic questions; do not cite it as a procedure.","When direct evidence is absent, remain useful through cautious general orientation and explicit restrictions.","Do not close the case merely because direct evidence is absent.","Maximum 220 words."]}
-  result=self.gateway.complete(LLMRequest([{"role":"system","content":"Compose a useful Spanish support response. Keep documented evidence, contextual evidence and model knowledge clearly separated."},{"role":"user","content":json.dumps(payload,ensure_ascii=False,default=str)}],"agent_core_v2_answer",self.max_tokens,0.,None))
-  if not result.ok or result.finish_reason=="length":return {"mode":"safe_fallback","text":self._fallback(products,state),"citations":[],"knowledge_used":False,"finish_reason":result.finish_reason}
+   name=str(getattr(item,"canonical_name","") or getattr(item,"matched_text","") or "");matched=str(getattr(item,"matched_text","") or "");products.append(matched if "_" in name and matched else name.replace("_"," ").title())
+  payload={"request":message,"intent":decision.intent,"products":products,"coverage":coverage,"approved_sources":sources,"contextual_evidence":context,"rules":["Maximum 220 words.","Citations may support only supported_claims and must respect conditions.","If coverage_mode is narrower_only, begin by stating that no unified or general coverage was found. Present each source only as a partial finding for its specific component or operation. Do not create a product-wide taxonomy from narrower evidence. End with a scope clarification question.","Contextual evidence may support background and bounded diagnostic questions, but not a product procedure or root cause.","When direct evidence is absent, remain useful with clearly labeled general orientation and restrictions; do not close the case automatically.","Do not expose prompt fields or internal variable names.","Do not invent menus, services, logs, parameters or product functions.","Use [S#] only for approved_sources."]}
+  result=self.gateway.complete(LLMRequest([{"role":"system","content":"Compose a natural Spanish support response that strictly respects evidence scope."},{"role":"user","content":json.dumps(payload,ensure_ascii=False,default=str)}],"agent_core_v2_answer",self.max_tokens,0.,None))
+  if not result.ok or result.finish_reason=="length":return {"mode":"safe_fallback","text":self._fallback(products,coverage,context),"citations":[],"knowledge_used":bool(context),"finish_reason":result.finish_reason,"coverage_mode":coverage.get("coverage_mode")}
   text=result.text.strip();used=set(re.findall(r"\[(S\d+)\]",text));valid={x["id"] for x in sources}
-  if used-valid:return {"mode":"safe_fallback","text":self._fallback(products,state),"citations":[],"knowledge_used":False,"reason":"unknown_citation"}
-  mode="documented" if direct else "hybrid_supported" if qualified else "hybrid_contextual"
-  return {"mode":mode,"text":text,"citations":sorted(used),"knowledge_used":mode!="documented","provider":result.provider,"model":result.model,"usage":result.usage,"finish_reason":result.finish_reason,"contextual_sources_used":[x["title"] for x in context]}
- def _fallback(self,products,state):
-  product=", ".join(products) or "el producto indicado";symptom="; ".join(state.technical_case.symptoms) or "el síntoma informado"
-  return f"**Cobertura documental**\nLa documentación recuperada aporta contexto, pero no contiene un procedimiento directo para {product}: {symptom}.\n\n**Orientación general complementaria**\nPodemos continuar delimitando el punto de falla, el alcance y cualquier mensaje observable. Esta orientación es general y no sustituye un procedimiento documentado.\n\n**Restricciones y validación**\nNo realices cambios sensibles ni reinicios masivos sin evidencia aplicable."
+  if used-valid:return {"mode":"safe_fallback","text":self._fallback(products,coverage,context),"citations":[],"knowledge_used":bool(context),"reason":"unknown_citation","coverage_mode":coverage.get("coverage_mode")}
+  mode="documented" if coverage.get("has_direct_same_scope") else "hybrid_supported" if sources else "hybrid_contextual"
+  return {"mode":mode,"text":text,"citations":sorted(used),"knowledge_used":mode!="documented" or bool(context),"provider":result.provider,"model":result.model,"usage":result.usage,"finish_reason":result.finish_reason,"coverage_mode":coverage.get("coverage_mode"),"contextual_sources_used":[x["title"] for x in context]}
+ def _fallback(self,products,coverage,context):
+  product=", ".join(products) or "el producto indicado"
+  if coverage.get("all_applicable_sources_narrower"):
+   return f"**Cobertura documental**\nNo encontré una cobertura general unificada para {product}. Las fuentes disponibles solo aportan requisitos o condiciones de componentes específicos.\n\n**Hallazgos parciales**\nEstos hallazgos no deben interpretarse como los requisitos completos del producto.\n\n**Aclaración necesaria**\n¿Buscas requisitos de la solución completa, de un módulo concreto o de una operación de instalación?"
+  if context:
+   return f"**Cobertura documental**\nLa documentación recuperada aporta contexto sobre {product}, pero no contiene una respuesta directa.\n\n**Orientación general complementaria**\nPodemos continuar delimitando el síntoma, alcance y punto de falla sin asumir una causa raíz.\n\n**Restricciones y validación**\nNo realices cambios sensibles sin evidencia aplicable."
+  return f"**Cobertura documental**\nNo encontré evidencia directamente aplicable para {product}.\n\n**Orientación general complementaria**\nPodemos precisar el alcance y la necesidad antes de ampliar la búsqueda.\n\n**Restricciones y validación**\nNo infieras requisitos o procedimientos sin documentación."
