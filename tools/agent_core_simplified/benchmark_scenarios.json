@@ -1,0 +1,25 @@
+[
+  {
+    "id": "unknown_incident",
+    "messages": [
+      "La herramienta de monitoreo dejó de actualizar varios activos.",
+      "No hubo cambios conocidos y comenzó durante el turno.",
+      "¿Qué opciones tenemos antes de escalar?"
+    ]
+  },
+  {
+    "id": "attempt_and_escalate",
+    "messages": [
+      "Los trabajos enviados no quedan disponibles para liberación.",
+      "Ya revisé la cola y no cambió el resultado.",
+      "Ayúdame a escalar el incidente."
+    ]
+  },
+  {
+    "id": "scope_change",
+    "messages": [
+      "No puedo acceder a la consola del producto actual.",
+      "Ahora necesito conocer requisitos generales de otra solución."
+    ]
+  }
+]
