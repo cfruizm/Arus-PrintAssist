@@ -21,11 +21,7 @@ class EntityResolver:
     alias_text=_norm(alias)
     if alias_text and re.search(r"(?<!\w)"+re.escape(alias_text)+r"(?!\w)",low):
      if isinstance(target,dict):cid=str(target.get("canonical_id") or _slug(target.get("canonical_name") or alias));name=str(target.get("canonical_name") or alias)
-     else:
-      cid=str(target);name=str(alias)
-      for registry_name in ("PRODUCT_ENTITY_REGISTRY","COMPONENT_ENTITY_REGISTRY","PROCESS_ENTITY_REGISTRY"):
-       record=getattr(self.registry,registry_name,{}).get(cid) if isinstance(getattr(self.registry,registry_name,{}),dict) else None
-       if isinstance(record,dict) and record.get("canonical_name"):name=str(record["canonical_name"]);break
+     else:cid=str(target);name=str(alias)
      out.append((len(alias_text),EntityRef(kind,cid,name,str(alias),1.0,"registry")))
   return out
 
@@ -35,17 +31,5 @@ class EntityResolver:
    mention=_norm(item.matched_text)
    if any(item.kind==x.kind and mention and mention in _norm(x.matched_text) and len(mention)<len(_norm(x.matched_text)) for x in selected):continue
    if not any(x.kind==item.kind and x.canonical_id==item.canonical_id for x in selected):selected.append(item)
-
-  # The model may suggest a mention but never supplies authoritative canonical identity.
-  for raw in proposed or []:
-   if not isinstance(raw,dict):continue
-   kind=str(raw.get("kind") or raw.get("type") or "")
-   mention=str(raw.get("matched_text") or raw.get("mention") or raw.get("canonical_name") or raw.get("name") or "").strip()
-   if kind not in ALLOWED_KINDS or not mention:continue
-   matched=next((x for x in selected if x.kind==kind and (_norm(x.matched_text)==_norm(mention) or _norm(x.canonical_name)==_norm(mention))),None)
-   if matched:continue
-   # Unregistered product hypotheses are not promoted. Components/processes may remain provisional without a forged ID.
-   if kind=="product":continue
-   provisional_id="provisional_"+_slug(mention)
-   selected.append(EntityRef(kind,provisional_id,mention,mention,float(raw.get("confidence",.5)),"interpreter_provisional"))
+  # Model suggestions do not become canonical state unless resolved by a registry.
   return selected

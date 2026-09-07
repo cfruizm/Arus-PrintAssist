@@ -15,7 +15,7 @@ from app.agent_core_v2.lab_session import (
 
 st.set_page_config(page_title="Agent Core Lab", page_icon="🧠", layout="wide")
 st.title("Agent Core Lab")
-st.caption("Laboratorio conversacional libre conectado exclusivamente a app.agent_core_v2. No modifica el chat productivo.")
+st.caption("Laboratorio aislado de Agent Core v2 con retrieval y Groq reales. No modifica el chat productivo.")
 
 try:
     enabled = bool(st.secrets.get("AGENT_CORE_LAB_ENABLED", False))
@@ -29,97 +29,91 @@ if not enabled:
 store = get_store(st.session_state)
 
 with st.sidebar:
-    st.subheader("Controles")
-    if st.button("Nueva conversación", use_container_width=True):
+    st.subheader("Sesión de laboratorio")
+    st.caption("Las acciones afectan únicamente esta sesión aislada.")
+    if st.button("Nueva conversación", use_container_width=True, type="primary"):
         reset_store(st.session_state)
         st.rerun()
-
     if st.button("Solicitar escalamiento", use_container_width=True):
         try:
-            with st.spinner("Solicitando escalamiento mediante Agent Core v2..."):
+            with st.spinner("Preparando escalamiento..."):
                 request_escalation(st.secrets, st.session_state)
             st.rerun()
         except Exception as exc:
             st.error(f"No se pudo procesar el escalamiento: {type(exc).__name__}: {exc}")
-
     if st.button("Cancelar flujo actual", use_container_width=True):
         try:
-            with st.spinner("Procesando cancelación..."):
+            with st.spinner("Cancelando flujo..."):
                 cancel_current_flow(st.secrets, st.session_state)
             st.rerun()
         except Exception as exc:
             st.error(f"No se pudo procesar la cancelación: {type(exc).__name__}: {exc}")
-
     payload = json.dumps(export_session(st.session_state), ensure_ascii=False, indent=2)
-    st.download_button(
-        "Descargar sesión JSON",
-        payload,
-        file_name="agent_core_v2_free_lab_session.json",
-        mime="application/json",
-        use_container_width=True,
-    )
-
+    st.download_button("Descargar sesión JSON", payload, file_name="agent_core_v2_lab_session.json", mime="application/json", use_container_width=True)
     st.divider()
-    st.subheader("Estado canónico")
     state = public_state(store)
-    topic = state.get("active_topic") or {}
-    case = state.get("technical_case") or {}
-    escalation = state.get("escalation") or {}
+    st.metric("Turnos", state.get("turn_number", 0))
+    st.metric("Mensajes", len(store.get("messages", [])))
+    st.caption("Producción modificada: no")
 
-    st.write("**Turno:**", state.get("turn_number", 0))
-    st.write("**Tema:**", topic.get("topic_id", "Sin tema"))
-    st.write("**Productos:**", ", ".join(x.get("canonical_name") or x.get("matched_text") or x.get("canonical_id", "") for x in topic.get("products") or []) or "No identificados")
-    st.write("**Síntomas:**", "; ".join(case.get("symptoms") or []) or "No registrados")
-    st.write("**Alcance:**", case.get("affected_scope") or "No registrado")
-    attempts = case.get("attempts") or []
-    st.write("**Intentos:**", len(attempts))
-    st.write("**Estado del caso:**", case.get("status") or "idle")
-    st.write("**Escalamiento:**", escalation.get("status") or "inactive")
-    if escalation.get("pending_field"):
-        st.write("**Campo pendiente:**", escalation.get("pending_field"))
+conversation_tab, diagnostic_tab = st.tabs(["Conversación", "Diagnóstico técnico"])
 
-st.subheader("Conversación")
-if not store["messages"]:
-    st.info("Escribe un caso real con tus propias palabras. No hay escenarios ni productos preconfigurados.")
+with conversation_tab:
+    if not store.get("messages"):
+        st.info("Inicia una conversación libre. Prueba casos reales, seguimientos, correcciones de contexto y escalamiento.")
+    for message in store.get("messages", []):
+        role = "assistant" if message.get("role") == "assistant" else "user"
+        with st.chat_message(role):
+            st.markdown(str(message.get("content") or ""))
+            meta = message.get("metadata") or {}
+            if role == "assistant" and meta:
+                citations = meta.get("citations") or []
+                if citations:
+                    with st.expander("Fuentes utilizadas"):
+                        for citation in citations:
+                            st.write(citation)
+                if meta.get("knowledge_used"):
+                    st.caption("Incluye orientación complementaria no validada como documentación específica del producto.")
+    prompt = st.chat_input("Describe el caso o continúa la conversación")
+    if prompt:
+        try:
+            with st.spinner("Analizando el caso, consultando documentación y preparando la respuesta..."):
+                process_message(prompt, st.secrets, st.session_state)
+            st.rerun()
+        except Exception as exc:
+            st.error(f"No se pudo procesar el mensaje: {type(exc).__name__}: {exc}")
 
-for item in store["messages"]:
-    with st.chat_message(item["role"]):
-        st.markdown(item["content"])
-
-prompt = st.chat_input("Escribe tu mensaje de soporte")
-if prompt:
-    try:
-        with st.spinner("Procesando con Agent Core v2..."):
-            process_message(prompt, st.secrets, st.session_state)
-        st.rerun()
-    except Exception as exc:
-        st.error(f"Error del laboratorio: {type(exc).__name__}: {exc}")
-
-with st.expander("Diagnóstico técnico", expanded=False):
-    if not store["turns"]:
-        st.caption("El diagnóstico aparecerá después del primer turno.")
+with diagnostic_tab:
+    st.caption("Vista de observabilidad del laboratorio. No interviene en la decisión del agente.")
+    turns = store.get("turns", [])
+    if not turns:
+        st.info("El diagnóstico aparecerá después del primer turno.")
     else:
-        for index, turn in enumerate(reversed(store["turns"]), 1):
-            turn_number = len(store["turns"]) - index + 1
-            st.markdown(f"### Turno {turn_number}")
-            st.markdown("**Decisión o propuesta**")
-            st.json(turn.get("decision") or turn.get("proposal") or {})
-            st.markdown("**Consulta contextual**")
+        selected = st.selectbox("Turno", range(len(turns), 0, -1), format_func=lambda value: f"Turno {value}")
+        turn = turns[selected - 1]
+        decision = turn.get("decision") or {}
+        metrics = turn.get("cost_route_metrics") or {}
+        evidence = turn.get("evidence") or {}
+        answer = turn.get("answer") or {}
+        counts = evidence.get("counts") or {}
+        usage = answer.get("usage") or {}
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Intención", decision.get("intent") or "-")
+        c2.metric("Acción", decision.get("action") or "-")
+        c3.metric("Documentos", counts.get("retrieved", 0))
+        c4.metric("Fuentes citables", counts.get("citable", 0))
+        c5, c6, c7, c8 = st.columns(4)
+        c5.metric("Retrieval", metrics.get("retrieval_calls", 0))
+        c6.metric("Juez", metrics.get("judge_calls", 0))
+        c7.metric("Tokens respuesta", usage.get("total_tokens", 0))
+        c8.metric("Modelo", answer.get("model") or "-")
+        with st.expander("Interpretación y decisión", expanded=True):
+            st.json({"proposal": turn.get("proposal"), "decision": decision, "semantic_trace": turn.get("semantic_interpretation_trace")})
+        with st.expander("Estado canónico"):
+            st.json({"before": turn.get("state_before"), "after": turn.get("state_after"), "audit": turn.get("audit")})
+        with st.expander("Consulta contextual"):
             st.json(turn.get("retrieval_query_trace") or {})
-            st.markdown("**Evidencia**")
-            evidence = turn.get("evidence") or {}
-            st.json({
-                "counts": evidence.get("counts") or {},
-                "coverage": evidence.get("coverage") or {},
-                "citable": evidence.get("citable") or [],
-                "contextual": evidence.get("contextual") or [],
-            })
-            st.markdown("**Respuesta y política**")
-            st.json(turn.get("answer") or {})
-            st.markdown("**Costo y ruta**")
-            st.json(turn.get("cost_route_metrics") or {})
-            st.divider()
-
-if store["errors"]:
-    with st.expander("Errores de la sesión", expanded=True):
-        st.json(store["errors"])
+        with st.expander("Evidencia y fuentes"):
+            st.json(evidence)
+        with st.expander("Respuesta y ruta adaptativa"):
+            st.json({"answer": answer, "response_directive": turn.get("response_directive"), "cost_route_metrics": metrics})

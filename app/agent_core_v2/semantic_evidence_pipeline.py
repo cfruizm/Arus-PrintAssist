@@ -10,6 +10,8 @@ class SemanticEvidencePipeline:
    if key in seen:continue
    seen.add(key);candidates.append({"id":f"S{len(candidates)+1}","title":str(item.get("title") or meta.get("title") or ""),"url":str(item.get("url") or meta.get("source_url") or item.get("source") or ""),"text":str(item.get("text") or "")[:1000],"metadata":meta,"retrieval_score":float(item.get("score") or meta.get("score") or .5)})
    if len(candidates)>=size:break
+  if not candidates:
+   return {"retrieved":[],"direct":[],"partial":[],"conditional":[],"contextual":[],"not_applicable":[],"citable":[],"coverage":{"has_direct_same_scope":False,"has_narrower_sources":False,"all_applicable_sources_narrower":False,"requested_objects":[],"coverage_mode":"none"},"counts":{"retrieved":0,"direct":0,"partial":0,"conditional":0,"contextual":0,"citable":0},"unassessed":[],"judge":{"ok":True,"complete":True,"assessed":0,"expected":0,"error":None,"provider_result":None,"skipped":True,"skip_reason":"no_candidates"}}
   judged=self.judge.evaluate(query,decision.intent,decision.entities or state.active_topic.products,candidates)
   assessments={str(x.get("id")):x for x in judged.get("assessments") or [] if isinstance(x,dict)} if judged.get("ok") else {}
   missing=[x for x in candidates if x["id"] not in assessments]
