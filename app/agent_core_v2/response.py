@@ -3,31 +3,26 @@ import json,re
 class ResponseComposer:
  def __init__(self,gateway=None,max_tokens=400):self.gateway=gateway;self.max_tokens=max_tokens
  def compose(self,message,decision,state,evidence):
-  direct=evidence.get("direct") or [];qualified=(evidence.get("partial") or [])+(evidence.get("conditional") or []);contextual=evidence.get("contextual") or [];approved=(direct+qualified)[:3];coverage=evidence.get("coverage") or {}
-  if decision.action=="ask_clarification":return {"mode":"clarification","text":decision.clarification_question or "Necesito una precisión adicional para continuar.","citations":[],"knowledge_used":False,"coverage_mode":"not_applicable"}
-  if decision.action!="retrieve":return {"mode":"directive","text":"","citations":[],"knowledge_used":False,"coverage_mode":"not_applicable"}
-  if self.gateway is None:return {"mode":"pending","text":"Respuesta pendiente.","citations":[x["id"] for x in approved],"knowledge_used":not bool(direct),"coverage_mode":coverage.get("coverage_mode")}
+  approved=(evidence.get("direct") or [])+(evidence.get("partial") or [])+(evidence.get("conditional") or []);contextual=evidence.get("contextual") or [];unassessed=evidence.get("unassessed") or []
+  if self.gateway is None:return {"mode":"pending","text":"Respuesta pendiente.","citations":[],"knowledge_used":False}
   from app.llm_gateway.models import LLMRequest
   sources=[]
-  for item in approved:
-   assessment=item.get("semantic_assessment") or {};sources.append({"id":item["id"],"title":item["title"],"applicability":assessment.get("applicability"),"scope_relation":assessment.get("scope_relation"),"requested_object":assessment.get("requested_object"),"source_object":assessment.get("source_object"),"conditions":assessment.get("conditions"),"supported_claims":assessment.get("supported_claims")})
-  context=[]
-  for item in contextual[:3]:
-   assessment=item.get("semantic_assessment") or {};context.append({"title":item.get("title"),"reason":assessment.get("reason"),"supported_claims":assessment.get("supported_claims")})
-  products=[]
-  for item in state.active_topic.products:
-   name=str(getattr(item,"canonical_name","") or getattr(item,"matched_text","") or "");matched=str(getattr(item,"matched_text","") or "");products.append(matched if "_" in name and matched else name.replace("_"," ").title())
-  payload={"request":message,"intent":decision.intent,"products":products,"coverage":coverage,"approved_sources":sources,"contextual_evidence":context,"rules":["Maximum 220 words.","Citations may support only supported_claims and must respect conditions.","If coverage_mode is narrower_only, begin by stating that no unified or general coverage was found. Present each source only as a partial finding for its specific component or operation. Do not create a product-wide taxonomy from narrower evidence. End with a scope clarification question.","Contextual evidence may support background and bounded diagnostic questions, but not a product procedure or root cause.","When direct evidence is absent, remain useful with clearly labeled general orientation and restrictions; do not close the case automatically.","Do not expose prompt fields or internal variable names.","Do not invent menus, services, logs, parameters or product functions.","Use [S#] only for approved_sources."]}
-  result=self.gateway.complete(LLMRequest([{"role":"system","content":"Compose a natural Spanish support response that strictly respects evidence scope."},{"role":"user","content":json.dumps(payload,ensure_ascii=False,default=str)}],"agent_core_v2_answer",self.max_tokens,0.,None))
-  if not result.ok or result.finish_reason=="length":return {"mode":"safe_fallback","text":self._fallback(products,coverage,context),"citations":[],"knowledge_used":bool(context),"finish_reason":result.finish_reason,"coverage_mode":coverage.get("coverage_mode")}
-  text=result.text.strip();used=set(re.findall(r"\[(S\d+)\]",text));valid={x["id"] for x in sources}
-  if used-valid:return {"mode":"safe_fallback","text":self._fallback(products,coverage,context),"citations":[],"knowledge_used":bool(context),"reason":"unknown_citation","coverage_mode":coverage.get("coverage_mode")}
-  mode="documented" if coverage.get("has_direct_same_scope") else "hybrid_supported" if sources else "hybrid_contextual"
-  return {"mode":mode,"text":text,"citations":sorted(used),"knowledge_used":mode!="documented" or bool(context),"provider":result.provider,"model":result.model,"usage":result.usage,"finish_reason":result.finish_reason,"coverage_mode":coverage.get("coverage_mode"),"contextual_sources_used":[x["title"] for x in context]}
- def _fallback(self,products,coverage,context):
-  product=", ".join(products) or "el producto indicado"
-  if coverage.get("all_applicable_sources_narrower"):
-   return f"**Cobertura documental**\nNo encontré una cobertura general unificada para {product}. Las fuentes disponibles solo aportan requisitos o condiciones de componentes específicos.\n\n**Hallazgos parciales**\nEstos hallazgos no deben interpretarse como los requisitos completos del producto.\n\n**Aclaración necesaria**\n¿Buscas requisitos de la solución completa, de un módulo concreto o de una operación de instalación?"
-  if context:
-   return f"**Cobertura documental**\nLa documentación recuperada aporta contexto sobre {product}, pero no contiene una respuesta directa.\n\n**Orientación general complementaria**\nPodemos continuar delimitando el síntoma, alcance y punto de falla sin asumir una causa raíz.\n\n**Restricciones y validación**\nNo realices cambios sensibles sin evidencia aplicable."
-  return f"**Cobertura documental**\nNo encontré evidencia directamente aplicable para {product}.\n\n**Orientación general complementaria**\nPodemos precisar el alcance y la necesidad antes de ampliar la búsqueda.\n\n**Restricciones y validación**\nNo infieras requisitos o procedimientos sin documentación."
+  for item in approved[:3]:
+   a=item.get("semantic_assessment") or {};sources.append({"id":item["id"],"title":item["title"],"excerpt":item.get("text","")[:1600],"usage":"approved","supported_claims":a.get("supported_claims") or [],"conditions":a.get("conditions") or []})
+  background=[]
+  for item in (contextual+unassessed)[:3]:background.append({"id":item["id"],"title":item["title"],"excerpt":item.get("text","")[:900],"status":"contextual" if item in contextual else "unassessed"})
+  payload={"request":message,"current_intent":decision.intent,"case_state":state.to_dict(),"approved_sources":sources,"background_candidates":background,"policy":["Use approved_sources only for cited claims.","An unassessed candidate was not rejected; mention only that related documentation was found and applicability could not be confirmed.","When documentation is insufficient, provide useful general complementary guidance, clearly labeled and with restrictions.","Do not invent product-specific procedures, menus, services, logs or parameters.","Do not close the conversation merely because documentation is incomplete.","Answer the current request, not the historical intent.","Never expose internal field names or English intent IDs."]}
+  res=self.gateway.complete(LLMRequest([{"role":"system","content":"Respond naturally in Spanish as a printing support assistant. Separate documented information, complementary model knowledge, and limitations."},{"role":"user","content":json.dumps(payload,ensure_ascii=False,default=str)}],"agent_core_v2_answer",self.max_tokens,0.,None))
+  if not res.ok or res.finish_reason=="length":return self._fallback(decision,state,background,"provider_unavailable")
+  text=res.text.strip();used=set(re.findall(r"\[(S\d+)\]",text));valid={x["id"] for x in sources}
+  if used-valid:return self._fallback(decision,state,background,"invalid_citations")
+  return {"mode":"hybrid","text":text,"citations":sorted(used),"knowledge_used":not bool(sources) or "complementaria" in text.casefold(),"limitations_present":any(word in text.casefold() for word in ["limitación","restricción","no está documentado","no se encontró"]),"unassessed_sources":[x["title"] for x in background if x["status"]=="unassessed"],"provider":res.provider,"model":res.model,"usage":res.usage,"finish_reason":res.finish_reason}
+ def _fallback(self,decision,state,background,reason):
+  names=[]
+  for x in state.active_topic.products:
+   n=str(getattr(x,"canonical_name","") or getattr(x,"matched_text","") or "");m=str(getattr(x,"matched_text","") or "");names.append(m if "_" in n and m else n.replace("_"," ").title())
+  product=", ".join(names) or "el producto indicado"
+  if decision.intent=="conceptual":body=f"Puedo explicarte el propósito general de {product}, pero en este momento no pude validar una fuente suficientemente específica. Como orientación complementaria, puedo resumir su función general y después revisar requisitos, arquitectura o soporte según lo que necesites."
+  elif decision.intent=="procedural":body=f"No pude confirmar un procedimiento documentado para {product}. Puedo ayudarte a precisar la operación y proponer validaciones seguras, sin inventar rutas o funciones del producto."
+  else:body=f"La documentación disponible no permitió confirmar una respuesta completa para {product}. Podemos continuar con orientación general, opciones no invasivas y recopilación de evidencia antes de escalar."
+  return {"mode":"safe_fallback","text":body,"citations":[],"knowledge_used":True,"limitations_present":True,"unassessed_sources":[x["title"] for x in background],"fallback_reason":reason}
