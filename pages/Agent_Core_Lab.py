@@ -1,39 +1,125 @@
 from __future__ import annotations
+
 import json
-from pathlib import Path
 import streamlit as st
-st.set_page_config(page_title="Agent Core Lab",page_icon="🧠",layout="wide")
+
+from app.agent_core_v2.lab_session import (
+    cancel_current_flow,
+    export_session,
+    get_store,
+    process_message,
+    public_state,
+    request_escalation,
+    reset_store,
+)
+
+st.set_page_config(page_title="Agent Core Lab", page_icon="🧠", layout="wide")
 st.title("Agent Core Lab")
-try:enabled=bool(st.secrets.get("AGENT_CORE_LAB_ENABLED",False));batch=int(st.secrets.get("AGENT_CORE_LAB_BATCH_SIZE",3));tokens=int(st.secrets.get("LLM_ORCHESTRATOR_MAX_TOKENS",180));policy=str(st.secrets.get("LLM_INTERNAL_KNOWLEDGE_POLICY","hybrid_guarded"));answer_tokens=int(st.secrets.get("LLM_ANSWER_MAX_TOKENS",400))
-except Exception:enabled=False;batch=3;tokens=180;policy="hybrid_guarded";answer_tokens=400
-if not enabled:st.info("Agrega AGENT_CORE_LAB_ENABLED=true en Secrets.");st.stop()
-from app.llm_gateway.config import load_gateway_config
-from app.llm_gateway.gateway import LLMGateway
-from app.agent_core.semantic_gateway_evaluator import evaluate_case,summarize
-from app.agent_core.response_evidence_policy import evaluate_document_support,build_response_contract
-from app.integration.semantic_real_chat_shadow import summarize_records
-from app.integration.lab_retrieval_adapter import retrieve_from_existing_backend
-from app.agent_core.hybrid_response_lab import run_hybrid_response_lab
-sem_tab,evidence_tab,answer_tab,real_tab=st.tabs(["Orquestador semántico","Política de evidencia","Respuesta híbrida","Chat real en sombra"])
-with sem_tab:
- cases=json.loads(Path("tools/agent_core_lab/benchmark_cases.json").read_text(encoding="utf-8"));config=load_gateway_config(st.secrets)
- if "agent_core_act_records" not in st.session_state:st.session_state.agent_core_act_records=[]
- selected=st.multiselect("Casos semánticos",[c["id"] for c in cases],max_selections=max(1,min(5,batch)))
- if st.button("Ejecutar casos semánticos",disabled=not selected):
-  gateway=LLMGateway(config,st.session_state)
-  for case in [c for c in cases if c["id"] in selected]:st.session_state.agent_core_act_records.append(evaluate_case(gateway,case,max(120,min(220,tokens))))
- if st.session_state.agent_core_act_records:st.json({"summary":summarize(st.session_state.agent_core_act_records),"records":st.session_state.agent_core_act_records})
-with evidence_tab:
- items=json.loads(Path("tools/agent_core_lab/evidence_policy_cases.json").read_text(encoding="utf-8"));sid=st.selectbox("Escenario documental",[x["id"] for x in items]);item=next(x for x in items if x["id"]==sid);decision=evaluate_document_support(item["metrics"],policy,item["intent"]);st.json({"input":item,"decision":decision.to_dict(),"response_contract":build_response_contract(decision)})
-with answer_tab:
- st.warning("Laboratorio aislado. La intención seleccionada controla la política de evidencia.")
- intent=st.selectbox("Intención de la consulta",["troubleshooting","conceptual","procedural","requirements","architecture","warranty"],index=0)
- query=st.text_area("Consulta técnica",height=100);product=st.text_input("Producto conocido");symptom=st.text_input("Síntoma o tema confirmado");failed=st.text_input("Acción fallida",value="")
- if st.button("1. Recuperar evidencia",type="primary"):st.session_state.hybrid_retrieval=retrieve_from_existing_backend(query,6)
- if "hybrid_retrieval" in st.session_state:st.json(st.session_state.hybrid_retrieval)
- if st.button("2. Evaluar y generar respuesta",disabled=not bool(st.session_state.get("hybrid_retrieval",{}).get("ok"))):
-  state={"products":[product] if product else [],"symptoms":[symptom] if symptom else [],"failed_actions":[failed] if failed else []};gateway=LLMGateway(load_gateway_config(st.secrets),st.session_state);st.session_state.hybrid_answer=run_hybrid_response_lab(gateway,st.session_state.hybrid_retrieval,query,state,intent,policy,answer_tokens)
- if "hybrid_answer" in st.session_state:
-  result=st.session_state.hybrid_answer;st.json(result);st.markdown(result.get("answer_result",{}).get("text","") or "");st.download_button("Descargar respuesta",json.dumps(result,ensure_ascii=False,indent=2),file_name="agent_core_hybrid_modes_validation.json",mime="application/json")
-with real_tab:
- records=list(st.session_state.get("agent_core_semantic_real_chat_records",[]) or []);st.json({"summary":summarize_records(records),"records":records})
+st.caption("Laboratorio conversacional libre conectado exclusivamente a app.agent_core_v2. No modifica el chat productivo.")
+
+try:
+    enabled = bool(st.secrets.get("AGENT_CORE_LAB_ENABLED", False))
+except Exception:
+    enabled = False
+
+if not enabled:
+    st.info("Agrega AGENT_CORE_LAB_ENABLED = true en Secrets para habilitar el laboratorio.")
+    st.stop()
+
+store = get_store(st.session_state)
+
+with st.sidebar:
+    st.subheader("Controles")
+    if st.button("Nueva conversación", use_container_width=True):
+        reset_store(st.session_state)
+        st.rerun()
+
+    if st.button("Solicitar escalamiento", use_container_width=True):
+        try:
+            with st.spinner("Solicitando escalamiento mediante Agent Core v2..."):
+                request_escalation(st.secrets, st.session_state)
+            st.rerun()
+        except Exception as exc:
+            st.error(f"No se pudo procesar el escalamiento: {type(exc).__name__}: {exc}")
+
+    if st.button("Cancelar flujo actual", use_container_width=True):
+        try:
+            with st.spinner("Procesando cancelación..."):
+                cancel_current_flow(st.secrets, st.session_state)
+            st.rerun()
+        except Exception as exc:
+            st.error(f"No se pudo procesar la cancelación: {type(exc).__name__}: {exc}")
+
+    payload = json.dumps(export_session(st.session_state), ensure_ascii=False, indent=2)
+    st.download_button(
+        "Descargar sesión JSON",
+        payload,
+        file_name="agent_core_v2_free_lab_session.json",
+        mime="application/json",
+        use_container_width=True,
+    )
+
+    st.divider()
+    st.subheader("Estado canónico")
+    state = public_state(store)
+    topic = state.get("active_topic") or {}
+    case = state.get("technical_case") or {}
+    escalation = state.get("escalation") or {}
+
+    st.write("**Turno:**", state.get("turn_number", 0))
+    st.write("**Tema:**", topic.get("topic_id", "Sin tema"))
+    st.write("**Productos:**", ", ".join(x.get("canonical_name") or x.get("matched_text") or x.get("canonical_id", "") for x in topic.get("products") or []) or "No identificados")
+    st.write("**Síntomas:**", "; ".join(case.get("symptoms") or []) or "No registrados")
+    st.write("**Alcance:**", case.get("affected_scope") or "No registrado")
+    attempts = case.get("attempts") or []
+    st.write("**Intentos:**", len(attempts))
+    st.write("**Estado del caso:**", case.get("status") or "idle")
+    st.write("**Escalamiento:**", escalation.get("status") or "inactive")
+    if escalation.get("pending_field"):
+        st.write("**Campo pendiente:**", escalation.get("pending_field"))
+
+st.subheader("Conversación")
+if not store["messages"]:
+    st.info("Escribe un caso real con tus propias palabras. No hay escenarios ni productos preconfigurados.")
+
+for item in store["messages"]:
+    with st.chat_message(item["role"]):
+        st.markdown(item["content"])
+
+prompt = st.chat_input("Escribe tu mensaje de soporte")
+if prompt:
+    try:
+        with st.spinner("Procesando con Agent Core v2..."):
+            process_message(prompt, st.secrets, st.session_state)
+        st.rerun()
+    except Exception as exc:
+        st.error(f"Error del laboratorio: {type(exc).__name__}: {exc}")
+
+with st.expander("Diagnóstico técnico", expanded=False):
+    if not store["turns"]:
+        st.caption("El diagnóstico aparecerá después del primer turno.")
+    else:
+        for index, turn in enumerate(reversed(store["turns"]), 1):
+            turn_number = len(store["turns"]) - index + 1
+            st.markdown(f"### Turno {turn_number}")
+            st.markdown("**Decisión o propuesta**")
+            st.json(turn.get("decision") or turn.get("proposal") or {})
+            st.markdown("**Consulta contextual**")
+            st.json(turn.get("retrieval_query_trace") or {})
+            st.markdown("**Evidencia**")
+            evidence = turn.get("evidence") or {}
+            st.json({
+                "counts": evidence.get("counts") or {},
+                "coverage": evidence.get("coverage") or {},
+                "citable": evidence.get("citable") or [],
+                "contextual": evidence.get("contextual") or [],
+            })
+            st.markdown("**Respuesta y política**")
+            st.json(turn.get("answer") or {})
+            st.markdown("**Costo y ruta**")
+            st.json(turn.get("cost_route_metrics") or {})
+            st.divider()
+
+if store["errors"]:
+    with st.expander("Errores de la sesión", expanded=True):
+        st.json(store["errors"])
