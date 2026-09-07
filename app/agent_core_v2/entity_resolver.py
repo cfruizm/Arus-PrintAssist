@@ -2,32 +2,46 @@ from __future__ import annotations
 import importlib,re
 from .models import EntityRef
 ALLOWED_KINDS={"product","component","process"}
+
 def _norm(v):return re.sub(r"\s+"," ",str(v or "").casefold()).strip()
-def _id(v):return re.sub(r"[^a-z0-9]+","_",_norm(v)).strip("_")
+def _slug(v):return re.sub(r"[^a-z0-9]+","_",_norm(v)).strip("_")
+
 class EntityResolver:
  def __init__(self,module="app.domain_registry"):
   try:self.registry=importlib.import_module(module)
   except Exception:self.registry=None
+
+ def _registry_candidates(self,text):
+  low=_norm(text);out=[]
+  if not self.registry:return out
+  for kind,index_name in (("product","PRODUCT_ALIAS_INDEX"),("component","COMPONENT_ALIAS_INDEX"),("process","PROCESS_ALIAS_INDEX")):
+   index=getattr(self.registry,index_name,{})
+   if not isinstance(index,dict):continue
+   for alias,target in index.items():
+    alias_text=_norm(alias)
+    if alias_text and re.search(r"(?<!\w)"+re.escape(alias_text)+r"(?!\w)",low):
+     if isinstance(target,dict):cid=str(target.get("canonical_id") or _slug(target.get("canonical_name") or alias));name=str(target.get("canonical_name") or alias)
+     else:cid=str(target);name=str(alias)
+     out.append((len(alias_text),EntityRef(kind,cid,name,str(alias),1.0,"registry")))
+  return out
+
  def resolve(self,text,proposed=None):
-  candidates=[];low=_norm(text)
-  if self.registry:
-   for kind,name in (("product","PRODUCT_ALIAS_INDEX"),("component","COMPONENT_ALIAS_INDEX"),("process","PROCESS_ALIAS_INDEX")):
-    idx=getattr(self.registry,name,{})
-    if not isinstance(idx,dict):continue
-    for alias,target in idx.items():
-     aliasn=_norm(alias)
-     if aliasn and re.search(r"(?<!\w)"+re.escape(aliasn)+r"(?!\w)",low):
-      cname=str(target.get("canonical_name") if isinstance(target,dict) and target.get("canonical_name") else target);cid=str(target.get("canonical_id") if isinstance(target,dict) and target.get("canonical_id") else _id(cname));candidates.append((len(aliasn),EntityRef(kind,cid,cname,str(alias),1.,"registry")))
-  for x in proposed or []:
-   if not isinstance(x,dict):continue
-   kind=str(x.get("kind") or x.get("type") or "product");name=str(x.get("canonical_name") or x.get("name") or x.get("value") or "").strip()
-   if kind in ALLOWED_KINDS and name:candidates.append((len(_norm(x.get("matched_text") or name)),EntityRef(kind,str(x.get("canonical_id") or _id(name)),name,str(x.get("matched_text") or name),float(x.get("confidence",.7)),"interpreter")))
-  # Sort by explicit confidence, match length, then prefer interpreter exact entities.
-  candidates.sort(key=lambda z:(z[1].confidence,z[0],z[1].source=="interpreter"),reverse=True);selected=[]
-  for length,item in candidates:
-   if any(x.kind==item.kind and x.canonical_id==item.canonical_id for x in selected):continue
-   # Suppress a generic alias when its matched text is contained in a longer selected match.
-   match=_norm(item.matched_text)
-   if any(item.kind==x.kind and match and match in _norm(x.matched_text) and len(match)<len(_norm(x.matched_text)) for x in selected):continue
-   selected.append(item)
+  registry=self._registry_candidates(text);registry.sort(key=lambda x:x[0],reverse=True);selected=[]
+  for length,item in registry:
+   mention=_norm(item.matched_text)
+   if any(item.kind==x.kind and mention and mention in _norm(x.matched_text) and len(mention)<len(_norm(x.matched_text)) for x in selected):continue
+   if not any(x.kind==item.kind and x.canonical_id==item.canonical_id for x in selected):selected.append(item)
+
+  # The model may suggest a mention but never supplies authoritative canonical identity.
+  for raw in proposed or []:
+   if not isinstance(raw,dict):continue
+   kind=str(raw.get("kind") or raw.get("type") or "")
+   mention=str(raw.get("matched_text") or raw.get("mention") or raw.get("canonical_name") or raw.get("name") or "").strip()
+   if kind not in ALLOWED_KINDS or not mention:continue
+   matched=next((x for x in selected if x.kind==kind and (_norm(x.matched_text)==_norm(mention) or _norm(x.canonical_name)==_norm(mention))),None)
+   if matched:continue
+   # Unregistered product hypotheses are not promoted. Components/processes may remain provisional without a forged ID.
+   if kind=="product":continue
+   provisional_id="provisional_"+_slug(mention)
+   selected.append(EntityRef(kind,provisional_id,mention,mention,float(raw.get("confidence",.5)),"interpreter_provisional"))
   return selected
