@@ -6,6 +6,7 @@ ACTS={"technical_request","case_update","attempt","attempt_result","capability",
 INTENTS={"conceptual","procedural","troubleshooting","requirements","architecture","warranty","unknown"}
 RELATIONS={"same_topic","new_topic","return_to_previous","independent_question","unknown"}
 FACTS={"symptom","affected_scope","timeline","change_context","environment","error_message","version","location","frequency","observed_behavior","expected_behavior","attempted_action","attempt_result","technical_context"}
+TECHNICAL_INTENTS={"conceptual","procedural","troubleshooting","requirements","architecture","warranty"}
 SCHEMA={"type":"object","additionalProperties":False,"properties":{"conversation_act":{"type":"string","enum":sorted(ACTS)},"intent":{"type":"string","enum":sorted(INTENTS)},"topic_relation":{"type":"string","enum":sorted(RELATIONS)},"entities":{"type":"array","items":{"type":"object"}},"facts":{"type":"array","items":{"type":"object"}},"requires_documents":{"type":"boolean"},"escalation_action":{"type":"string","enum":["none","start","continue","finish","cancel"]},"confidence":{"type":"number"},"reasoning_summary":{"type":"string"}},"required":["conversation_act","intent","topic_relation","entities","facts","requires_documents","escalation_action","confidence","reasoning_summary"]}
 
 def _extract(text):
@@ -24,25 +25,37 @@ def _proposal(act="clarification",intent="unknown",relation="same_topic",entitie
  elif act=="capability":intent="capabilities"
  elif act in {"social","farewell"}:intent="social"
  return InterpreterProposal(act,intent,action,relation,entities or [],facts or [],question,confidence,summary)
+def _field(raw,*names,default=None):
+ for name in names:
+  value=raw.get(name)
+  if value not in (None,""):return value
+ return default
 def _normalize(raw,state):
- r=dict(raw or {});act=str(r.get("conversation_act") or "unknown");intent=str(r.get("intent") or "unknown");relation=str(r.get("topic_relation") or "unknown");docs=bool(r.get("requires_documents",False));esc=str(r.get("escalation_action") or "none")
+ r=dict(raw or {});act=str(r.get("conversation_act") or "unknown");intent=str(r.get("intent") or "unknown");relation=str(r.get("topic_relation") or "unknown");docs=bool(r.get("requires_documents",False));esc=str(r.get("escalation_action") or "none");confidence=float(r.get("confidence",0) or 0)
  if act not in ACTS:act="unknown"
  if intent not in INTENTS:intent="unknown"
  if relation not in RELATIONS:relation="unknown"
  entities=[]
  for x in r.get("entities") or []:
   if not isinstance(x,dict):continue
-  kind=str(x.get("kind") or "");name=str(x.get("canonical_name") or x.get("name") or x.get("matched_text") or "").strip()
-  if kind in {"product","component","process"} and name:entities.append({"kind":kind,"canonical_id":str(x.get("canonical_id") or ""),"canonical_name":name,"matched_text":str(x.get("matched_text") or x.get("mention") or name),"confidence":float(x.get("confidence",r.get("confidence",0)) or 0)})
+  kind=str(_field(x,"kind","type",default=""));name=str(_field(x,"canonical_name","name","matched_text","mention",default="")).strip()
+  if kind in {"product","component","process"} and name:entities.append({"kind":kind,"canonical_id":str(x.get("canonical_id") or ""),"canonical_name":name,"matched_text":str(_field(x,"matched_text","mention","name",default=name)),"confidence":float(x.get("confidence",confidence) or 0)})
  facts=[];aliases={"scope":"affected_scope","action":"attempted_action","attempt":"attempted_action","result":"attempt_result","status":"change_context"}
  for x in r.get("facts") or []:
   if not isinstance(x,dict):continue
-  category=aliases.get(str(x.get("type") or x.get("category") or "technical_context"),str(x.get("type") or x.get("category") or "technical_context"));value=str(x.get("value") or x.get("fact") or "").strip()
-  if category in FACTS and value:facts.append({"type":category,"value":value,"confidence":float(x.get("confidence",r.get("confidence",0)) or 0),"correction":bool(x.get("correction",False)),"source":"semantic_current_turn"})
+  raw_category=str(_field(x,"type","category","key",default="technical_context"));category=aliases.get(raw_category,raw_category);value=str(_field(x,"value","fact",default="")).strip()
+  if category in FACTS and value:facts.append({"type":category,"value":value,"confidence":float(x.get("confidence",confidence) or 0),"correction":bool(x.get("correction",False)),"source":"semantic_current_turn"})
  categories={x["type"] for x in facts};attempts=getattr(getattr(state,"technical_case",None),"attempts",[]) or []
+ # Structural reconciliation: document-backed technical intent outranks a contradictory clarification act.
+ if docs and intent in TECHNICAL_INTENTS and act in {"clarification","unknown"}:
+  act="technical_request"
+  reconciliation="reconciled:technical_documents_override_clarification"
+ else:reconciliation=""
  invalid=(act=="technical_request" and intent=="unknown") or (act in {"capability","social","farewell"} and (entities or docs or intent not in {"unknown"})) or (act=="attempt" and "attempted_action" not in categories) or (act=="attempt_result" and ("attempt_result" not in categories or not attempts))
  if invalid:return _proposal(summary="fallback:incoherent_contract")
- return _proposal(act,intent,relation,entities,facts,docs,esc,float(r.get("confidence",0) or 0),str(r.get("reasoning_summary") or "")[:120])
+ summary=str(r.get("reasoning_summary") or "")[:120]
+ if reconciliation:summary=(reconciliation+" | "+summary)[:120]
+ return _proposal(act,intent,relation,entities,facts,docs,esc,confidence,summary)
 
 class QwenInterpreter:
  def __init__(self,gateway,max_tokens=260):self.gateway=gateway;self.max_tokens=max(220,min(360,int(max_tokens)));self.last_trace={}
@@ -52,18 +65,12 @@ class QwenInterpreter:
   payload={"current_message":message,"canonical_state":state.to_dict()}
   return self.gateway.complete(LLMRequest([{"role":"system","content":system},{"role":"user","content":json.dumps(payload,ensure_ascii=False,separators=(",",":"))}],purpose,max_tokens,0.,response_schema))
  def interpret(self,message,state):
-  first=self._request(message,state,SCHEMA,self.max_tokens,"agent_core_v2_current_turn")
-  attempts=[{"stage":"structured","ok":bool(first.ok),"finish_reason":first.finish_reason,"error_code":first.error_code,"model":first.model}]
-  candidate=first
+  first=self._request(message,state,SCHEMA,self.max_tokens,"agent_core_v2_current_turn");attempts=[{"stage":"structured","ok":bool(first.ok),"finish_reason":first.finish_reason,"error_code":first.error_code,"model":first.model}];candidate=first
   if not first.ok or not str(first.text or "").strip():
-   second=self._request(message,state,None,min(260,self.max_tokens),"agent_core_v2_current_turn_recovery")
-   attempts.append({"stage":"text_json_recovery","ok":bool(second.ok),"finish_reason":second.finish_reason,"error_code":second.error_code,"model":second.model})
-   candidate=second
-  try:
-   raw=_extract(candidate.text) if candidate.ok else None
-   proposal=_normalize(raw,state) if raw is not None else _proposal(summary="fallback:provider_after_recovery")
-   parsed=raw is not None
-  except Exception as exc:
-   proposal=_proposal(summary="fallback:invalid_json_after_recovery");parsed=False;attempts[-1]["parse_error"]=type(exc).__name__
-  self.last_trace={"original_message":message,"provider_ok":bool(candidate.ok),"finish_reason":candidate.finish_reason,"parsed":parsed,"recovery_used":len(attempts)>1,"attempts":attempts}
-  return proposal
+   candidate=self._request(message,state,None,min(260,self.max_tokens),"agent_core_v2_current_turn_recovery");attempts.append({"stage":"text_json_recovery","ok":bool(candidate.ok),"finish_reason":candidate.finish_reason,"error_code":candidate.error_code,"model":candidate.model})
+  try:raw=_extract(candidate.text) if candidate.ok else None;proposal=_normalize(raw,state) if raw is not None else _proposal(summary="fallback:provider_after_recovery");parsed=raw is not None
+  except Exception as exc:proposal=_proposal(summary="fallback:invalid_json_after_recovery");parsed=False;attempts[-1]["parse_error"]=type(exc).__name__
+  self.last_trace={"original_message":message,"provider_ok":bool(candidate.ok),"finish_reason":candidate.finish_reason,"parsed":parsed,"recovery_used":len(attempts)>1,"attempts":attempts};return proposal
+class ScriptedInterpreter:
+ def __init__(self,outputs):self.outputs=list(outputs);self.i=0;self.last_trace={}
+ def interpret(self,message,state):raw=self.outputs[self.i];self.i+=1;return _normalize(raw,state)

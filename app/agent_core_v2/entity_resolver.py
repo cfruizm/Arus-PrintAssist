@@ -21,7 +21,11 @@ class EntityResolver:
     alias_text=_norm(alias)
     if alias_text and re.search(r"(?<!\w)"+re.escape(alias_text)+r"(?!\w)",low):
      if isinstance(target,dict):cid=str(target.get("canonical_id") or _slug(target.get("canonical_name") or alias));name=str(target.get("canonical_name") or alias)
-     else:cid=str(target);name=str(alias)
+     else:
+      cid=str(target);name=str(alias)
+      for registry_name in ("PRODUCT_ENTITY_REGISTRY","COMPONENT_ENTITY_REGISTRY","PROCESS_ENTITY_REGISTRY"):
+       record=getattr(self.registry,registry_name,{}).get(cid) if isinstance(getattr(self.registry,registry_name,{}),dict) else None
+       if isinstance(record,dict) and record.get("canonical_name"):name=str(record["canonical_name"]);break
      out.append((len(alias_text),EntityRef(kind,cid,name,str(alias),1.0,"registry")))
   return out
 
