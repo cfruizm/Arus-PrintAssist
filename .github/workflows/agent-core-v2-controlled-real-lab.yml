@@ -1,0 +1,70 @@
+name: Agent Core v2 controlled real lab
+
+on:
+  workflow_dispatch:
+    inputs:
+      scenario:
+        description: "Escenario existente que se ejecutara"
+        required: true
+        default: "monitoring"
+        type: choice
+        options:
+          - monitoring
+          - console_access
+          - missing_jobs
+          - hive_pin_question
+          - hive_pin_statement
+          - requirements
+          - out_of_scope
+
+permissions:
+  contents: read
+
+env:
+  LLM_PROVIDER: groq
+  LLM_FALLBACK_ENABLED: "false"
+  LLM_MAX_CALLS_PER_SESSION: "6"
+  LLM_MAX_TOTAL_TOKENS_PER_SESSION: "4000"
+  LLM_ORCHESTRATOR_MAX_TOKENS: "220"
+  LLM_EVIDENCE_JUDGE_MAX_TOKENS: "260"
+  LLM_ANSWER_MAX_TOKENS: "380"
+  AGENT_CORE_V2_INITIAL_CANDIDATES: "3"
+  AGENT_CORE_V2_MAX_CANDIDATES: "5"
+
+jobs:
+  controlled-real-lab:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install project dependencies
+        run: pip install -r requirements.txt
+
+      - name: Revalidate structural checkpoint
+        run: python tools/agent_core_v2/checkpoint_gate.py
+
+      - name: Execute one controlled real scenario
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          GROQ_ORCHESTRATOR_MODEL: ${{ vars.GROQ_ORCHESTRATOR_MODEL }}
+          GROQ_ANSWER_MODEL: ${{ vars.GROQ_ANSWER_MODEL }}
+          GROQ_STRUCTURED_OUTPUT_MODE: ${{ vars.GROQ_STRUCTURED_OUTPUT_MODE }}
+        run: python tools/agent_core_v2/run_controlled_real_lab.py --scenario "${{ inputs.scenario }}"
+
+      - name: Upload laboratory evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-core-v2-real-lab-${{ inputs.scenario }}
+          path: |
+            artifacts/agent_core_v2_checkpoint.json
+            artifacts/agent_core_v2_real_lab.json
+          if-no-files-found: warn
