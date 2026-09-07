@@ -21,6 +21,7 @@ permissions:
   contents: read
 
 env:
+  PYTHONPATH: ${{ github.workspace }}
   LLM_PROVIDER: groq
   LLM_FALLBACK_ENABLED: "false"
   LLM_MAX_CALLS_PER_SESSION: "6"
@@ -35,22 +36,23 @@ jobs:
   controlled-real-lab:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: ${{ github.workspace }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: pip
-
       - name: Install project dependencies
         run: pip install -r requirements.txt
-
       - name: Revalidate structural checkpoint
         run: python tools/agent_core_v2/checkpoint_gate.py
-
+      - name: Verify project imports
+        run: python -c "import app; from app.agent_core_v2.real_lab import run_real_scenario; print('Project imports OK')"
       - name: Execute one controlled real scenario
         env:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
@@ -58,7 +60,6 @@ jobs:
           GROQ_ANSWER_MODEL: ${{ vars.GROQ_ANSWER_MODEL }}
           GROQ_STRUCTURED_OUTPUT_MODE: ${{ vars.GROQ_STRUCTURED_OUTPUT_MODE }}
         run: python tools/agent_core_v2/run_controlled_real_lab.py --scenario "${{ inputs.scenario }}"
-
       - name: Upload laboratory evidence
         if: always()
         uses: actions/upload-artifact@v4
