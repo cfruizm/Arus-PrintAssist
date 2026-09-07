@@ -51,11 +51,12 @@
     "id": "monitoring",
     "name": "Monitoreo y alcance",
     "messages": [
-      "HP SDS Monitor dejó de reportar información y afecta a varios equipos. ¿Qué validaciones corresponden?"
+      "HP SDS dejó de reportar información y afecta a varios equipos. ¿Qué validaciones corresponden?"
     ],
     "expected": {
       "intent": "troubleshooting",
-      "action": "retrieve"
+      "action": "retrieve",
+      "product_id": "hp_sds"
     }
   },
   {
