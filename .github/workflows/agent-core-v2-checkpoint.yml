@@ -1,0 +1,27 @@
+name: Agent Core v2 checkpoint
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "app/agent_core_v2/**"
+      - "tools/agent_core_v2/**"
+      - ".github/workflows/agent-core-v2-checkpoint.yml"
+permissions:
+  contents: read
+jobs:
+  checkpoint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Run zero-cost checkpoint gate
+        run: python tools/agent_core_v2/checkpoint_gate.py
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-core-v2-checkpoint
+          path: artifacts/agent_core_v2_checkpoint.json
+          if-no-files-found: error
