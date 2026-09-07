@@ -56,7 +56,8 @@
     "expected": {
       "intent": "troubleshooting",
       "action": "retrieve",
-      "product_id": "hp_sds"
+      "product_id": "hp_sds",
+      "affected_scope": "varios equipos"
     }
   },
   {
