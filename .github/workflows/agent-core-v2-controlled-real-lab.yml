@@ -39,7 +39,9 @@ jobs:
           cache: pip
       - run: pip install -r requirements.txt
       - run: python tools/agent_core_v2/checkpoint_gate.py
-      - name: Verify project imports and configured models
+      - name: Validate normalized semantic contract
+        run: python tools/agent_core_v2/test_contract_normalization.py
+      - name: Verify imports and models
         run: python -c "import os,app; from app.agent_core_v2.real_lab import run_real_scenario; assert os.environ['GROQ_ORCHESTRATOR_MODEL']=='qwen/qwen3.8-27b'; assert os.environ['GROQ_ANSWER_MODEL']=='qwen/qwen3.8-27b'; print('Imports and Qwen models OK')"
       - name: Execute one controlled real scenario
         env:
