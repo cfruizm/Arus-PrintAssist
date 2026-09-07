@@ -40,4 +40,5 @@ def cancel_current_flow(secrets,s):
  return _append(store,"Cancelar flujo actual",result)
 def public_state(store):return deepcopy(store["state"].to_dict())
 def export_session(s):
- store=get_store(s);return {"format":"agent_core_v2_free_lab_session","messages":deepcopy(store["messages"]),"turns":deepcopy(store["turns"]),"state":public_state(store),"errors":deepcopy(store["errors"]),"production_changed":False}
+ store=get_store(s);history=deepcopy(list(s.get("llm_gateway_history",[]) or []));usage={"calls":len(history),"prompt_tokens":sum(int((x.get("usage") or {}).get("prompt_tokens",0) or 0) for x in history),"completion_tokens":sum(int((x.get("usage") or {}).get("completion_tokens",0) or 0) for x in history),"total_tokens":sum(int((x.get("usage") or {}).get("total_tokens",0) or 0) for x in history)}
+ return {"format":"agent_core_v2_free_lab_session","messages":deepcopy(store["messages"]),"turns":deepcopy(store["turns"]),"state":public_state(store),"errors":deepcopy(store["errors"]),"gateway_history":history,"usage":usage,"production_changed":False}
