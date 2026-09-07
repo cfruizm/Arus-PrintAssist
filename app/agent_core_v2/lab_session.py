@@ -19,7 +19,11 @@ def _new_store():return {"state":ConversationState(conversation_id="free-lab"),"
 def get_store(s):
  if SESSION_KEY not in s:s[SESSION_KEY]=_new_store()
  return s[SESSION_KEY]
-def reset_store(s):s[SESSION_KEY]=_new_store();return s[SESSION_KEY]
+def reset_store(s):
+ s[SESSION_KEY]=_new_store()
+ for key in ("llm_gateway_history","llm_gateway_calls","llm_gateway_tokens"):
+  s.pop(key,None)
+ return s[SESSION_KEY]
 def build_engine(secrets,s):
  gateway=LLMGateway(load_gateway_config(secrets),s);route=AdaptiveCostRouteController(int(secrets.get("AGENT_CORE_V2_INITIAL_CANDIDATES",3)),int(secrets.get("AGENT_CORE_V2_MAX_CANDIDATES",6)));evidence=SemanticEvidencePipeline(_retrieve,gateway,route.max_candidates,int(secrets.get("LLM_EVIDENCE_JUDGE_MAX_TOKENS",300)));return TurnEngine(QwenInterpreter(gateway,int(secrets.get("LLM_ORCHESTRATOR_MAX_TOKENS",240))),evidence,ResponseComposer(gateway,int(secrets.get("LLM_ANSWER_MAX_TOKENS",400))),EntityResolver(),route)
 def _append(store,user_text,result):

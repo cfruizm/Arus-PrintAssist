@@ -12,10 +12,8 @@ class DecisionReconciler:
 
   if p.conversation_act in LATERAL_ACTS:
    action="respond_directly";relation="independent_question";entities=[];reasons.append("lateral_act_preserves_technical_topic")
-  elif p.conversation_act=="technical_request" and intent in TECHNICAL_INTENTS:
-   action="retrieve";reasons.append("documentation_first_derived_by_python")
-  elif intent in TECHNICAL_INTENTS and action=="ask_clarification" and p.confidence>=0.6 and (entities or p.facts):
-   action="retrieve";reasons.append("technical_contract_reconciled_from_structured_evidence")
+  elif intent in TECHNICAL_INTENTS and p.confidence>=0.6:
+   action="retrieve";reasons.append("documentation_first_for_confident_technical_intent")
   elif action=="retrieve" and intent not in TECHNICAL_INTENTS:
    action="ask_clarification";reasons.append("invalid_document_request")
 
