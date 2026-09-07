@@ -6,13 +6,12 @@ ACTS={"technical_request","case_update","attempt","attempt_result","capability",
 INTENTS={"conceptual","procedural","troubleshooting","requirements","architecture","warranty","unknown"}
 RELATIONS={"same_topic","new_topic","return_to_previous","independent_question","unknown"}
 FACTS={"symptom","affected_scope","timeline","change_context","environment","error_message","version","location","frequency","observed_behavior","expected_behavior","attempted_action","attempt_result","technical_context"}
-SCHEMA={"type":"object","properties":{"conversation_act":{"type":"string","enum":sorted(ACTS)},"intent":{"type":"string","enum":sorted(INTENTS)},"topic_relation":{"type":"string","enum":sorted(RELATIONS)},"entities":{"type":"array","items":{"type":"object"}},"facts":{"type":"array","items":{"type":"object"}},"requires_documents":{"type":"boolean"},"escalation_action":{"type":"string","enum":["none","start","continue","finish","cancel"]},"confidence":{"type":"number"},"reasoning_summary":{"type":"string"}},"required":["conversation_act","intent","topic_relation","entities","facts","requires_documents","escalation_action","confidence","reasoning_summary"]}
+SCHEMA={"type":"object","additionalProperties":False,"properties":{"conversation_act":{"type":"string","enum":sorted(ACTS)},"intent":{"type":"string","enum":sorted(INTENTS)},"topic_relation":{"type":"string","enum":sorted(RELATIONS)},"entities":{"type":"array","items":{"type":"object"}},"facts":{"type":"array","items":{"type":"object"}},"requires_documents":{"type":"boolean"},"escalation_action":{"type":"string","enum":["none","start","continue","finish","cancel"]},"confidence":{"type":"number"},"reasoning_summary":{"type":"string"}},"required":["conversation_act","intent","topic_relation","entities","facts","requires_documents","escalation_action","confidence","reasoning_summary"]}
 
 def _extract(text):
  text=str(text or "").strip();a=text.find("{");b=text.rfind("}")
  if a<0 or b<a:raise ValueError("incomplete_json")
  return json.loads(text[a:b+1])
-def _active_intent(state):return getattr(getattr(state,"active_topic",None),"intent",None)
 def _proposal(act="clarification",intent="unknown",relation="same_topic",entities=None,facts=None,docs=False,esc="none",confidence=.35,summary="fallback"):
  action="respond_directly";question=None
  if act=="technical_request":action="retrieve" if docs else "respond_directly"
@@ -24,7 +23,7 @@ def _proposal(act="clarification",intent="unknown",relation="same_topic",entitie
  elif act in {"clarification","unknown"}:action="ask_clarification";question="No estoy seguro de haber entendido. ¿Puedes precisar qué necesitas respecto al caso actual?"
  elif act=="capability":intent="capabilities"
  elif act in {"social","farewell"}:intent="social"
- return InterpreterProposal(conversation_act=act,intent=intent,requested_action=action,topic_relation=relation,entities=entities or [],facts=facts or [],clarification_question=question,confidence=confidence,reasoning_summary=summary)
+ return InterpreterProposal(act,intent,action,relation,entities or [],facts or [],question,confidence,summary)
 def _normalize(raw,state):
  r=dict(raw or {});act=str(r.get("conversation_act") or "unknown");intent=str(r.get("intent") or "unknown");relation=str(r.get("topic_relation") or "unknown");docs=bool(r.get("requires_documents",False));esc=str(r.get("escalation_action") or "none")
  if act not in ACTS:act="unknown"
@@ -41,20 +40,30 @@ def _normalize(raw,state):
   category=aliases.get(str(x.get("type") or x.get("category") or "technical_context"),str(x.get("type") or x.get("category") or "technical_context"));value=str(x.get("value") or x.get("fact") or "").strip()
   if category in FACTS and value:facts.append({"type":category,"value":value,"confidence":float(x.get("confidence",r.get("confidence",0)) or 0),"correction":bool(x.get("correction",False)),"source":"semantic_current_turn"})
  categories={x["type"] for x in facts};attempts=getattr(getattr(state,"technical_case",None),"attempts",[]) or []
- # Contract coherence. These checks are semantic structure, not message keywords.
  invalid=(act=="technical_request" and intent=="unknown") or (act in {"capability","social","farewell"} and (entities or docs or intent not in {"unknown"})) or (act=="attempt" and "attempted_action" not in categories) or (act=="attempt_result" and ("attempt_result" not in categories or not attempts))
- if invalid:return _proposal(relation="same_topic",summary="fallback:incoherent_contract")
+ if invalid:return _proposal(summary="fallback:incoherent_contract")
  return _proposal(act,intent,relation,entities,facts,docs,esc,float(r.get("confidence",0) or 0),str(r.get("reasoning_summary") or "")[:120])
+
 class QwenInterpreter:
- def __init__(self,gateway,max_tokens=260):self.gateway=gateway;self.max_tokens=max(220,min(320,int(max_tokens)));self.last_trace={}
- def interpret(self,message,state):
+ def __init__(self,gateway,max_tokens=260):self.gateway=gateway;self.max_tokens=max(220,min(360,int(max_tokens)));self.last_trace={}
+ def _request(self,message,state,response_schema,max_tokens,purpose):
   from app.llm_gateway.models import LLMRequest
-  system="""Interpret only the current conversational turn, using canonical state for references and omitted entities. Product and case context may persist, but the previous intent must never override a clear current request. technical_request intent: conceptual for definition/purpose, procedural for how-to steps, requirements for prerequisites/dependencies, troubleshooting for a failure or next validation, architecture or warranty when applicable. capability concerns the assistant itself and must have no product entity or documents. social and farewell are lateral conversation acts, must have no product entity, no documents, and must not change the technical topic. Extract error messages and inability to perform an operation as error_message, symptom or observed_behavior, not generic context. Escalation uses the existing canonical escalation action. Return compact JSON only."""
-  payload={"current_message":message,"canonical_state":state.to_dict()};res=self.gateway.complete(LLMRequest([{"role":"system","content":system},{"role":"user","content":json.dumps(payload,ensure_ascii=False,separators=(",",":"))}],"agent_core_v2_current_turn",self.max_tokens,0.,SCHEMA))
-  self.last_trace={"original_message":message,"provider_ok":bool(res.ok),"finish_reason":res.finish_reason}
-  if not res.ok or res.finish_reason=="length":return _proposal(summary="fallback:provider")
-  try:return _normalize(_extract(res.text),state)
-  except Exception:return _proposal(summary="fallback:invalid_json")
-class ScriptedInterpreter:
- def __init__(self,outputs):self.outputs=list(outputs);self.i=0;self.last_trace={}
- def interpret(self,message,state):raw=self.outputs[self.i];self.i+=1;return _normalize(raw,state)
+  system="""Classify only the current conversational turn. Use canonical state only to resolve omitted context. A clear request about a failure, degraded behavior, impact or next technical validation is troubleshooting and requires documents. Definitions are conceptual, how-to instructions are procedural, prerequisites are requirements. Extract explicit symptoms, affected scope, attempts and results. Return one compact JSON object only, with every required field and no markdown."""
+  payload={"current_message":message,"canonical_state":state.to_dict()}
+  return self.gateway.complete(LLMRequest([{"role":"system","content":system},{"role":"user","content":json.dumps(payload,ensure_ascii=False,separators=(",",":"))}],purpose,max_tokens,0.,response_schema))
+ def interpret(self,message,state):
+  first=self._request(message,state,SCHEMA,self.max_tokens,"agent_core_v2_current_turn")
+  attempts=[{"stage":"structured","ok":bool(first.ok),"finish_reason":first.finish_reason,"error_code":first.error_code,"model":first.model}]
+  candidate=first
+  if not first.ok or not str(first.text or "").strip():
+   second=self._request(message,state,None,min(260,self.max_tokens),"agent_core_v2_current_turn_recovery")
+   attempts.append({"stage":"text_json_recovery","ok":bool(second.ok),"finish_reason":second.finish_reason,"error_code":second.error_code,"model":second.model})
+   candidate=second
+  try:
+   raw=_extract(candidate.text) if candidate.ok else None
+   proposal=_normalize(raw,state) if raw is not None else _proposal(summary="fallback:provider_after_recovery")
+   parsed=raw is not None
+  except Exception as exc:
+   proposal=_proposal(summary="fallback:invalid_json_after_recovery");parsed=False;attempts[-1]["parse_error"]=type(exc).__name__
+  self.last_trace={"original_message":message,"provider_ok":bool(candidate.ok),"finish_reason":candidate.finish_reason,"parsed":parsed,"recovery_used":len(attempts)>1,"attempts":attempts}
+  return proposal
