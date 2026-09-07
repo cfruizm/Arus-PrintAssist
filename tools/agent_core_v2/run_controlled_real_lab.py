@@ -7,6 +7,11 @@ import sys
 from pathlib import Path
 from typing import Any
 
+# Make project imports independent from the shell working directory.
+REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+if str(REPOSITORY_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPOSITORY_ROOT))
+
 
 def load_scenarios(path: Path) -> list[dict[str, Any]]:
     data = json.loads(path.read_text(encoding="utf-8"))
@@ -47,11 +52,20 @@ def build_secrets() -> dict[str, Any]:
     return values
 
 
-def preflight(secrets: dict[str, Any]) -> None:
+def preflight(secrets: dict[str, Any]) -> dict[str, Any]:
     provider = str(secrets.get("LLM_PROVIDER") or "groq").strip().lower()
     required = "GROQ_API_KEY" if provider == "groq" else "HF_TOKEN"
     if not secrets.get(required):
         raise RuntimeError(f"Falta el secreto requerido para {provider}: {required}")
+    import app
+    from app.agent_core_v2.real_lab import run_real_scenario
+    return {
+        "provider": provider,
+        "required_secret_present": True,
+        "repository_root": str(REPOSITORY_ROOT),
+        "app_import": "passed",
+        "real_lab_import": "passed",
+    }
 
 
 def compact_result(result: dict[str, Any]) -> dict[str, Any]:
@@ -78,8 +92,8 @@ def compact_result(result: dict[str, Any]) -> dict[str, Any]:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Ejecuta un escenario real controlado de Agent Core v2.")
     parser.add_argument("--scenario", default="monitoring")
-    parser.add_argument("--scenarios-file", default="tools/agent_core_v2/real_lab_scenarios.json")
-    parser.add_argument("--output", default="artifacts/agent_core_v2_real_lab.json")
+    parser.add_argument("--scenarios-file", default=str(REPOSITORY_ROOT / "tools/agent_core_v2/real_lab_scenarios.json"))
+    parser.add_argument("--output", default=str(REPOSITORY_ROOT / "artifacts/agent_core_v2_real_lab.json"))
     args = parser.parse_args()
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -94,11 +108,10 @@ def main() -> int:
         rows = load_scenarios(Path(args.scenarios_file))
         scenario = select_scenario(rows, args.scenario)
         secrets = build_secrets()
-        preflight(secrets)
+        envelope["preflight_checks"] = preflight(secrets)
         envelope["preflight"] = "passed"
         from app.agent_core_v2.real_lab import run_real_scenario
-        session_state: dict[str, Any] = {}
-        result = run_real_scenario(scenario, secrets, session_state)
+        result = run_real_scenario(scenario, secrets, {})
         envelope["result"] = result
         envelope["summary"] = compact_result(result)
         passed = result.get("status") == "ok" and bool(result.get("checkpoint_passed"))
