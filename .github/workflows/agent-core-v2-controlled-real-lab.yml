@@ -1,5 +1,4 @@
 name: Agent Core v2 controlled real lab
-
 on:
   workflow_dispatch:
     inputs:
@@ -8,30 +7,23 @@ on:
         required: true
         default: "monitoring"
         type: choice
-        options:
-          - monitoring
-          - console_access
-          - missing_jobs
-          - hive_pin_question
-          - hive_pin_statement
-          - requirements
-          - out_of_scope
-
+        options: [monitoring, console_access, missing_jobs, hive_pin_question, hive_pin_statement, requirements, out_of_scope]
 permissions:
   contents: read
-
 env:
   PYTHONPATH: ${{ github.workspace }}
   LLM_PROVIDER: groq
   LLM_FALLBACK_ENABLED: "false"
+  GROQ_ORCHESTRATOR_MODEL: "qwen/qwen3.8-27b"
+  GROQ_ANSWER_MODEL: "qwen/qwen3.8-27b"
+  GROQ_STRUCTURED_OUTPUT_MODE: "best_effort"
   LLM_MAX_CALLS_PER_SESSION: "6"
   LLM_MAX_TOTAL_TOKENS_PER_SESSION: "4000"
-  LLM_ORCHESTRATOR_MAX_TOKENS: "220"
-  LLM_EVIDENCE_JUDGE_MAX_TOKENS: "260"
-  LLM_ANSWER_MAX_TOKENS: "380"
+  LLM_ORCHESTRATOR_MAX_TOKENS: "300"
+  LLM_EVIDENCE_JUDGE_MAX_TOKENS: "300"
+  LLM_ANSWER_MAX_TOKENS: "400"
   AGENT_CORE_V2_INITIAL_CANDIDATES: "3"
   AGENT_CORE_V2_MAX_CANDIDATES: "5"
-
 jobs:
   controlled-real-lab:
     runs-on: ubuntu-latest
@@ -40,25 +32,18 @@ jobs:
       run:
         working-directory: ${{ github.workspace }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: pip
-      - name: Install project dependencies
-        run: pip install -r requirements.txt
-      - name: Revalidate structural checkpoint
-        run: python tools/agent_core_v2/checkpoint_gate.py
-      - name: Verify project imports
-        run: python -c "import app; from app.agent_core_v2.real_lab import run_real_scenario; print('Project imports OK')"
+      - run: pip install -r requirements.txt
+      - run: python tools/agent_core_v2/checkpoint_gate.py
+      - name: Verify project imports and configured models
+        run: python -c "import os,app; from app.agent_core_v2.real_lab import run_real_scenario; assert os.environ['GROQ_ORCHESTRATOR_MODEL']=='qwen/qwen3.8-27b'; assert os.environ['GROQ_ANSWER_MODEL']=='qwen/qwen3.8-27b'; print('Imports and Qwen models OK')"
       - name: Execute one controlled real scenario
         env:
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-          GROQ_ORCHESTRATOR_MODEL: ${{ vars.GROQ_ORCHESTRATOR_MODEL }}
-          GROQ_ANSWER_MODEL: ${{ vars.GROQ_ANSWER_MODEL }}
-          GROQ_STRUCTURED_OUTPUT_MODE: ${{ vars.GROQ_STRUCTURED_OUTPUT_MODE }}
         run: python tools/agent_core_v2/run_controlled_real_lab.py --scenario "${{ inputs.scenario }}"
       - name: Upload laboratory evidence
         if: always()
