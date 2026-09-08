@@ -19,6 +19,13 @@ def _normalize(r,state):
  if rel not in RELATIONS:rel="unknown"
  docs=bool(r.get("requires_documents")); entities=r.get("entities") if isinstance(r.get("entities"),list) else []; facts=r.get("facts") if isinstance(r.get("facts"),list) else []
  if act in {"social","farewell","capability"}: docs=False;entities=[];rel="independent_question"
+ # A technical intent with a concrete subject or an active topic is an answerable request.
+ # The model may label it clarification while explaining that it is a direct request.
+ active=bool(getattr(getattr(state,"active_topic",None),"products",[]) or getattr(getattr(state,"active_topic",None),"processes",[]))
+ summary=str(r.get("reasoning_summary") or "").casefold()
+ direct_semantics=any(x in summary for x in ("direct request","direct query","requests technical","requests general","procedural request","prerequisites"))
+ if act=="clarification" and intent in INTENTS-{"unknown"} and (entities or active or direct_semantics):act="technical_request"
+ if act=="technical_request" and intent in INTENTS-{"unknown"}: docs=True
  if act=="technical_request" and intent in INTENTS-{"unknown"}: action="retrieve" if docs else "respond_directly";question=None
  elif act=="clarification":action="ask_clarification";question="¿Podrías ampliar la solicitud?"
  else:action="respond_directly";question=None

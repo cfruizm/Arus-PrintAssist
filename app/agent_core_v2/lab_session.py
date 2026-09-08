@@ -15,17 +15,18 @@ SESSION_KEY="agent_core_v2_free_lab"
 
 def _retrieve(query,limit):
  result=retrieve_from_existing_backend(query,limit);return list(result.get("evidence") or []) if isinstance(result,dict) and result.get("ok") else []
-def _new_store():return {"state":ConversationState(conversation_id="free-lab"),"messages":[],"turns":[],"errors":[]}
+def _new_store():return {"state":ConversationState(conversation_id="free-lab"),"messages":[],"turns":[],"errors":[],"engine":None,"engine_signature":None}
 def get_store(s):
  if SESSION_KEY not in s:s[SESSION_KEY]=_new_store()
  return s[SESSION_KEY]
-def reset_store(s):
- s[SESSION_KEY]=_new_store()
- for key in ("llm_gateway_history","llm_gateway_calls","llm_gateway_tokens"):
-  s.pop(key,None)
- return s[SESSION_KEY]
+def reset_store(s):s[SESSION_KEY]=_new_store();return s[SESSION_KEY]
+def _engine_signature(secrets):
+ keys=("LLM_PROVIDER","LLM_MODEL","AGENT_CORE_V2_INITIAL_CANDIDATES","AGENT_CORE_V2_MAX_CANDIDATES","LLM_EVIDENCE_JUDGE_MAX_TOKENS","LLM_ORCHESTRATOR_MAX_TOKENS","LLM_ANSWER_MAX_TOKENS")
+ return tuple((key,str(secrets.get(key,""))) for key in keys)
 def build_engine(secrets,s):
- gateway=LLMGateway(load_gateway_config(secrets),s);route=AdaptiveCostRouteController(int(secrets.get("AGENT_CORE_V2_INITIAL_CANDIDATES",3)),int(secrets.get("AGENT_CORE_V2_MAX_CANDIDATES",6)));evidence=SemanticEvidencePipeline(_retrieve,gateway,route.max_candidates,int(secrets.get("LLM_EVIDENCE_JUDGE_MAX_TOKENS",300)));return TurnEngine(QwenInterpreter(gateway,int(secrets.get("LLM_ORCHESTRATOR_MAX_TOKENS",240))),evidence,ResponseComposer(gateway,int(secrets.get("LLM_ANSWER_MAX_TOKENS",400))),EntityResolver(),route)
+ store=get_store(s);signature=_engine_signature(secrets)
+ if store.get("engine") is not None and store.get("engine_signature")==signature:return store["engine"]
+ gateway=LLMGateway(load_gateway_config(secrets),s);route=AdaptiveCostRouteController(int(secrets.get("AGENT_CORE_V2_INITIAL_CANDIDATES",3)),int(secrets.get("AGENT_CORE_V2_MAX_CANDIDATES",6)));evidence=SemanticEvidencePipeline(_retrieve,gateway,route.max_candidates,int(secrets.get("LLM_EVIDENCE_JUDGE_MAX_TOKENS",300)));engine=TurnEngine(QwenInterpreter(gateway,int(secrets.get("LLM_ORCHESTRATOR_MAX_TOKENS",320))),evidence,ResponseComposer(gateway,int(secrets.get("LLM_ANSWER_MAX_TOKENS",760))),EntityResolver(),route);store["engine"]=engine;store["engine_signature"]=signature;return engine
 def _append(store,user_text,result):
  answer=str((result.get("answer") or {}).get("text") or "").strip() or "El turno fue registrado, pero no produjo una respuesta visible.";store["messages"].extend([{"role":"user","content":user_text},{"role":"assistant","content":answer}]);store["turns"].append(result);return result
 def process_message(message,secrets,s):
@@ -44,5 +45,4 @@ def cancel_current_flow(secrets,s):
  return _append(store,"Cancelar flujo actual",result)
 def public_state(store):return deepcopy(store["state"].to_dict())
 def export_session(s):
- store=get_store(s);history=deepcopy(list(s.get("llm_gateway_history",[]) or []));usage={"calls":len(history),"prompt_tokens":sum(int((x.get("usage") or {}).get("prompt_tokens",0) or 0) for x in history),"completion_tokens":sum(int((x.get("usage") or {}).get("completion_tokens",0) or 0) for x in history),"total_tokens":sum(int((x.get("usage") or {}).get("total_tokens",0) or 0) for x in history)}
- return {"format":"agent_core_v2_free_lab_session","messages":deepcopy(store["messages"]),"turns":deepcopy(store["turns"]),"state":public_state(store),"errors":deepcopy(store["errors"]),"gateway_history":history,"usage":usage,"production_changed":False}
+ store=get_store(s);return {"format":"agent_core_v2_free_lab_session","messages":deepcopy(store["messages"]),"turns":deepcopy(store["turns"]),"state":public_state(store),"errors":deepcopy(store["errors"]),"production_changed":False}

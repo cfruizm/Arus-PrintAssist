@@ -5,7 +5,11 @@ class DecisionReconciler:
  def reconcile(self,p,state,entities):
   action=p.requested_action;intent=p.intent;relation=p.topic_relation;reasons=[]
   active_products={x.canonical_id for x in state.active_topic.products};current_products={x.canonical_id for x in entities if x.kind=="product"};current_processes={x.canonical_id for x in entities if x.kind=="process"}
+  active_context=bool(active_products or state.active_topic.processes)
+  generic_clarification=(not p.clarification_question) or p.clarification_question.strip() in {"¿Podrías ampliar la solicitud?","Podrías ampliar la solicitud?"}
   if p.conversation_act in LATERAL_ACTS:action="respond_directly";relation="independent_question";entities=[];reasons.append("lateral_act_preserves_topic")
+  elif p.conversation_act=="clarification" and intent in TECHNICAL_INTENTS and generic_clarification and (entities or active_context):
+   action="retrieve";reasons.append("repair_false_clarification_from_resolved_context")
   elif p.conversation_act=="technical_request" and intent in TECHNICAL_INTENTS:action="retrieve";reasons.append("documentation_first")
   elif action=="retrieve" and intent not in TECHNICAL_INTENTS:action="ask_clarification";reasons.append("invalid_document_request")
   if p.conversation_act=="technical_request":
