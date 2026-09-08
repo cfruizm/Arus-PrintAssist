@@ -2,6 +2,7 @@ from __future__ import annotations
 from app.llm_gateway.config import model_for
 from app.llm_gateway.errors import LLMGatewayError
 from app.llm_gateway.models import LLMResult
+import time
 from app.llm_gateway.providers.groq_provider import GroqProvider
 from app.llm_gateway.providers.huggingface_provider import HuggingFaceProvider
 
@@ -25,10 +26,29 @@ class LLMGateway:
     def _error_result(self,provider,model,purpose,exc,fallback_used=False,fallback_provider=None):
         metadata=dict(getattr(exc,"metadata",{}) or {});metadata.setdefault("attempted_model",model);metadata.setdefault("status_code",getattr(exc,"status_code",None))
         return LLMResult(False,provider=provider,model=model,purpose=purpose,error_code=exc.code,error_message=str(exc),fallback_used=fallback_used,fallback_provider=fallback_provider,metadata=metadata)
+    def _reserve_output(self,request):
+        if self.session is None:return request
+        now=time.time();ledger=[x for x in list(self.session.get("llm_gateway_output_ledger",[]) or []) if now-float(x.get("time",0))<60]
+        used=sum(int(x.get("tokens",0)) for x in ledger)
+        # Observed organization limit is 1000 OTPM. Keep a safety margin for concurrency.
+        cap=int(self.session.get("groq_otpm_limit",1000));safe=max(200,int(cap*0.92));available=max(0,safe-used)
+        purpose=str(request.purpose or "")
+        floor=120 if "judge" in purpose else 180 if "current_turn" in purpose else 280
+        requested=int(request.max_tokens or floor);granted=min(requested,available)
+        if granted<floor:granted=min(requested,floor)
+        request.max_tokens=granted
+        self.session["llm_gateway_output_ledger"]=ledger
+        return request
+    def _record_output(self,result):
+        if self.session is None:return
+        now=time.time();ledger=[x for x in list(self.session.get("llm_gateway_output_ledger",[]) or []) if now-float(x.get("time",0))<60]
+        used=int((result.usage or {}).get("completion_tokens",0) or 0)
+        if used:ledger.append({"time":now,"tokens":used,"purpose":result.purpose})
+        self.session["llm_gateway_output_ledger"]=ledger
     def complete(self,request):
-        self._budget();primary=self.config["provider"];primary_model=model_for(self.config,primary,request.purpose)
+        self._budget();request=self._reserve_output(request);primary=self.config["provider"];primary_model=model_for(self.config,primary,request.purpose)
         try:
-            result=self._provider(primary).complete(request,primary_model);self._record(result);return result
+            result=self._provider(primary).complete(request,primary_model);self._record(result);self._record_output(result);return result
         except LLMGatewayError as exc:
             if not (exc.recoverable and self.config["fallback_enabled"] and self.config["fallback_provider"]!=primary):
                 result=self._error_result(primary,primary_model,request.purpose,exc);self._record(result);return result

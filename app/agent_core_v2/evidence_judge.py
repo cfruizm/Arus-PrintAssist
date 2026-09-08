@@ -123,61 +123,31 @@ class SemanticEvidenceJudge:
 
     def evaluate(self, query, intent, entities, candidates):
         from app.llm_gateway.models import LLMRequest
-        selected = list(candidates or [])[: self.max_candidates]
-        valid_ids = {str(item.get("id") or "") for item in selected}
-        payload = {
-            "request": query,
-            "intent": intent,
-            "entities": [
-                {
-                    "kind": getattr(item, "kind", None) or (item.get("kind") if isinstance(item, dict) else None),
-                    "name": getattr(item, "canonical_name", None) or (item.get("canonical_name") if isinstance(item, dict) else None),
-                }
-                for item in entities
-            ],
-            "candidates": [
-                {
-                    "id": item.get("id"),
-                    "title": _clip(item.get("title"), 150),
-                    "metadata": _compact_metadata(item),
-                    "excerpt": _clip(item.get("text"), 520),
-                }
-                for item in selected
-            ],
-        }
-        system = (
-            "Evaluate semantic evidence for the exact request across languages. "
-            "Direct requires the same subject, task, requested object and scope. "
-            "A component, module or operation is narrower than a product-wide request. "
-            "Contextual evidence may support background or diagnostic questions but not a procedure or complete answer. "
-            "Every direct, partial or conditional assessment must include at least one supported_claim grounded in the excerpt. "
-            "Do not invent facts. Return compact JSON only."
-        )
-        result = self.gateway.complete(LLMRequest(
-            [{"role": "system", "content": system}, {"role": "user", "content": json.dumps(payload, ensure_ascii=False, separators=(",", ":"))}],
-            "agent_core_v2_evidence_judge", self.max_tokens, 0.0, JUDGE_SCHEMA,
-        ))
-        if not result.ok or result.finish_reason == "length":
-            return {"ok": False, "error": "judge_truncated" if result.finish_reason == "length" else (result.error_message or "judge_provider_error"), "assessments": [], "provider_result": result.to_dict()}
-        try:
-            raw = _extract_json(result.text)
-        except Exception as exc:
-            return {"ok": False, "error": f"judge_invalid_json:{exc}", "assessments": [], "provider_result": result.to_dict()}
-        assessments, seen = [], set()
-        for item in raw.get("assessments") or []:
-            normalized = _normalized_assessment(item, valid_ids)
-            if normalized and normalized["id"] not in seen:
-                assessments.append(normalized)
-                seen.add(normalized["id"])
-        for missing in sorted(valid_ids - seen):
-            assessments.append({
-                "id": missing, "applicability": "not_applicable", "model_applicability": "not_applicable",
-                "subject_match": "unknown", "task_match": "unknown", "scope_relation": "unknown",
-                "requested_object": "unknown", "source_object": "unknown", "reason": "No valid assessment returned.",
-                "conditions": [], "supported_claims": [], "scope_downgraded": False,
-            })
-        return {"ok": True, "assessments": assessments, "provider_result": result.to_dict(), "compact_candidate_count": len(selected)}
-
+        all_assessments=[];provider_results=[]
+        # Small two-item batches keep structured output well below Groq OTPM and
+        # isolate a malformed/truncated result instead of invalidating all sources.
+        for offset in range(0,len(candidates),2):
+            batch=candidates[offset:offset+2]
+            compact=[{"id":x.get("id"),"title":x.get("title"),"text":str(x.get("text") or "")[:900]} for x in batch]
+            payload={"query":query,"intent":intent,"entities":entities,"sources":compact,"output":"Return assessments only. One object per source. Keep reason under 18 words and supported_claims to one short exact claim."}
+            request=LLMRequest([{"role":"system","content":"Judge evidence applicability. Return compact valid JSON matching the schema. Never omit a source id."},{"role":"user","content":json.dumps(payload,ensure_ascii=False,default=str)}],"agent_core_v2_evidence_judge",min(self.max_tokens,220),0.0,JUDGE_SCHEMA)
+            result=self.gateway.complete(request);provider_results.append(result.to_dict())
+            parsed=[]
+            if result.ok:
+                try:
+                    data=json.loads(result.text);parsed=list(data.get("assessments") or [])
+                except Exception:
+                    # Preserve complete assessment objects even if the outer JSON was cut.
+                    for match in re.finditer(r'\{[^{}]*"id"\s*:\s*"[^"]+"[^{}]*\}',result.text or ""):
+                        try:parsed.append(json.loads(match.group(0)))
+                        except Exception:pass
+            valid_ids={str(x.get("id")) for x in batch}
+            for item in parsed:
+                if str(item.get("id")) in valid_ids:
+                    all_assessments.append(item)
+        assessed_ids={str(x.get("id")) for x in all_assessments}
+        expected_ids={str(x.get("id")) for x in candidates}
+        return {"ok":bool(all_assessments),"complete":assessed_ids==expected_ids,"assessments":all_assessments,"missing_ids":sorted(expected_ids-assessed_ids),"provider_results":provider_results,"provider_result":provider_results[-1] if provider_results else None}
 
 def merge_judgment(candidates, result):
     mapping = {item["id"]: item for item in (result.get("assessments") or [])}
