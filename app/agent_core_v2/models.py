@@ -19,7 +19,7 @@ class ConversationState:
  def to_dict(self):return asdict(self)
 @dataclass
 class InterpreterProposal:
- conversation_act:str;intent:str;requested_action:str;topic_relation:str="unknown";entities:list[dict]=field(default_factory=list);facts:list[dict]=field(default_factory=list);clarification_question:str|None=None;confidence:float=0.;reasoning_summary:str=""
+ conversation_act:str;intent:str;requested_action:str;topic_relation:str="unknown";entities:list[dict]=field(default_factory=list);facts:list[dict]=field(default_factory=list);clarification_question:str|None=None;confidence:float=0.;reasoning_summary:str="";domain_relevance:str="uncertain";domain_confidence:float=0.
 @dataclass
 class CanonicalDecision:
  action:str;intent:str;conversation_act:str;topic_relation:str;entities:list[EntityRef]=field(default_factory=list);facts:list[dict]=field(default_factory=list);clarification_question:str|None=None;confidence:float=0.;reasons:list[str]=field(default_factory=list);state_mutation_allowed:bool=False;requires_retrieval:bool=False
