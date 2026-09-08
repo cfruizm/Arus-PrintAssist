@@ -8,13 +8,13 @@ from app.agent_core_v2.semantic_evidence_pipeline import SemanticEvidencePipelin
 from app.agent_core_v2.response import ResponseComposer
 from app.agent_core_v2.engine import TurnEngine
 from app.agent_core_v2.adaptive_controller import AdaptiveCostRouteController
-from app.integration.lab_retrieval_adapter import retrieve_from_existing_backend
+from app.integration.lab_retrieval_adapter import retrieve_from_existing_backend,retrieve_exact_document
 from app.llm_gateway.config import load_gateway_config
 from app.llm_gateway.gateway import LLMGateway
 SESSION_KEY="agent_core_v2_free_lab"
 
-def _retrieve(query,limit):
- result=retrieve_from_existing_backend(query,limit);return list(result.get("evidence") or []) if isinstance(result,dict) and result.get("ok") else []
+def _retrieve(query,limit,source_identity=None):
+ result=retrieve_exact_document(source_identity,limit) if source_identity else retrieve_from_existing_backend(query,limit);return list(result.get("evidence") or []) if isinstance(result,dict) and result.get("ok") else []
 def _new_store():return {"state":ConversationState(conversation_id="free-lab"),"messages":[],"turns":[],"errors":[],"engine":None,"engine_signature":None}
 def get_store(s):
  if SESSION_KEY not in s:s[SESSION_KEY]=_new_store()
@@ -26,7 +26,7 @@ def _engine_signature(secrets):
 def build_engine(secrets,s):
  store=get_store(s);signature=_engine_signature(secrets)
  if store.get("engine") is not None and store.get("engine_signature")==signature:return store["engine"]
- gateway=LLMGateway(load_gateway_config(secrets),s);route=AdaptiveCostRouteController(int(secrets.get("AGENT_CORE_V2_INITIAL_CANDIDATES",3)),int(secrets.get("AGENT_CORE_V2_MAX_CANDIDATES",6)));evidence=SemanticEvidencePipeline(_retrieve,gateway,route.max_candidates,int(secrets.get("LLM_EVIDENCE_JUDGE_MAX_TOKENS",300)));engine=TurnEngine(QwenInterpreter(gateway,int(secrets.get("LLM_ORCHESTRATOR_MAX_TOKENS",320))),evidence,ResponseComposer(gateway,int(secrets.get("LLM_ANSWER_MAX_TOKENS",760))),EntityResolver(),route);store["engine"]=engine;store["engine_signature"]=signature;return engine
+ gateway=LLMGateway(load_gateway_config(secrets),s);route=AdaptiveCostRouteController(int(secrets.get("AGENT_CORE_V2_INITIAL_CANDIDATES",3)),int(secrets.get("AGENT_CORE_V2_MAX_CANDIDATES",6)));evidence=SemanticEvidencePipeline(_retrieve,gateway,route.max_candidates,int(secrets.get("LLM_EVIDENCE_JUDGE_MAX_TOKENS",300)));engine=TurnEngine(QwenInterpreter(gateway,int(secrets.get("LLM_ORCHESTRATOR_MAX_TOKENS",320))),evidence,ResponseComposer(gateway,int(secrets.get("LLM_ANSWER_MAX_TOKENS",420))),EntityResolver(),route);store["engine"]=engine;store["engine_signature"]=signature;return engine
 def _append(store,user_text,result):
  answer=str((result.get("answer") or {}).get("text") or "").strip() or "El turno fue registrado, pero no produjo una respuesta visible.";store["messages"].extend([{"role":"user","content":user_text},{"role":"assistant","content":answer}]);store["turns"].append(result);return result
 def process_message(message,secrets,s):

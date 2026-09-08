@@ -119,3 +119,31 @@ def retrieve_from_existing_backend(query: str, k: int = 6) -> dict:
         "llm_called": False,
         "production_state_changed": False,
     }
+
+def retrieve_exact_document(source_identity: str, k: int = 12) -> dict:
+    """Return ordered chunks from an already identified document.
+
+    This is intentionally not a general product filter. It is used only after
+    normal retrieval has identified a directly applicable source. Exact source
+    continuation prevents the second pass from drifting to other documents.
+    """
+    identity = str(source_identity or "").strip()
+    if not identity:
+        return {"ok": False, "evidence": [], "count": 0, "error_code": "missing_source_identity"}
+    try:
+        from app.backend import get_vectorstore
+        raw = get_vectorstore()._collection.get(include=["documents", "metadatas"], limit=20000)
+    except Exception as exc:
+        return {"ok": False, "evidence": [], "count": 0, "error_code": "document_scan_failed", "errors": [f"{type(exc).__name__}: {exc}"]}
+    rows=[]
+    for text, metadata in zip(raw.get("documents") or [], raw.get("metadatas") or []):
+        metadata=metadata or {}
+        values={str(metadata.get(key) or "").strip() for key in ("canonical_url","source","source_url")}
+        if identity not in values or not str(text or "").strip():
+            continue
+        try: page=int(metadata.get("page",999999))
+        except Exception: page=999999
+        rows.append((page, RetrievedEvidence(text=str(text)[:5000],title=str(metadata.get("title") or ""),source=identity,url=identity,score=None,metadata=metadata).to_dict()))
+    rows.sort(key=lambda item:item[0])
+    evidence=[item for _,item in rows[:max(1,min(20,int(k)))]]
+    return {"ok": True, "adapter": "exact_document_continuation", "source_identity": identity, "evidence": evidence, "count": len(evidence)}
