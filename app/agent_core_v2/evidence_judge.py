@@ -169,6 +169,13 @@ class SemanticEvidenceJudge:
             if normalized and normalized["id"] not in seen:
                 assessments.append(normalized)
                 seen.add(normalized["id"])
+        for missing in sorted(valid_ids - seen):
+            assessments.append({
+                "id": missing, "applicability": "not_applicable", "model_applicability": "not_applicable",
+                "subject_match": "unknown", "task_match": "unknown", "scope_relation": "unknown",
+                "requested_object": "unknown", "source_object": "unknown", "reason": "No valid assessment returned.",
+                "conditions": [], "supported_claims": [], "scope_downgraded": False,
+            })
         return {"ok": True, "assessments": assessments, "provider_result": result.to_dict(), "compact_candidate_count": len(selected)}
 
 
