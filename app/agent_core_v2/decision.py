@@ -9,13 +9,17 @@ class DecisionReconciler:
   domain=str(getattr(p,"domain_relevance","uncertain") or "uncertain");domain_conf=float(getattr(p,"domain_confidence",0) or 0)
   if domain=="out_of_scope" and domain_conf>=0.70 and p.conversation_act not in {"social","farewell","capability","escalation","cancel"}:
    return CanonicalDecision("decline_out_of_scope","out_of_scope",p.conversation_act,"independent_question",[],[],None,domain_conf,["semantic_print_scope_boundary"],False,False)
+  escalation_status=str(getattr(getattr(state,"escalation",None),"status","inactive") or "inactive")
+  if escalation_status=="collecting" and p.conversation_act not in {"cancel","farewell"}:
+   action="continue_escalation";intent="escalation";relation="same_topic";reasons.append("active_native_escalation_flow")
+
   active_products={x.canonical_id for x in state.active_topic.products}
   current_products={x.canonical_id for x in entities if x.kind=="product"}
   explicit_new_product=bool(active_products and current_products and not current_products.issubset(active_products))
 
   if p.conversation_act in LATERAL_ACTS:
    action="respond_directly";relation="independent_question";entities=[];reasons.append("lateral_act_preserves_technical_topic")
-  elif p.conversation_act=="technical_request" and intent in TECHNICAL_INTENTS:
+  elif p.conversation_act=="technical_request" and intent in TECHNICAL_INTENTS and escalation_status!="collecting":
    action="retrieve";reasons.append("documentation_first_derived_by_python")
   elif action=="retrieve" and intent not in TECHNICAL_INTENTS:
    action="ask_clarification";reasons.append("invalid_document_request")
@@ -28,3 +32,5 @@ class DecisionReconciler:
   intent_changed=p.conversation_act=="technical_request" and intent in TECHNICAL_INTENTS and intent!=active_intent
   mutate=(relation in {"new_topic","return_to_previous"} or action in {"record_case_detail","record_attempt","record_attempt_result","start_escalation","continue_escalation","suspend_escalation","resume_escalation","cancel_all"} or intent_changed) and p.conversation_act not in LATERAL_ACTS
   return CanonicalDecision(action,intent,p.conversation_act,relation,entities,p.facts,p.clarification_question,p.confidence,reasons,mutate,action=="retrieve")
+
+

@@ -1,12 +1,14 @@
 from .models import Attempt
 from .state import *
+from .escalation_flow import NativeEscalationCoordinator
 class TransitionEngine:
  def apply(self,s,d,increment_turn=True):
   if increment_turn:s.turn_number+=1
   a={"applied":[],"skipped":[]}
   if d.action=="cancel_all":cancel(s);a["applied"].append("cancel_all");return a
   if d.topic_relation=="new_topic":new_topic(s);a["applied"].append("new_topic")
-  if d.action=="start_escalation":s.escalation.status="collecting";a["applied"].append("start_escalation")
+  if d.action=="start_escalation":NativeEscalationCoordinator().start(s);a["applied"].append("start_escalation")
+  elif d.action=="continue_escalation":NativeEscalationCoordinator().continue_flow(s, getattr(d,"current_message","") or "", d.facts);a["applied"].append("continue_escalation")
   elif d.action=="suspend_escalation":s.escalation.status="suspended";s.escalation.suspended_reason="independent_question";a["applied"].append("suspend")
   elif d.action=="resume_escalation":s.escalation.status="collecting";s.escalation.suspended_reason=None;a["applied"].append("resume")
   for e in d.entities:
@@ -27,3 +29,5 @@ class TransitionEngine:
     marker=f"{t}: {v}"
     if not any(norm(x)==norm(marker) for x in s.technical_case.evidence):s.technical_case.evidence.append(marker);a["applied"].append(t)
   s.active_topic.intent=d.intent;s.last_action=d.action;return a
+
+
