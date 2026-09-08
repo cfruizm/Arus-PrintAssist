@@ -36,8 +36,7 @@ class SemanticEvidencePipeline:
   size=max(3,int(limit or self.max_candidates));initial=self._candidates(self.retriever(query,size),size);judged=self.judge.evaluate(query,decision.intent,decision.entities or state.active_topic.products,initial)
   amap={str(a.get("id")):a for a in judged.get("assessments") or [] if isinstance(a,dict) and a.get("applicability")!="not_applicable"}
   model_ids=set(amap)
-  # Missing judge assessments remain unassessed. Metadata or lexical overlap can
-  # rank candidates, but can never promote them to approved/direct evidence.
+  # Missing assessments remain unassessed; lexical or metadata matches never become approved evidence.
   assessed=[x for x in initial if x["id"] in amap];result=merge_judgment(assessed,{"assessments":[amap[x["id"]] for x in assessed]}) if assessed else {"retrieved":[],"direct":[],"partial":[],"conditional":[],"contextual":[],"not_applicable":[],"citable":[],"counts":{},"coverage":{}}
   leads=[x for x in initial if self._lead(query,decision,x)];expanded=False
   if leads:
@@ -46,7 +45,7 @@ class SemanticEvidencePipeline:
    except TypeError:raw=[]
    existing={self._fp(x) for x in initial};cont=[x for x in self._candidates(raw,40,start=len(initial)+1) if self._fp(x) not in existing]
    for x in cont:
-    score=self._relevance(query,decision,x);x["query_relevance_score"]=score;x["semantic_assessment"]={"applicability":"contextual","model_applicability":"contextual","subject_match":"same","task_match":"unknown","scope_relation":"unknown","requested_object":"document","source_object":"document","reason":"Ordered chunk preserved for a later semantic assessment.","conditions":[],"supported_claims":[],"scope_downgraded":True};x["eligible"]=False;x["citable"]=False;x["citation_scope"]="none"
+    score=self._relevance(query,decision,x);x["query_relevance_score"]=score;x["semantic_assessment"]={"applicability":"contextual","model_applicability":"contextual","subject_match":"same","task_match":"unknown","scope_relation":"unknown","requested_object":"document","source_object":"document","reason":"Preserved for later semantic assessment.","conditions":[],"supported_claims":[],"scope_downgraded":True};x["eligible"]=False;x["citable"]=False;x["citation_scope"]="none"
    if cont:
     expanded=True
     result["retrieved"]=list(result.get("retrieved") or [])+cont

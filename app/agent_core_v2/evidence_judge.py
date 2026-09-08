@@ -159,8 +159,6 @@ class SemanticEvidenceJudge:
         ))
         if not result.ok:
             return {"ok": False, "error": result.error_message or "judge_provider_error", "assessments": [], "provider_result": result.to_dict()}
-        # A provider can report length even when one or more complete assessments were
-        # returned. Parse first and preserve only structurally complete assessments.
         try:
             raw = _extract_json(result.text)
         except Exception as exc:
