@@ -4,6 +4,12 @@ import json,re
 class ResponseComposer:
  def __init__(self,gateway=None,max_tokens=420):self.gateway=gateway;self.max_tokens=max_tokens
  def compose_conversation(self,message,decision,state):
+  if decision.action in {"start_escalation","continue_escalation","resume_escalation"}:
+   from .escalation_flow import NativeEscalationCoordinator
+   coordinator=NativeEscalationCoordinator()
+   if state.escalation.status=="ready": text=coordinator.summary(state)
+   else: text=coordinator.question_for(state.escalation.pending_field) or "Continuemos con la información pendiente del escalamiento."
+   return {"mode":"native_escalation","text":text,"citations":[],"knowledge_used":False,"escalation_status":state.escalation.status,"pending_field":state.escalation.pending_field}
   if decision.action=="decline_out_of_scope":return {"mode":"out_of_scope","text":"Puedo ayudarte con soporte de impresión, sus plataformas, dispositivos, suministros y procesos. Esa consulta está fuera de este alcance. Si tienes una situación relacionada con impresión, cuéntame y la revisamos.","citations":[],"knowledge_used":False,"scope":"printing"}
   if self.gateway is None:return {"mode":"conversation_pending","text":decision.clarification_question or "¿En qué puedo ayudarte?","citations":[],"knowledge_used":False}
   from app.llm_gateway.models import LLMRequest
@@ -119,3 +125,5 @@ class ResponseComposer:
   elif decision.intent=="conceptual":text=f"No hay afirmaciones documentales aprobadas suficientes para describir {product}. Puedo ofrecer una explicación general claramente identificada como conocimiento complementario o realizar una búsqueda documental más específica."
   else:text=f"La documentación disponible no permitió responder completamente sobre {product}. **Orientación general complementaria:** puedo ayudarte a delimitar el alcance, comparar opciones seguras y recopilar la información necesaria antes de escalar."
   return {"mode":"safe_hybrid_fallback","text":text,"citations":[],"knowledge_used":True,"unassessed_sources":[x["title"] for x in background],"fallback_reason":reason}
+
+
