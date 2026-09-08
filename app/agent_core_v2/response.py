@@ -5,52 +5,40 @@ class ResponseComposer:
  def compose_conversation(self,message,decision,state):
   if self.gateway is None:return {"mode":"conversation_pending","text":decision.clarification_question or "¿En qué puedo ayudarte?","citations":[],"knowledge_used":False}
   from app.llm_gateway.models import LLMRequest
-  payload={"message":message,"conversation_act":decision.conversation_act,"canonical_state":state.to_dict(),"policy":["Respond naturally and briefly in Spanish.","This is a lateral or workflow response; do not cite documents.","Do not alter or invent technical facts.","For capability, explain documentation-first support, clearly labeled internal knowledge, safe options, case memory and escalation assistance.","For social or farewell, respond in context rather than using a universal greeting.","For escalation, use only the actual canonical escalation status, pending_field and collected_fields. Ask only the real pending field when present; do not invent a parallel escalation schema.","For clarification, use the active product and case to ask one precise question."]}
-  res=self.gateway.complete(LLMRequest([{"role":"system","content":"You are the conversational layer of a printing support agent. Produce only the user-facing response."},{"role":"user","content":json.dumps(payload,ensure_ascii=False,default=str)}],"agent_core_v2_conversation_response",min(self.max_tokens,220),0.,None))
-  if not res.ok or res.finish_reason=="length":
-   text=decision.clarification_question or ("La solicitud de escalamiento quedó registrada. Continuemos con el dato pendiente que muestre el caso." if decision.intent=="escalation" else "Entendido. Podemos continuar con el caso cuando quieras.")
-   return {"mode":"safe_conversation_fallback","text":text,"citations":[],"knowledge_used":False}
-  return {"mode":"natural_conversation","text":res.text.strip(),"citations":[],"knowledge_used":False,"provider":res.provider,"model":res.model,"usage":res.usage,"finish_reason":res.finish_reason}
- def _answer_budget(self,message,evidence):
-  text=str(message or ""); completeness=dict((evidence or {}).get("answer_completeness") or {})
-  broad=bool(completeness.get("broad_request")) or len((evidence or {}).get("citable") or [])>=3
-  requested=680 if broad else 460
-  return min(self.max_tokens,requested)
- def _clean_truncation(self,text):
-  value=str(text or "").strip()
-  if not value:return value
-  # Never expose an unfinished sentence, list marker, heading or open markdown token.
-  cuts=[value.rfind(mark) for mark in (". ",".\n","! ","!\n","? ","?\n")];cut=max(cuts)
+  payload={"message":message,"conversation_act":decision.conversation_act,"state":state.to_dict(),"policy":["Respond naturally and briefly in the user's language.","Use only canonical escalation state.","Ask one precise clarification when needed."]}
+  res=self.gateway.complete(LLMRequest([{"role":"system","content":"You are the conversational layer of a printing support agent."},{"role":"user","content":json.dumps(payload,ensure_ascii=False,default=str)}],"agent_core_v2_conversation_response",min(self.max_tokens,220),0.,None))
+  text=res.text.strip() if res.ok and res.finish_reason!="length" else decision.clarification_question or "Entendido. Podemos continuar con el caso."
+  return {"mode":"natural_conversation" if res.ok else "safe_conversation_fallback","text":text,"citations":[],"knowledge_used":False,"provider":getattr(res,"provider",None),"model":getattr(res,"model",None),"usage":getattr(res,"usage",{}),"finish_reason":getattr(res,"finish_reason",None)}
+ def _citation(self,item):
+  m=item.get("metadata") or {};return {"id":item.get("id"),"title":item.get("title"),"url":item.get("url"),"page":str(m.get("page_label") or m.get("page") or "")}
+ def _budget(self,evidence):return min(self.max_tokens,680 if (evidence.get("answer_completeness") or {}).get("broad_request") else 460)
+ def _clean(self,text):
+  value=str(text or "").strip();positions=[value.rfind(x) for x in (". ",".\n","! ","!\n","? ","?\n")];cut=max(positions) if positions else -1
   if cut>=max(80,int(len(value)*.55)):value=value[:cut+1].rstrip()
-  value=re.sub(r"\n(?:#{1,6}\s+[^\n]*|(?:[-*]|\d+[.)])\s*)$","",value).rstrip()
   if value.count("**")%2:value=value.rsplit("**",1)[0].rstrip()
   return value
  def compose(self,message,decision,state,evidence):
-  approved=(evidence.get("direct") or [])+(evidence.get("partial") or [])+(evidence.get("conditional") or []);contextual=evidence.get("contextual") or [];unassessed=evidence.get("unassessed") or []
-  if self.gateway is None:return {"mode":"pending","text":"Respuesta pendiente.","citations":[],"knowledge_used":False}
+  approved=(evidence.get("direct") or [])+(evidence.get("partial") or [])+(evidence.get("conditional") or [])
+  contextual=evidence.get("contextual") or [];unassessed=evidence.get("unassessed") or []
+  citations=[];seen=set()
+  for item in approved:
+   key=(item.get("url"),str((item.get("metadata") or {}).get("page_label") or (item.get("metadata") or {}).get("page")))
+   if key not in seen:seen.add(key);citations.append(self._citation(item))
+  if self.gateway is None:return {"mode":"pending","text":"Respuesta pendiente.","citations":citations,"knowledge_used":False}
   from app.llm_gateway.models import LLMRequest
   sources=[]
-  for item in approved[:8]:
-   a=item.get("semantic_assessment") or {};meta=item.get("metadata") or {}
-   sources.append({"id":item["id"],"title":item["title"],"page":meta.get("page_label") or meta.get("page"),"scope_relation":a.get("scope_relation"),"source_object":a.get("source_object"),"supported_claims":a.get("supported_claims") or [],"excerpt":str(item.get("text") or "")[:1800],"conditions":a.get("conditions") or []})
-  background=[{"id":x["id"],"title":x["title"],"excerpt":x.get("text","")[:900],"status":"contextual" if x in contextual else "unassessed"} for x in (contextual+unassessed)[:3]]
-  payload={"request":message,"current_intent":decision.intent,"case":state.to_dict(),"documented_sources":sources,"related_unverified_sources":background,"policy":["Documentation is primary. Use the excerpts and supported claims from documented_sources. Never claim the full document is unavailable when excerpts from several pages are present.","Distinguish excerpt coverage from document authority. If several ordered pages of an authoritative matched document are present, synthesize them before declaring partial coverage.","Use internal model knowledge only after exhausting every documented excerpt. Never replace a documented internal procedure with a generic industry procedure.","Complementary guidance must provide useful safe options or diagnostic questions, not empty promises.","State restrictions and avoid inventing product-specific menus, logs, services, parameters or procedures.","Do not close the conversation merely because documentation is incomplete.","Do not repeat unsuccessful actions stored in the case.","Answer the current request, never the historical intent.","Use no more than five compact sections. Put the requested scope first and finish every sentence."] ,"response_contract":{"complete_over_comprehensive":True,"maximum_sections":5,"concise":True}}
-  res=self.gateway.complete(LLMRequest([{"role":"system","content":"Act as a natural printing support assistant. Separate documented evidence, complementary internal knowledge, and restrictions."},{"role":"user","content":json.dumps(payload,ensure_ascii=False,default=str)}],"agent_core_v2_answer",self._answer_budget(message,evidence),0.,None))
-  if not res.ok:return self._fallback(decision,state,background,"provider_unavailable")
-  if res.finish_reason=="length":
-   clean=self._clean_truncation(res.text)
-   return {"mode":"bounded_grounded_answer","text":clean+"\n\nLa respuesta fue cerrada en el último punto completo por el límite temporal de salida del proveedor.","citations":citations,"knowledge_used":False,"provider":res.provider,"model":res.model,"usage":res.usage,"finish_reason":res.finish_reason,"truncation_handled":True}
-  text=res.text.strip();used=set(re.findall(r"\[(S\d+)\]",text));valid={x["id"] for x in sources}
-  if used-valid:return self._fallback(decision,state,background,"invalid_citations")
-  knowledge_used="orientación general complementaria" in text.casefold()
-  return {"mode":"documented" if sources and not knowledge_used else "hybrid_supported","text":text,"citations":sorted(used),"knowledge_used":knowledge_used,"unassessed_sources":[x["title"] for x in background if x["status"]=="unassessed"],"provider":res.provider,"model":res.model,"usage":res.usage,"finish_reason":res.finish_reason}
- def _fallback(self,decision,state,background,reason):
-  names=[]
-  for x in state.active_topic.products:
-   raw=str(getattr(x,"canonical_name","") or getattr(x,"matched_text","") or "");mention=str(getattr(x,"matched_text","") or "");names.append(mention if "_" in raw and mention else raw.replace("_"," ").title())
-  product=", ".join(names) or "el producto indicado"
-  if decision.intent=="troubleshooting":text=f"No pude validar un procedimiento específico para {product}. **Orientación general complementaria:** confirma el mensaje exacto, el alcance del impacto y si el fallo ocurre siempre o bajo una condición concreta. Estas validaciones son generales y no sustituyen documentación del producto. Con esos datos puedo proponerte opciones seguras o preparar el escalamiento."
-  elif decision.intent=="procedural":text=f"No pude confirmar los pasos exactos para {product}. **Orientación general complementaria:** precisemos qué operación deseas realizar, sobre qué componente y en qué entorno. No recomendaré rutas o cambios específicos sin respaldo documental."
-  elif decision.intent=="conceptual":text=f"No pude validar una descripción documental completa de {product}. Puedo ofrecer una explicación general claramente identificada como conocimiento complementario o seguir buscando una fuente de introducción del producto."
-  else:text=f"La documentación disponible no permitió responder completamente sobre {product}. **Orientación general complementaria:** puedo ayudarte a delimitar el alcance, comparar opciones seguras y recopilar la información necesaria antes de escalar."
-  return {"mode":"safe_hybrid_fallback","text":text,"citations":[],"knowledge_used":True,"unassessed_sources":[x["title"] for x in background],"fallback_reason":reason}
+  for item in approved[:12]:
+   a=item.get("semantic_assessment") or {};m=item.get("metadata") or {}
+   sources.append({"id":item.get("id"),"title":item.get("title"),"page":m.get("page_label") or m.get("page"),"applicability":a.get("applicability"),"excerpt":str(item.get("text") or "")[:2200]})
+  background=[{"id":x.get("id"),"title":x.get("title"),"excerpt":str(x.get("text") or "")[:1000],"status":"contextual" if x in contextual else "unassessed"} for x in (contextual+unassessed)[:4]]
+  complete=bool((evidence.get("answer_completeness") or {}).get("complete_enough"))
+  payload={"request":message,"language":"match user","document_evidence":sources,"related_unverified_sources":background,"evidence_complete":complete,"policy":["Answer the exact requested scope first.","Synthesize all relevant excerpts, including multiple chunks from the same page.","Do not say information is absent if any excerpt contains it.","Do not tell the user to consult a document already present in document_evidence.","Never replace an internal documented procedure with a generic procedure.","Use complementary model knowledge only when evidence_complete is false, under a clear warning.","Ignore irrelevant UI, marketing, cover and contents excerpts.","Respond in the user's language.","Use concise bullets and at most five sections.","End every sentence.","Place [S#] after documented claims."],"response_contract":{"complete_over_comprehensive":True,"no_unfinished_sentence":True}}
+  res=self.gateway.complete(LLMRequest([{"role":"system","content":"You are a natural technical support assistant. Documentation is authoritative. Produce only the user-facing answer."},{"role":"user","content":json.dumps(payload,ensure_ascii=False,default=str)}],"agent_core_v2_answer",self._budget(evidence),0.,None))
+  if not res.ok:
+   excerpts=[str(x.get("text") or "").strip() for x in approved[:3] if str(x.get("text") or "").strip()]
+   return {"mode":"document_preserving_fallback","text":"No pude completar la redacción, pero conservé la evidencia recuperada.\n\n"+"\n\n".join(excerpts),"citations":citations,"knowledge_used":False,"error_code":getattr(res,"error_code",None)}
+  text=res.text.strip();handled=False
+  if res.finish_reason=="length":text=self._clean(text)+"\n\nRespuesta cerrada en el último punto completo por el límite temporal del proveedor.";handled=True
+  used_ids=set(re.findall(r"\[(S\d+)\]",text));used=[x for x in citations if not used_ids or x.get("id") in used_ids]
+  knowledge_used=("orientación general complementaria" in text.casefold() or "conocimiento complementario" in text.casefold())
+  return {"mode":"grounded" if approved and not knowledge_used else "grounded_plus_guarded_knowledge","text":text,"citations":used,"knowledge_used":knowledge_used,"internal_knowledge_used":knowledge_used,"unassessed_sources":[x.get("title") for x in unassessed],"provider":res.provider,"model":res.model,"usage":res.usage,"finish_reason":res.finish_reason,"truncation_handled":handled}
