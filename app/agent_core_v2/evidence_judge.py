@@ -157,8 +157,10 @@ class SemanticEvidenceJudge:
             [{"role": "system", "content": system}, {"role": "user", "content": json.dumps(payload, ensure_ascii=False, separators=(",", ":"))}],
             "agent_core_v2_evidence_judge", self.max_tokens, 0.0, JUDGE_SCHEMA,
         ))
-        if not result.ok or result.finish_reason == "length":
-            return {"ok": False, "error": "judge_truncated" if result.finish_reason == "length" else (result.error_message or "judge_provider_error"), "assessments": [], "provider_result": result.to_dict()}
+        if not result.ok:
+            return {"ok": False, "error": result.error_message or "judge_provider_error", "assessments": [], "provider_result": result.to_dict()}
+        # A provider can report length even when one or more complete assessments were
+        # returned. Parse first and preserve only structurally complete assessments.
         try:
             raw = _extract_json(result.text)
         except Exception as exc:
@@ -217,3 +219,5 @@ def merge_judgment(candidates, result):
             "conditional": len(categories["conditional"]), "contextual": len(categories["contextual"]), "citable": len(applicable),
         },
     }
+
+

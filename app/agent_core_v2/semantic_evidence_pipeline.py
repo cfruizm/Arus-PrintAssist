@@ -16,7 +16,7 @@ class SemanticEvidencePipeline:
   for x in raw or []:
    text=str(x.get("text") or "").strip();fp=self._fp(x)
    if not text or fp in seen:continue
-   seen.add(fp);m=dict(x.get("metadata") or {});out.append({"id":f"S{start+len(out)}","title":str(x.get("title") or m.get("title") or ""),"url":str(x.get("url") or self._identity(x)),"text":text[:5000],"metadata":m,"retrieval_score":float(x.get("score") or m.get("score") or .5),"chunk_fingerprint":fp})
+   seen.add(fp);m=dict(x.get("metadata") or {});out.append({"id":f"S{start+len(out)}","title":str(x.get("title") or m.get("title") or ""),"url":str(x.get("url") or self._identity(x)),"text":text[:5000],"metadata":m,"retrieval_score":float(x.get("score") if x.get("score") is not None else (m.get("score") if m.get("score") is not None else 0.0)),"chunk_fingerprint":fp})
    if len(out)>=size:break
   return out
  def _entity_match(self,decision,item):
@@ -36,10 +36,8 @@ class SemanticEvidencePipeline:
   size=max(3,int(limit or self.max_candidates));initial=self._candidates(self.retriever(query,size),size);judged=self.judge.evaluate(query,decision.intent,decision.entities or state.active_topic.products,initial)
   amap={str(a.get("id")):a for a in judged.get("assessments") or [] if isinstance(a,dict) and a.get("applicability")!="not_applicable"}
   model_ids=set(amap)
-  for x in initial:
-   if x["id"] not in amap:
-    a=self._recover(query,decision,x)
-    if a:amap[x["id"]]=a
+  # Missing judge assessments remain unassessed. Metadata or lexical overlap can
+  # rank candidates, but can never promote them to approved/direct evidence.
   assessed=[x for x in initial if x["id"] in amap];result=merge_judgment(assessed,{"assessments":[amap[x["id"]] for x in assessed]}) if assessed else {"retrieved":[],"direct":[],"partial":[],"conditional":[],"contextual":[],"not_applicable":[],"citable":[],"counts":{},"coverage":{}}
   leads=[x for x in initial if self._lead(query,decision,x)];expanded=False
   if leads:
@@ -48,14 +46,17 @@ class SemanticEvidencePipeline:
    except TypeError:raw=[]
    existing={self._fp(x) for x in initial};cont=[x for x in self._candidates(raw,40,start=len(initial)+1) if self._fp(x) not in existing]
    for x in cont:
-    score=self._relevance(query,decision,x);x["query_relevance_score"]=score;x["semantic_assessment"]={"applicability":"direct","model_applicability":"direct","subject_match":"same","task_match":"same","scope_relation":"same","requested_object":"document","source_object":"document","reason":"Ordered chunk from an authoritative matched document.","conditions":[],"supported_claims":[x["text"][:900]],"scope_downgraded":False};x["eligible"]=True;x["citable"]=True;x["citation_scope"]="direct"
+    score=self._relevance(query,decision,x);x["query_relevance_score"]=score;x["semantic_assessment"]={"applicability":"contextual","model_applicability":"contextual","subject_match":"same","task_match":"unknown","scope_relation":"unknown","requested_object":"document","source_object":"document","reason":"Ordered chunk preserved for a later semantic assessment.","conditions":[],"supported_claims":[],"scope_downgraded":True};x["eligible"]=False;x["citable"]=False;x["citation_scope"]="none"
    if cont:
     expanded=True
-    for key in ("retrieved","direct","citable"):result[key]=list(result.get(key) or [])+cont
+    result["retrieved"]=list(result.get("retrieved") or [])+cont
+    result["unassessed"]=list(result.get("unassessed") or [])+cont
   missing=[x for x in initial if x["id"] not in amap];result["unassessed"]=missing;result["retrieved"]=list(result.get("retrieved") or [])+missing
   c=result.get("citable") or [];pages=sorted({str((x.get("metadata") or {}).get("page_label") or (x.get("metadata") or {}).get("page")) for x in c})
   specific=decision.intent in {"conceptual"} or len(_terms(query))<=7
-  result["judge"]={"ok":bool(amap),"complete":not missing,"assessed":len(amap),"expected":len(initial),"missing_ids":[x["id"] for x in missing],"expanded":expanded,"exact_document_continuation":expanded,"document_lead_ids":[x["id"] for x in leads],"deterministic_recoveries":sorted(set(amap)-model_ids),"provider_results":judged.get("provider_results") or ([judged.get("provider_result")] if judged.get("provider_result") else [])}
+  result["judge"]={"ok":bool(amap),"complete":not missing,"assessed":len(amap),"expected":len(initial),"missing_ids":[x["id"] for x in missing],"expanded":expanded,"exact_document_continuation":expanded,"document_lead_ids":[x["id"] for x in leads],"deterministic_recoveries":[],"provider_results":judged.get("provider_results") or ([judged.get("provider_result")] if judged.get("provider_result") else [])}
   result["answer_completeness"]={"broad_request":not specific,"request_scope":"specific" if specific else "broad","multi_pass_used":expanded,"exact_document_used":expanded,"same_page_chunks_preserved":expanded,"citable_passages":len(c),"document_pages":pages,"complete_enough":expanded or bool(result.get("direct"))}
   return result
  def merge_passes(self,first,second):return second or first
+
+

@@ -30,7 +30,15 @@ class DecisionReconciler:
   if p.conversation_act=="cancel" or intent=="cancel":action="cancel_all"
   active_intent=getattr(state.active_topic,"intent",None)
   intent_changed=p.conversation_act=="technical_request" and intent in TECHNICAL_INTENTS and intent!=active_intent
-  mutate=(relation in {"new_topic","return_to_previous"} or action in {"record_case_detail","record_attempt","record_attempt_result","start_escalation","continue_escalation","suspend_escalation","resume_escalation","cancel_all"} or intent_changed) and p.conversation_act not in LATERAL_ACTS
+  has_new_entity=any(
+   not any(existing.kind==entity.kind and existing.canonical_id==entity.canonical_id for existing in (
+    state.active_topic.products+state.active_topic.components+state.active_topic.processes
+   )) for entity in entities
+  )
+  has_case_fact=bool(p.facts) and p.conversation_act=="technical_request"
+  mutate=(relation in {"new_topic","return_to_previous"} or action in {"record_case_detail","record_attempt","record_attempt_result","start_escalation","continue_escalation","suspend_escalation","resume_escalation","cancel_all"} or intent_changed or has_new_entity or has_case_fact) and p.conversation_act not in LATERAL_ACTS
   return CanonicalDecision(action,intent,p.conversation_act,relation,entities,p.facts,p.clarification_question,p.confidence,reasons,mutate,action=="retrieve")
+
+
 
 
