@@ -121,21 +121,25 @@ def retrieve_from_existing_backend(query: str, k: int = 6) -> dict:
     }
 
 
-def retrieve_exact_document(source_identity: str, k: int = 40) -> dict:
-    identity=str(source_identity or "").strip()
-    if not identity:return {"ok":False,"evidence":[],"count":0,"error_code":"missing_source_identity"}
+def retrieve_exact_document(source_identity: str, k: int = 24) -> dict:
+    """Load ordered chunks from one source without collapsing same-page chunks."""
+    identity = str(source_identity or "").strip()
+    if not identity:
+        return {"ok": False, "evidence": [], "count": 0, "error_code": "missing_source_identity"}
     try:
         from app.backend import get_vectorstore
-        raw=get_vectorstore()._collection.get(include=["documents","metadatas"],limit=20000)
-    except Exception as exc:return {"ok":False,"evidence":[],"count":0,"error_code":"document_scan_failed","errors":[f"{type(exc).__name__}: {exc}"]}
+        raw = get_vectorstore()._collection.get(include=["documents", "metadatas"], limit=20000)
+    except Exception as exc:
+        return {"ok": False, "evidence": [], "count": 0, "error_code": "document_scan_failed", "errors": [f"{type(exc).__name__}: {exc}"]}
     rows=[]
-    for ordinal,(text,meta) in enumerate(zip(raw.get("documents") or [],raw.get("metadatas") or [])):
-        meta=meta or {};identities={str(meta.get(x) or "").strip() for x in ("canonical_url","source","source_url")}
-        if identity not in identities or not str(text or "").strip():continue
-        try:page=int(meta.get("page",999999))
+    for ordinal,(text,metadata) in enumerate(zip(raw.get("documents") or [],raw.get("metadatas") or [])):
+        metadata=metadata or {};values={str(metadata.get(x) or "").strip() for x in ("canonical_url","source","source_url")}
+        if identity not in values or not str(text or "").strip():continue
+        try:page=int(metadata.get("page",999999))
         except Exception:page=999999
-        try:chunk=int(meta.get("chunk",meta.get("chunk_index",ordinal)))
+        try:chunk=int(metadata.get("chunk",metadata.get("chunk_index",ordinal)))
         except Exception:chunk=ordinal
-        rows.append((page,chunk,ordinal,RetrievedEvidence(text=str(text)[:6000],title=str(meta.get("title") or ""),source=identity,url=identity,score=None,metadata=meta).to_dict()))
-    rows.sort(key=lambda x:(x[0],x[1],x[2]));e=[x[3] for x in rows[:max(1,min(60,int(k)))] ]
-    return {"ok":True,"adapter":"exact_document_continuation","source_identity":identity,"evidence":e,"count":len(e),"same_page_chunks_preserved":True}
+        rows.append((page,chunk,ordinal,RetrievedEvidence(text=str(text)[:6000],title=str(metadata.get("title") or ""),source=identity,url=identity,score=None,metadata=metadata).to_dict()))
+    rows.sort(key=lambda x:(x[0],x[1],x[2]))
+    evidence=[x[3] for x in rows[:max(1,min(60,int(k)))]]
+    return {"ok":True,"adapter":"exact_document_continuation","source_identity":identity,"evidence":evidence,"count":len(evidence),"same_page_chunks_preserved":True}
