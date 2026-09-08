@@ -20,24 +20,38 @@ class ResponseComposer:
   from app.llm_gateway.models import LLMRequest
   sources=[];seen=set()
   applicability_rank={"direct":0,"conditional":1,"partial":2,"contextual":3}
+  def _claim_quality(claim):
+   value=" ".join(str(claim or "").split())
+   if not value:return -20
+   score=min(len(value),500)/100
+   # Generic extraction-noise signals: table-of-contents leaders and page-number lists.
+   if value.count("...")>=2:score-=15
+   if len(re.findall(r"\.{4,}\s*\d+",value))>=2:score-=15
+   if len(re.findall(r"(?:^|\s)\d{1,3}(?:\s|$)",value))>=8:score-=8
+   return score
   def evidence_rank(item):
    assessment=item.get("semantic_assessment") or {}
    applicability=str(assessment.get("applicability") or "partial").lower()
    subject=0 if assessment.get("subject_match")=="same" else 1
-   task=0 if assessment.get("task_match")=="same" else 1
+   task=0 if assessment.get("task_match")=="same" else (1 if assessment.get("task_match")=="related" else 2)
    claims=assessment.get("supported_claims") or []
+   claim_quality=max([_claim_quality(x) for x in claims] or [-20])
    relevance=-float(item.get("query_relevance_score") or item.get("retrieval_score") or 0)
-   return (applicability_rank.get(applicability,9),subject,task,0 if claims else 1,relevance)
+   return (subject,task,applicability_rank.get(applicability,9),-claim_quality,relevance)
   for item in sorted(approved,key=evidence_rank):
    identity=str(item.get("url") or item.get("source_url") or item.get("title") or item.get("id"));a=item.get("semantic_assessment") or {}
-   claims=[str(x).strip() for x in (a.get("supported_claims") or []) if str(x).strip()]
+   claims=[str(x).strip() for x in (a.get("supported_claims") or []) if str(x).strip() and _claim_quality(x)>-5]
    if identity in seen or not claims:continue
-   seen.add(identity);sources.append({"id":item.get("id"),"title":item.get("title") or "Fuente documental","applicability":a.get("applicability"),"scope_relation":a.get("scope_relation"),"source_object":a.get("source_object"),"supported_claims":claims[:5],"conditions":(a.get("conditions") or [])[:3]})
+   # Evidence about a different task cannot lead an exact procedural or conceptual answer.
+   if a.get("subject_match") not in (None,"same"):continue
+   seen.add(identity);sources.append({"id":item.get("id"),"title":item.get("title") or "Fuente documental","applicability":a.get("applicability"),"subject_match":a.get("subject_match"),"task_match":a.get("task_match"),"scope_relation":a.get("scope_relation"),"source_object":a.get("source_object"),"supported_claims":claims[:5],"conditions":(a.get("conditions") or [])[:3]})
    if len(sources)>=3:break
   background=[{"id":x.get("id"),"title":x.get("title") or "Fuente relacionada","excerpt":x.get("text","")[:500],"status":"contextual" if x in contextual else "unassessed"} for x in (contextual+unassessed)[:1]]
   if not sources and decision.intent in {"procedural","troubleshooting","requirements"}:
    return self._unsupported_action_response(decision,state,background,"no_approved_evidence")
-  payload={"request":message,"current_intent":decision.intent,"case":state.to_dict(),"documented_sources":sources,"related_unverified_sources":background,"policy":["Answer in Spanish and be concise.","Documentation is primary. Cite only supported_claims from documented_sources using [S#].","If evidence is narrower than the request, label its scope accurately; do not claim that documentation is absent when documented_sources is not empty.","If useful, add a short clearly labeled section 'Orientación general complementaria'.","State relevant restrictions and do not invent product-specific menus, logs, services, parameters or procedures.","Answer the current request and do not repeat an earlier fallback."]}
+  if decision.intent=="conceptual" and sources and all(x.get("task_match") not in (None,"same","related") for x in sources):
+   return self._partial_conceptual_response(state,sources,background,"no_definition_aligned_evidence")
+  payload={"request":message,"current_intent":decision.intent,"case":state.to_dict(),"documented_sources":sources,"related_unverified_sources":background,"policy":["Answer in Spanish and be concise.","Documentation is primary. Cite only supported_claims from documented_sources using [S#].","Answer only what the selected claims support. If evidence is narrower than the request, explicitly say the evidence covers only that aspect.","Never claim that documentation lacks a definition or purpose merely because the selected excerpts are narrower; say that the selected evidence is partial.","For conceptual requests, prioritize claims that define purpose or capabilities over installation requirements, release notes, indexes or isolated component behavior.","If useful, add a short clearly labeled section 'Orientación general complementaria'.","State relevant restrictions and do not invent product-specific menus, logs, services, parameters or procedures.","Answer the current request and do not repeat an earlier fallback."]}
   res=self.gateway.complete(LLMRequest([{"role":"system","content":"Act as a natural printing support assistant. Use the compact approved evidence. Separate documented evidence from optional complementary knowledge."},{"role":"user","content":json.dumps(payload,ensure_ascii=False,default=str)}],"agent_core_v2_answer",min(self.max_tokens,650),0.,None))
   if not res.ok or res.finish_reason=="length":return self._evidence_recovery(decision,state,sources,background,self._failure_reason(res))
   text=res.text.strip();used=set(re.findall(r"\[(S\d+)\]",text));valid={x["id"] for x in sources if x.get("id")}
@@ -45,6 +59,18 @@ class ResponseComposer:
   if used-valid:return self._evidence_recovery(decision,state,sources,background,"invalid_citations")
   knowledge_used="orientación general complementaria" in text.casefold()
   return {"mode":"documented" if sources and not knowledge_used else "hybrid_supported","text":text,"citations":sorted(used),"knowledge_used":knowledge_used,"unassessed_sources":[x["title"] for x in background if x["status"]=="unassessed"],"provider":res.provider,"model":res.model,"usage":res.usage,"finish_reason":res.finish_reason,"evidence_selection":{"original_approved_count":len(approved),"selected_count":len(sources),"selected_ids":[x["id"] for x in sources if x.get("id")]}}
+ def _partial_conceptual_response(self,state,sources,background,reason):
+  product=self._product_name(state);claims=[];citations=[]
+  for source in sources:
+   sid=source.get("id");citations.append(sid) if sid else None
+   for claim in source.get("supported_claims") or []:
+    value=" ".join(str(claim).split())
+    if value and value not in claims:claims.append(value)
+  text=(f"La evidencia seleccionada sobre {product} es parcial y describe funciones o componentes relacionados, "
+        "pero no permite construir una definición general completa.\n\n### Aspectos documentados\n\n"+
+        "\n".join(f"- {x} [{citations[min(i,len(citations)-1)]}]" if citations else f"- {x}" for i,x in enumerate(claims[:4]))+
+        "\n\nPuedo continuar con una búsqueda documental más específica sin presentar estos componentes como si definieran todo el producto.")
+  return {"mode":"partial_documented","text":text,"citations":sorted(set(citations)),"knowledge_used":False,"unassessed_sources":[x["title"] for x in background if x["status"]=="unassessed"],"fallback_reason":reason,"evidence_selection":{"selected_count":len(sources),"selected_ids":citations}}
  def _unsupported_action_response(self,decision,state,background,reason):
   product=self._product_name(state)
   if decision.intent=="procedural":
