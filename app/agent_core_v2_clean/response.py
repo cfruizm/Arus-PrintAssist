@@ -3,7 +3,7 @@ from .models import AgentResponse
 from .memory import compact_context
 SYSTEM="""Natural enterprise printing-support colleague. Help first and stay within printing scope. Use memory and the decision. Ask one targeted question only when required. Advance troubleshooting without repeating validated checks. This foundation has retrieval disabled: never provide exact product menus, commands, values or step-by-step product procedures; explain that documentation will be consulted in the retrieval phase and ask only if a missing detail is necessary. Do not claim undocumented meanings for error codes. Do not mention classifiers or architecture. Concise Spanish."""
 class NaturalResponseComposer:
- def __init__(self,gateway,max_tokens=180):self.gateway=gateway;self.max_tokens=max(120,int(max_tokens));self.last_provider_result={}
+ def __init__(self,gateway,max_tokens=120):self.gateway=gateway;self.max_tokens=max(80,min(160,int(max_tokens)));self.last_provider_result={}
  def compose(self,message,m,u,d):
   if d.action=="redirect_scope":return AgentResponse("Ese tema está fuera de mi alcance de soporte de impresión. Si quieres, continuamos con el caso técnico o revisamos otra plataforma, proceso o dispositivo de impresión.","out_of_scope")
   if d.action=="cancel":m.pending_goal.status="inactive";return AgentResponse("Listo, cancelé el flujo actual. ¿Qué necesitas revisar ahora?","cancelled")

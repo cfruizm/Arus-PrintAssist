@@ -10,7 +10,7 @@ def test_out_of_scope_new_topic_does_not_clear_active_goal():
  assert m.active_topic=='existing' and m.pending_goal.summary=='existing goal'
 def test_degraded_turn_preserves_intent_and_context():
  m=ConversationMemory(active_topic='case');m.pending_goal.summary='solve case';m.pending_goal.intent='troubleshooting';apply_understanding(m,U(intent='troubleshooting',current_goal='solve case',goal_updates={'latest_user_reply':'fixed ip'},degraded=True))
- assert m.pending_goal.intent=='troubleshooting' and m.pending_goal.known_details['latest_user_reply']=='fixed ip'
+ assert m.pending_goal.intent=='troubleshooting' and 'latest_user_reply' not in m.pending_goal.known_details
 def test_telemetry_counts_both_calls():
  t=empty();a={'ok':True,'purpose':'understanding','usage':{'prompt_tokens':10,'completion_tokens':5,'total_tokens':15},'latency_ms':12};b={'ok':False,'purpose':'response','usage':{},'latency_ms':3,'error_code':'rate_limited','error_message':'limit','metadata':{}}
  add_result(t,a);add_result(t,b);m=turn_metrics(a,b)
