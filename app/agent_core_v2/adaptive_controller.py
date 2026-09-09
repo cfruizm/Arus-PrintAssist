@@ -11,6 +11,7 @@ class AdaptiveCostRouteController:
   if d.action in {"start_escalation","continue_escalation","suspend_escalation","resume_escalation"}:return CostRoutePlan("compose_escalation",run_answer_llm=True,initial_candidates=self.initial_candidates,reasons=["reuse_canonical_escalation_state"])
   if d.action=="cancel_all":return CostRoutePlan("compose_cancel",run_answer_llm=True,initial_candidates=self.initial_candidates,reasons=["natural_cancel_response"])
   if d.action=="ask_clarification":return CostRoutePlan("compose_clarification",run_answer_llm=True,initial_candidates=self.initial_candidates,reasons=["contextual_clarification"])
+  if d.action=="decline_out_of_scope":return CostRoutePlan("compose_out_of_scope",run_answer_llm=False,initial_candidates=self.initial_candidates,estimated_calls_avoided=2,reasons=["deterministic_scope_redirect"])
   if d.action!="retrieve":return CostRoutePlan("no_document_action",estimated_calls_avoided=2,reasons=["state_only_action"])
   return CostRoutePlan("adaptive_document",True,True,True,self.initial_candidates,False,reasons=["documentation_first"])
  def plan_after_judgment(self,d,e,state):
@@ -21,3 +22,5 @@ class AdaptiveCostRouteController:
   return CostRoutePlan("compose_with_internal_knowledge",True,True,True,self.initial_candidates,False,reasons=["documentation_insufficient_use_guarded_knowledge"])
  def plan_after_expansion(self,d,e,state):return self.plan_after_judgment(d,e,state)
  def expansion_query(self,original,d,state,evidence):return original
+
+
