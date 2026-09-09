@@ -20,6 +20,22 @@ class ConversationUnderstanding:
   from app.llm_gateway.models import LLMRequest
   r=self.gateway.complete(LLMRequest([{"role":"system","content":SYSTEM},{"role":"user","content":json.dumps({"message":message,"context":compact_context(memory)},ensure_ascii=False,separators=(",",":"))}],"agent_core_v2_clean_understanding",self.max_tokens,0.,UNDERSTANDING_SCHEMA));self.last_provider_result=r.to_dict();self.contract_valid=False;self.validation_error=None;self.normalization={"removed_goal_update_keys":[]}
   if not r.ok:self.validation_error="provider_error:"+str(r.error_code or "unknown");return self._degraded(memory,self.validation_error)
-  try:x=self._parse(r.text);self.contract_valid=True;return x
+  try:
+   x=self._parse(r.text);corrections=[]
+   if x.user_act=="answer_to_question" and not memory.last_assistant_question:
+    x.user_act="new_request";corrections.append("answer_without_pending_question_to_new_request")
+   if x.user_act=="new_request" and memory.pending_goal.summary and x.current_goal and x.current_goal.casefold()!=memory.pending_goal.summary.casefold() and x.topic_relation!="new_topic":
+    x.topic_relation="new_topic";corrections.append("self_contained_changed_goal_to_new_topic")
+   # On a new topic, accept only atomic values grounded in the current message or reconstructed current goal.
+   if x.topic_relation=="new_topic":
+    anchor=(str(message)+" "+str(x.current_goal)).casefold();kept={};removed=[]
+    for k,v in x.goal_updates.items():
+     value=str(v).strip()
+     if value and value.casefold() in anchor:kept[k]=value
+     else:removed.append(str(k))
+    x.goal_updates=kept
+    if removed:self.normalization["removed_unanchored_new_topic_keys"]=sorted(removed)
+   self.normalization["structural_corrections"]=corrections
+   self.contract_valid=True;return x
   except Exception as exc:
    self.validation_error=str(exc);self.last_provider_result.setdefault("metadata",{})["contract_valid"]=False;self.last_provider_result["metadata"]["contract_error"]=self.validation_error;return self._degraded(memory,"invalid_understanding:"+self.validation_error)

@@ -15,7 +15,7 @@ class RetrievalQueryBuilder:
   text=". ".join(dict.fromkeys(x for x in parts if x))[:1200];fingerprint=hashlib.sha256(json.dumps(fields,sort_keys=True,ensure_ascii=False).encode()).hexdigest()[:20]
   return RetrievalQuery(text,fields,fingerprint)
  def current_only(self,message,understanding):
-  fields={"goal":understanding.current_goal,"intent":understanding.intent,"details":dict(understanding.goal_updates or {}),"symptoms":[],"observations":[],"affected_scope":None,"current_message":message,"context_mode":"current_turn_only"}
+  fields={"goal":understanding.current_goal,"intent":understanding.intent,"details":dict(understanding.goal_updates or {}),"symptoms":[],"observations":[],"affected_scope":None,"current_message":message,"context_mode":"current_turn_only","grounded_only":True}
   text=". ".join(dict.fromkeys(x for x in [str(understanding.current_goal or ""),str(message or "")]+[str(v) for v in fields["details"].values()] if x))[:900]
   return RetrievalQuery(text,fields,hashlib.sha256(json.dumps(fields,sort_keys=True,ensure_ascii=False).encode()).hexdigest()[:20])
 def _tokens(text):
