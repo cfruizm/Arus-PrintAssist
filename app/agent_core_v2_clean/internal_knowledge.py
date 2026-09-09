@@ -41,7 +41,18 @@ class ControlledInternalKnowledgeComposer:
   if res.ok and not ok and not self.validation.get('finish_complete'):
    retry=[{'role':'system','content':SYSTEM+'\n'+RETRY_SYSTEM},{'role':'user','content':json.dumps(payload,ensure_ascii=False,separators=(',',':'))},{'role':'assistant','content':str(res.text or '')},{'role':'user','content':'Entrega ahora la versión completa y compacta.'}];res=self._call(retry,320);ok,self.validation=validate_internal(res.text if res.ok else '',res.finish_reason,valid_ids);self.validation['retry_used']=True
   else:self.validation['retry_used']=False
-  self.validation['attempt_count']=len(self.attempts);self.validation['selected_evidence_ids']=valid_ids;self.last_provider_result={'ok':res.ok,'selected_attempt':len(self.attempts),'attempts':self.attempts,'text':getattr(res,'text',''),'provider':getattr(res,'provider',None),'model':getattr(res,'model',None),'usage':getattr(res,'usage',{}),'finish_reason':getattr(res,'finish_reason',None)}
+  self.validation['attempt_count']=len(self.attempts);self.validation['selected_evidence_ids']=valid_ids
+  # Preserve the gateway result contract so telemetry keeps purpose and latency.
+  selected=res.to_dict()
+  selected['selected_attempt']=len(self.attempts)
+  selected['attempts']=self.attempts
+  selected['aggregate_usage']={
+   'prompt_tokens':sum(int((x.get('usage') or {}).get('prompt_tokens',0)) for x in self.attempts),
+   'completion_tokens':sum(int((x.get('usage') or {}).get('completion_tokens',0)) for x in self.attempts),
+   'total_tokens':sum(int((x.get('usage') or {}).get('total_tokens',0)) for x in self.attempts),
+  }
+  selected['aggregate_latency_ms']=sum(float(x.get('latency_ms') or 0.0) for x in self.attempts)
+  self.last_provider_result=selected
   if not res.ok:return AgentResponse('La documentación no es suficiente y no fue posible generar orientación complementaria.','internal_knowledge_provider_degraded',False)
   if not ok:return AgentResponse('La orientación complementaria no pudo completarse de forma segura. No mostraré contenido parcial o ambiguo.','internal_knowledge_separation_guard',False,res.provider,res.model,res.usage,res.finish_reason)
   return AgentResponse(f'{WARNING}\n\n{str(res.text).strip()}','controlled_internal_knowledge',True,res.provider,res.model,res.usage,res.finish_reason)
