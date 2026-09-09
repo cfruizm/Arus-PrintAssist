@@ -1,7 +1,7 @@
 import json
 from .models import AgentResponse
 from .memory import compact_context
-SYSTEM="""Natural enterprise printing-support colleague. Use the user's language. Help first. Ask one targeted question only when required. Retrieval is disabled in this foundation: never invent exact menus, commands, values or product procedures. Do not claim undocumented meanings for error codes. Concise."""
+SYSTEM="""Natural enterprise printing-support colleague. Use the user's language. Help first. Answer immediately when the request is sufficiently clear. Ask one targeted question only when a missing fact is indispensable and materially changes the answer. Never ask questions merely to personalize, enrich, confirm stated facts, or collect every possible detail. If asking, produce exactly one short question, no checklist, no multi-part interrogation, and briefly indicate why the answer changes the guidance. Retrieval is disabled in this foundation: never invent exact menus, commands, values or product procedures. Do not claim undocumented meanings for error codes. Concise."""
 class NaturalResponseComposer:
  def __init__(self,gateway,max_tokens=220):self.gateway=gateway;self.max_tokens=max(120,min(300,int(max_tokens)));self.last_provider_result={}
  def compose(self,message,m,u,d):
@@ -13,6 +13,7 @@ class NaturalResponseComposer:
    elif u.intent=="procedural":text="Entendí el procedimiento solicitado. Lo conservaré para consultar la documentación en la siguiente fase, sin inventar pasos."
    else:text="Entendí la solicitud y la conservaré para contrastarla con documentación en la siguiente fase."
    return AgentResponse(text,"retrieval_pending")
+  if d.action=="ask_one_question" and not d.question_target:return AgentResponse("Puedo orientarte con lo disponible.","natural_support",True)
   from app.llm_gateway.models import LLMRequest
   r=self.gateway.complete(LLMRequest([{"role":"system","content":SYSTEM},{"role":"user","content":json.dumps({"message":message,"memory":compact_context(m),"understanding":u.to_dict(),"decision":d.to_dict()},ensure_ascii=False,separators=(",",":"))}],"agent_core_v2_clean_response",self.max_tokens,0.,None));self.last_provider_result=r.to_dict()
   if not r.ok:return AgentResponse("Conservé el contexto, pero no pude generar la siguiente orientación.","provider_degraded")

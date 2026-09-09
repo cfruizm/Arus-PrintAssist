@@ -4,6 +4,7 @@ from typing import Any
 @dataclass
 class PendingGoal:
  summary:str="";intent:str="unknown";known_details:dict[str,str]=field(default_factory=dict);missing_detail:str|None=None;status:str="inactive"
+ def is_open(self):return self.status in {"active","waiting_user","partially_answered","blocked_by_evidence"}
 @dataclass
 class SupportCase:
  status:str="idle";symptoms:list[str]=field(default_factory=list);observations:list[str]=field(default_factory=list);attempts:list[dict[str,str|None]]=field(default_factory=list);affected_scope:str|None=None;resolution_status:str|None=None

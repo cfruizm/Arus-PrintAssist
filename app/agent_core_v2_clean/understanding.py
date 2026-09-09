@@ -2,7 +2,7 @@ import json
 from .contracts import UNDERSTANDING_SCHEMA
 from .models import TurnUnderstanding
 from .memory import compact_context,normalize_goal_updates
-SYSTEM="""Semantic understanding for an enterprise printing-support assistant. The domain includes printing software, print-management and fleet-management platforms, printers, MFDs, scanning, accounting, consumables, installation, connectivity and operational processes. Interpret the current message with memory and the last assistant question. A short answer completes the pending question and never replaces the goal. Use answer_to_question only when last_assistant_question is present. A self-contained request that introduces a different operation or subject is a new_topic even when both requests belong to printing. Distinguish conceptual, procedural and troubleshooting. A new printing product remains in_scope. A genuinely unrelated self-contained request is independent and out_of_scope. Use the same language as the current user for current_goal, reasoning_summary and goal_updates values. goal_updates contains atomic facts only, never intent, status, summary, known_details, missing_detail, goal_complete or current_goal. Return one complete non-empty JSON object matching the schema. Keep reasoning_summary under 20 words."""
+SYSTEM="""Semantic understanding for an enterprise printing-support assistant. The domain includes printing software, print-management and fleet-management platforms, printers, MFDs, scanning, accounting, consumables, installation, connectivity and operational processes. Interpret the current message with memory and the last assistant question. A short answer completes the pending question and never replaces the goal. Use answer_to_question only when last_assistant_question is present. A self-contained request that introduces a different operation or subject is a new_topic even when both requests belong to printing. Distinguish conceptual, procedural and troubleshooting. A new printing product remains in_scope. A genuinely unrelated self-contained request is independent and out_of_scope. Use the same language as the current user for current_goal, reasoning_summary and goal_updates values. goal_updates contains atomic facts only, never intent, status, summary, known_details, missing_detail, goal_complete or current_goal. Clarification policy: help first. Set needs_clarification=true only when one missing fact is indispensable because plausible interpretations would lead to materially different or unsafe answers, or retrieval cannot be grounded without it. Do not ask for details that merely personalize, improve, or expand an otherwise answerable request. A clear self-contained conceptual request is answerable as written and must not trigger clarification. Reuse facts from memory when the topic continues. For a short answer to last_assistant_question, use answer_to_question, preserve the pending goal in current_goal, and put the supplied atomic fact in goal_updates. Ask at most one missing fact. Return one complete non-empty JSON object matching the schema. Keep reasoning_summary under 20 words."""
 REQUIRED={"user_act","intent","topic_relation","domain_relevance","current_goal","goal_complete","goal_updates","case_updates","needs_clarification","clarification_target","should_retrieve","confidence","reasoning_summary"}
 class ConversationUnderstanding:
  def __init__(self,gateway,max_tokens=300):self.gateway=gateway;self.max_tokens=max(220,min(420,int(max_tokens)));self.last_provider_result={};self.contract_valid=False;self.validation_error=None;self.normalization={"removed_goal_update_keys":[]}
@@ -22,11 +22,12 @@ class ConversationUnderstanding:
   if not r.ok:self.validation_error="provider_error:"+str(r.error_code or "unknown");return self._degraded(memory,self.validation_error)
   try:
    x=self._parse(r.text);corrections=[]
-   if x.user_act=="answer_to_question" and not memory.last_assistant_question:
-    x.user_act="new_request";corrections.append("answer_without_pending_question_to_new_request")
-   if x.user_act=="new_request" and memory.pending_goal.summary and x.current_goal and x.current_goal.casefold()!=memory.pending_goal.summary.casefold() and x.topic_relation!="new_topic":
-    x.topic_relation="new_topic";corrections.append("self_contained_changed_goal_to_new_topic")
-   # On a new topic, accept only atomic values grounded in the current message or reconstructed current goal.
+   if x.user_act=="answer_to_question" and not memory.last_assistant_question:x.user_act="new_request";corrections.append("answer_without_pending_question_to_new_request")
+   if x.intent=="conceptual" and x.user_act in {"new_request","independent_question"} and str(x.current_goal or "").strip():
+    if x.needs_clarification:corrections.append("non_material_conceptual_clarification_suppressed")
+    x.needs_clarification=False;x.clarification_target=None
+   if x.needs_clarification and not str(x.clarification_target or "").strip():x.needs_clarification=False;corrections.append("empty_clarification_suppressed")
+   if x.user_act=="new_request" and memory.pending_goal.summary and x.current_goal and x.current_goal.casefold()!=memory.pending_goal.summary.casefold() and x.topic_relation!="new_topic":x.topic_relation="new_topic";corrections.append("self_contained_changed_goal_to_new_topic")
    if x.topic_relation=="new_topic":
     anchor=(str(message)+" "+str(x.current_goal)).casefold();kept={};removed=[]
     for k,v in x.goal_updates.items():
@@ -35,7 +36,6 @@ class ConversationUnderstanding:
      else:removed.append(str(k))
     x.goal_updates=kept
     if removed:self.normalization["removed_unanchored_new_topic_keys"]=sorted(removed)
-   self.normalization["structural_corrections"]=corrections
-   self.contract_valid=True;return x
+   self.normalization["structural_corrections"]=corrections;self.contract_valid=True;return x
   except Exception as exc:
    self.validation_error=str(exc);self.last_provider_result.setdefault("metadata",{})["contract_valid"]=False;self.last_provider_result["metadata"]["contract_error"]=self.validation_error;return self._degraded(memory,"invalid_understanding:"+self.validation_error)
