@@ -19,6 +19,12 @@ def _internal(result,message,gateway,budget,store,model,assessment):
   result["internal_knowledge"]={"enabled":True,"generation_blocked":True,"block_reason":reason,"assessment":assessment};return result,{"skipped":True,"reason":"internal_knowledge_budget_block"}
  composer=ControlledInternalKnowledgeComposer(gateway,520);answer=composer.compose(message,u,r,assessment);payload=answer.to_dict();valid=answer.mode=="controlled_internal_knowledge";payload.update({"documented_evidence_used":bool(assessment.get("usable_chunks")),"internal_knowledge_used":valid,"knowledge_mode":"documented_plus_internal" if valid and assessment.get("usable_chunks") else "internal_only" if valid else "none"});result["answer"]=payload;diag={"enabled":True,"cache_hit":False,"prompt_version":INTERNAL_PROMPT_VERSION,"trigger_status":assessment.get("status"),"trigger_reasons":assessment.get("reasons"),"validation":deepcopy(composer.validation)};result["internal_knowledge"]=diag
  if valid:store["memory"].pending_goal.status="complete";result["state_after"]=deepcopy(store["memory"].to_dict());store[cache][key]={"answer":deepcopy(payload),"diagnostic":deepcopy(diag)}
+ if not valid:
+  result["procedural_recovery"]={"attempted":True,"reason":"documented_procedural_validation_failed","previous_mode":answer.mode,"target_mode":"controlled_internal_knowledge"}
+  documented_trace=composer.last_provider_result
+  recovery_assessment={**assessment,"status":"partial","generation_allowed":False,"internal_knowledge_candidate":True,"reasons":[*(assessment.get("reasons") or []),"documented_answer_validation_failed"]}
+  result,internal_trace=_internal(result,message,gateway,budget,store,model,recovery_assessment)
+  return result,[documented_trace,internal_trace]
  return result,composer.last_provider_result
 
 def maybe_generate_procedural(result,message,gateway,budget,store,model=""):
@@ -33,4 +39,10 @@ def maybe_generate_procedural(result,message,gateway,budget,store,model=""):
  if not allowed:return result,{"skipped":True,"reason":"procedural_budget_block","block_reason":reason}
  composer=ProceduralAnswerComposer(gateway,900);answer=composer.compose(message,u,r);payload=answer.to_dict();valid=answer.mode=="procedural_documented_answer";payload.update({"documented_evidence_used":valid,"internal_knowledge_used":False,"knowledge_mode":"documented_only" if valid else "none"});result["answer"]=payload;diag={"enabled":True,"cache_hit":False,"prompt_version":PROCEDURAL_PROMPT_VERSION,"assessment":assessment,"validation":deepcopy(composer.validation),"finish_reason":payload.get("finish_reason")};result["procedural_answer"]=diag
  if valid:store["memory"].pending_goal.status="complete";result["state_after"]=deepcopy(store["memory"].to_dict());store[cache][key]={"answer":deepcopy(payload),"diagnostic":deepcopy(diag)}
+ if not valid:
+  result["procedural_recovery"]={"attempted":True,"reason":"documented_procedural_validation_failed","previous_mode":answer.mode,"target_mode":"controlled_internal_knowledge"}
+  documented_trace=composer.last_provider_result
+  recovery_assessment={**assessment,"status":"partial","generation_allowed":False,"internal_knowledge_candidate":True,"reasons":[*(assessment.get("reasons") or []),"documented_answer_validation_failed"]}
+  result,internal_trace=_internal(result,message,gateway,budget,store,model,recovery_assessment)
+  return result,[documented_trace,internal_trace]
  return result,composer.last_provider_result

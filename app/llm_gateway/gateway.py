@@ -6,6 +6,12 @@ import time
 from app.llm_gateway.providers.groq_provider import GroqProvider
 from app.llm_gateway.providers.huggingface_provider import HuggingFaceProvider
 
+
+SESSION_KEYS=("llm_gateway_calls","llm_gateway_tokens","llm_gateway_history","llm_gateway_output_ledger")
+def reset_gateway_session(session_state):
+    if session_state is None:return
+    for key in SESSION_KEYS:session_state.pop(key,None)
+
 class LLMGateway:
     def __init__(self,config,session_state=None):self.config=config;self.session=session_state
     def _provider(self,name):
