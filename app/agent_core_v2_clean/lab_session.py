@@ -6,12 +6,15 @@ from .understanding import ConversationUnderstanding
 from .policy import ConversationPolicy
 from .response import NaturalResponseComposer
 from .agent import CleanConversationalAgent
-from .telemetry import empty,add_result,turn_metrics,snapshot
+from .telemetry import empty,normalize,add_result,turn_metrics,snapshot
 from .budget import BudgetPolicy
 KEY="agent_core_v2_clean_store"
 def get_store(s):
  if KEY not in s:s[KEY]={"memory":ConversationMemory(),"messages":[],"turns":[],"errors":[],"telemetry":empty(),"budget":BudgetPolicy.for_mode("normal").to_dict(),"deterministic_results":[]}
- return s[KEY]
+ store=s[KEY]
+ store["telemetry"]=normalize(store.get("telemetry"))
+ store.setdefault("deterministic_results",[]);store.setdefault("errors",[]);store.setdefault("turns",[]);store.setdefault("messages",[])
+ return store
 def reset_store(s):s.pop(KEY,None);return get_store(s)
 def build_agent(secrets,s,budget):
  g=LLMGateway(load_gateway_config(secrets),s)

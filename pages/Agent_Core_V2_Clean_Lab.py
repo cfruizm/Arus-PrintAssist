@@ -11,26 +11,26 @@ if not enabled:st.info("Agrega AGENT_CORE_V2_CLEAN_LAB_ENABLED = true en Secrets
 store=get_store(st.session_state);t=store["telemetry"]
 with st.sidebar:
  st.subheader("Modo de laboratorio")
- mode=st.radio("Modo",["normal","economy","deterministic"],horizontal=False,index=["normal","economy","deterministic"].index(store.get("budget",{}).get("mode","normal")))
+ modes=["normal","economy","deterministic"];current=store.get("budget",{}).get("mode","normal");mode=st.radio("Modo",modes,index=modes.index(current) if current in modes else 0)
  preset=BudgetPolicy.for_mode(mode);store["budget"]=preset.to_dict()
  if mode!="deterministic":
-  st.metric("Tokens usados",f"{t['total_tokens']:,}");st.metric("Disponibles",f"{max(0,preset.max_session_tokens-t['total_tokens']):,}");st.progress(min(1.0,t['total_tokens']/max(1,preset.max_session_tokens)));st.caption(f"Llamadas {t['calls']}/{preset.max_session_calls} | Errores {t['failed_calls']}")
+  used=int(t.get("total_tokens",0));calls=int(t.get("calls",0));errors=int(t.get("functional_failed_calls",t.get("failed_calls",0)))
+  st.metric("Tokens usados",f"{used:,}");st.metric("Disponibles",f"{max(0,preset.max_session_tokens-used):,}");st.progress(min(1.0,used/max(1,preset.max_session_tokens)));st.caption(f"Llamadas {calls}/{preset.max_session_calls} | Fallos funcionales {errors}")
  else:st.success("Cero llamadas LLM y cero tokens")
  if st.button("Nueva conversación",use_container_width=True,type="primary"):reset_store(st.session_state);st.rerun()
  st.download_button("Descargar JSON",json.dumps(export_session(st.session_state),ensure_ascii=False,indent=2),"agent_core_v2_clean_lab_session.json","application/json",use_container_width=True)
 if mode=="deterministic":
- st.subheader("Diagnóstico determinista")
- st.caption("Ejecuta memoria, política, cambios de tema, casos y fallos de proveedor con fixtures estructurados. No interpreta mensajes libres.")
+ st.subheader("Diagnóstico determinista");st.caption("Memoria, política, estado y degradación con cero llamadas LLM.")
  if st.button("Ejecutar todos los escenarios",type="primary"):
-  results=run_all();st.session_state["v2_clean_scenario_results"]=results
- results=st.session_state.get("v2_clean_scenario_results",[])
+  store["deterministic_results"]=run_all();st.rerun()
+ results=store.get("deterministic_results",[])
  if results:
   a,b,c=st.columns(3);a.metric("Escenarios",len(results));b.metric("Aprobados",sum(x["passed"] for x in results));c.metric("Tokens",0)
   for r in results:
    with st.expander(("✅ " if r["passed"] else "❌ ")+r["name"],expanded=not r["passed"]):st.json(r)
  st.info("Para lenguaje libre cambia a normal o economy.")
 else:
- st.caption("Normal prioriza calidad. Economy reduce tokens. Retrieval continúa deshabilitado en esta fase.")
+ st.caption("Normal prioriza calidad. Economy reduce tokens. Retrieval continúa deshabilitado.")
  for m in store["messages"]:
   with st.chat_message(m["role"]):st.markdown(m["content"])
  if prompt:=st.chat_input("Escribe un mensaje"):
