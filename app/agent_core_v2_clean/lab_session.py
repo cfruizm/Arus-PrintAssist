@@ -26,7 +26,7 @@ def _attach_retrieval(result,message,store):
  if cached:
   retrieval=deepcopy(cached);retrieval["cache_hit"]=True;store["cache_metrics"]["retrieval_hits"]+=1
  else:
-  retrieval=ReadOnlyRetrieval(k=6).search(built);retrieval["cache_hit"]=False;store["retrieval_cache"][built.fingerprint]=deepcopy(retrieval)
+  retrieval=ReadOnlyRetrieval(k=6).search(built,current_only);retrieval["cache_hit"]=False;store["retrieval_cache"][built.fingerprint]=deepcopy(retrieval)
  result["retrieval"]=retrieval
  result["answer"]["text"]=retrieval_summary(retrieval)
  result["answer"]["mode"]="retrieval_diagnostic"
