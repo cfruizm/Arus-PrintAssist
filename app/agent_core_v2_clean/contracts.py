@@ -1,0 +1,12 @@
+UNDERSTANDING_SCHEMA={
+ "type":"object","properties":{
+  "user_act":{"type":"string","enum":["new_request","follow_up","answer_to_question","reported_failure","attempt_result","topic_change","social","cancel","escalation","independent_question"]},
+  "intent":{"type":"string","enum":["conceptual","procedural","troubleshooting","requirements","architecture","warranty","social","cancel","escalation","unknown"]},
+  "topic_relation":{"type":"string","enum":["same_topic","new_topic","return_to_previous","independent"]},
+  "domain_relevance":{"type":"string","enum":["in_scope","out_of_scope","uncertain"]},
+  "current_goal":{"type":"string"},"goal_complete":{"type":"boolean"},
+  "goal_updates":{"type":"object","additionalProperties":{"type":"string"}},
+  "case_updates":{"type":"array","items":{"type":"object","properties":{"type":{"type":"string"},"value":{"type":"string"}},"required":["type","value"]}},
+  "needs_clarification":{"type":"boolean"},"clarification_target":{"type":["string","null"]},
+  "should_retrieve":{"type":"boolean"},"confidence":{"type":"number"},"reasoning_summary":{"type":"string"}
+ },"required":["user_act","intent","topic_relation","domain_relevance","current_goal","goal_complete","goal_updates","case_updates","needs_clarification","clarification_target","should_retrieve","confidence","reasoning_summary"]}
