@@ -1,21 +1,25 @@
+from __future__ import annotations
 from dataclasses import dataclass,asdict
-@dataclass
+
+@dataclass(frozen=True)
 class BudgetPolicy:
- mode:str="normal"
- max_session_calls:int=16
- max_session_tokens:int=9000
- reserve_tokens:int=900
- understanding_max_tokens:int=300
- response_max_tokens:int=220
- def to_dict(self):return asdict(self)
- @classmethod
- def for_mode(cls,mode):
-  if mode=="economy":return cls("economy",8,4000,700,180,120)
-  if mode=="deterministic":return cls("deterministic",0,0,0,0,0)
-  return cls("normal",16,9000,900,300,220)
- def can_call(self,telemetry,estimated_tokens=650):
-  if self.mode=="deterministic":return False,"deterministic_mode"
-  if telemetry.get("last_rate_limit") is not None:return False,"provider_rate_limit"
-  if telemetry.get("calls",0)>=self.max_session_calls:return False,"session_call_budget"
-  if telemetry.get("total_tokens",0)+estimated_tokens+self.reserve_tokens>self.max_session_tokens:return False,"session_token_budget"
-  return True,"allowed"
+    mode:str="normal"
+    max_session_calls:int=24
+    max_session_tokens:int=14000
+    reserve_tokens:int=1200
+    understanding_max_tokens:int=300
+    response_max_tokens:int=220
+    @classmethod
+    def for_mode(cls,mode:str):
+        value=str(mode or "normal").strip().casefold()
+        if value=="economy":return cls("economy",12,7000,900,180,120)
+        if value=="deterministic":return cls("deterministic",0,0,0,0,0)
+        return cls("normal",24,14000,1200,300,220)
+    def to_dict(self):return asdict(self)
+    def can_call(self,telemetry,estimated_tokens:int=0):
+        if self.mode=="deterministic":return False,"deterministic_mode"
+        calls=int((telemetry or {}).get("calls",0));tokens=int((telemetry or {}).get("total_tokens",0));estimate=max(0,int(estimated_tokens or 0))
+        if calls>=self.max_session_calls:return False,"session_call_budget_exhausted"
+        usable=max(0,self.max_session_tokens-self.reserve_tokens)
+        if tokens+estimate>usable:return False,"session_token_budget_would_exceed_reserve"
+        return True,None
