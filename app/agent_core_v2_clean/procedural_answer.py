@@ -1,21 +1,16 @@
 from __future__ import annotations
 import hashlib,json,re
 from .models import AgentResponse
-
-PROMPT_VERSION="procedural_documented_v1"
-SYSTEM="""Eres un colega de soporte empresarial de impresión. Responde solo con la evidencia documental suministrada. Redacta un procedimiento práctico, ordenado y completo en el idioma del usuario. Conserva nombres de archivos, hojas, campos, botones, validaciones y advertencias exactamente como aparecen. No inventes pasos ni completes vacíos con conocimiento interno. Cada paso y condición factual debe terminar con una cita [R#]. Si la evidencia empieza o termina a mitad de un paso, advierte que el procedimiento recuperado es parcial. No menciones el laboratorio."""
-
+PROMPT_VERSION="procedural_documented_v2_integrated"
+SYSTEM="""Eres un colega de soporte empresarial de impresión. Responde solo con la evidencia documental suministrada. Redacta un procedimiento práctico, ordenado y completo en el idioma del usuario. Conserva literalmente nombres de archivos, hojas, campos, botones, validaciones y advertencias. No inventes pasos ni completes vacíos con conocimiento interno. Cada paso y condición factual debe terminar con una cita [R#]. Si la evidencia comienza o termina a mitad de un paso, advierte que la recuperación es parcial. No menciones el laboratorio."""
 def _usable(e):
- text=" ".join(str(e.get("text") or "").split())
- # Excludes pages with only legal/control boilerplate without encoding product terms.
- markers=("objetivo","contenido","•","","debemos","luego","para ","paso","botón","archivo","validar","nota")
+ text=" ".join(str(e.get("text") or "").split());markers=("objetivo","contenido","•","","debemos","luego","para ","paso","botón","archivo","validar","nota")
  return len(text)>=80 and any(x in text.casefold() for x in markers)
 def evidence_pack(retrieval,max_items=8,max_chars=10500):
  items=[];used=0;seen=set()
  for e in retrieval.get("evidence") or []:
   if not _usable(e):continue
-  text=" ".join(str(e.get("text") or "").split())[:2200]
-  sig=hashlib.sha256(text.casefold().encode()).hexdigest()
+  text=" ".join(str(e.get("text") or "").split())[:2200];sig=hashlib.sha256(text.casefold().encode()).hexdigest()
   if sig in seen:continue
   seen.add(sig);item={"id":e.get("id"),"title":e.get("title"),"page":e.get("page"),"source":e.get("url") or e.get("source"),"text":text};size=len(json.dumps(item,ensure_ascii=False))
   if items and used+size>max_chars:break
