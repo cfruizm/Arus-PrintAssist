@@ -1,10 +1,10 @@
 from __future__ import annotations
 import hashlib,json,re,unicodedata
 from .models import AgentResponse
-PROMPT_VERSION="controlled_internal_knowledge_v4_context_applicability"
+PROMPT_VERSION="controlled_internal_knowledge_v5_validation_retry"
 WARNING="⚠️ **Complemento con conocimiento general del modelo, no respaldado por la documentación recuperada**"
 SYSTEM="""Actúa como colega de soporte empresarial de impresión. Responde de forma completa, concreta y prudente. Usa exactamente: 1) Lo que sí indica la documentación, 2) Orientación general complementaria, 3) Límites y verificación necesaria. La primera sección solo puede usar extractos suministrados y citas [R#]. Si ningún extracto responde a la operación solicitada, dilo en una frase y no cites contenido meramente comercial. En la orientación general incluye únicamente mecanismos directamente relacionados con la tarea. Considera administración local, directorios corporativos, sincronización de atributos, autoservicio o autenticación en dispositivo solo cuando la consulta trate sobre identidad, acceso, usuarios, credenciales o autenticación. Para firmware, red, colas, monitoreo, instalación u otras operaciones, usa verificaciones propias de esa tarea. No rellenes la respuesta con mecanismos ajenos al objetivo. No afirmes rutas, claves, versiones, botones o políticas exactas sin evidencia. En las secciones 2 y 3 no uses citas. Termina con verificaciones concretas. Máximo 260 palabras."""
-RETRY_SYSTEM="""Reescribe la respuesta anterior en máximo 190 palabras. Conserva exactamente las tres secciones exigidas, termina la tercera sección y elimina introducciones, repeticiones y detalles no esenciales. No agregues hechos nuevos ni citas fuera de la primera sección."""
+RETRY_SYSTEM="""Reescribe la respuesta anterior en máximo 190 palabras. Conserva exactamente las tres secciones exigidas y termina la tercera sección. Corrige estructura, orden y citas: las referencias [R#] solo pueden aparecer en la primera sección; elimina todas las citas de las secciones 2 y 3. No agregues hechos nuevos."""
 
 def _norm(value):
  return ''.join(c for c in unicodedata.normalize('NFKD',str(value or '').casefold()) if not unicodedata.combining(c))
@@ -38,7 +38,7 @@ class ControlledInternalKnowledgeComposer:
   res=self.gateway.complete(LLMRequest(messages,'agent_core_v2_clean_internal_knowledge',max_tokens,0.0,None));self.attempts.append(res.to_dict());return res
  def compose(self,message,u,r,a):
   ev=evidence_excerpt(r,message,u.get('current_goal') or '');payload={'question':message,'goal':u.get('current_goal'),'documentation_assessment':a,'documented_excerpt':ev};messages=[{'role':'system','content':SYSTEM},{'role':'user','content':json.dumps(payload,ensure_ascii=False,separators=(',',':'))}];res=self._call(messages,self.max_tokens);valid_ids=[str(x.get('id')) for x in ev];ok,self.validation=validate_internal(res.text if res.ok else '',res.finish_reason,valid_ids)
-  if res.ok and not ok and not self.validation.get('finish_complete'):
+  if res.ok and not ok:
    retry=[{'role':'system','content':SYSTEM+'\n'+RETRY_SYSTEM},{'role':'user','content':json.dumps(payload,ensure_ascii=False,separators=(',',':'))},{'role':'assistant','content':str(res.text or '')},{'role':'user','content':'Entrega ahora la versión completa y compacta.'}];res=self._call(retry,320);ok,self.validation=validate_internal(res.text if res.ok else '',res.finish_reason,valid_ids);self.validation['retry_used']=True
   else:self.validation['retry_used']=False
   self.validation['attempt_count']=len(self.attempts);self.validation['selected_evidence_ids']=valid_ids
