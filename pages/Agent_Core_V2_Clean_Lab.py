@@ -30,9 +30,20 @@ if mode=="deterministic":
    with st.expander(("✅ " if r["passed"] else "❌ ")+r["name"],expanded=not r["passed"]):st.json(r)
  st.info("Para lenguaje libre cambia a normal o economy.")
 else:
- st.caption("Normal prioriza calidad. Economy reduce tokens. Retrieval continúa deshabilitado.")
+ st.caption("Normal prioriza calidad. Economy reduce tokens. Retrieval documental de solo lectura habilitado; generación documentada aún deshabilitada.")
  for m in store["messages"]:
   with st.chat_message(m["role"]):st.markdown(m["content"])
+
+ for i,turn in enumerate(store["turns"],1):
+  retrieval=turn.get("retrieval") or {}
+  if retrieval.get("enabled"):
+   with st.expander(f"Turno {i}: recuperación documental ({retrieval.get('count',0)} fragmentos)",expanded=False):
+    st.json({"query":retrieval.get("query"),"adapter":retrieval.get("adapter"),"cache_hit":retrieval.get("cache_hit"),"document_groups":retrieval.get("document_groups"),"errors":retrieval.get("errors")})
+    for source in retrieval.get("evidence") or []:
+     st.markdown(f"**{source.get('id')} · {source.get('title')}** · página {source.get('page') or 'N/D'}")
+     st.caption(source.get("url") or source.get("source") or "Sin ruta")
+     st.write(source.get("text") or "")
+
  if prompt:=st.chat_input("Escribe un mensaje"):
   with st.chat_message("user"):st.markdown(prompt)
   with st.chat_message("assistant"):
