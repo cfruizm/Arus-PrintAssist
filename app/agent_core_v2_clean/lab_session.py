@@ -20,16 +20,21 @@ def build_agent(secrets,s,budget):
  g=LLMGateway(load_gateway_config(secrets),s);return CleanConversationalAgent(ConversationUnderstanding(g,budget.understanding_max_tokens),ConversationPolicy(),NaturalResponseComposer(g,budget.response_max_tokens))
 def _attach_retrieval(result,message,store):
  if (result.get("decision") or {}).get("action")!="defer_to_retrieval":return result
- u=type("U",(),result.get("understanding") or {})()
- built=RetrievalQueryBuilder().build(message,store["memory"],u)
- cached=store["retrieval_cache"].get(built.fingerprint)
- if cached:
-  retrieval=deepcopy(cached);retrieval["cache_hit"]=True;store["cache_metrics"]["retrieval_hits"]+=1
- else:
-  retrieval=ReadOnlyRetrieval(k=6).search(built,current_only);retrieval["cache_hit"]=False;store["retrieval_cache"][built.fingerprint]=deepcopy(retrieval)
+ try:
+  u=type("U",(),result.get("understanding") or {})()
+  builder=RetrievalQueryBuilder()
+  built=builder.build(message,store["memory"],u)
+  current_only=builder.current_only(message,u)
+  cached=store["retrieval_cache"].get(built.fingerprint)
+  if cached:
+   retrieval=deepcopy(cached);retrieval["cache_hit"]=True;store["cache_metrics"]["retrieval_hits"]+=1
+  else:
+   retrieval=ReadOnlyRetrieval(k=6).search(built,current_only);retrieval["cache_hit"]=False;store["retrieval_cache"][built.fingerprint]=deepcopy(retrieval)
+ except Exception as exc:
+  retrieval={"enabled":True,"ok":False,"llm_called":False,"production_changed":False,"diagnostic_only":True,"cache_hit":False,"count":0,"evidence":[],"document_groups":[],"errors":[{"type":type(exc).__name__,"message":str(exc),"stage":"retrieval_attachment"}]}
  result["retrieval"]=retrieval
  result["answer"]["text"]=retrieval_summary(retrieval)
- result["answer"]["mode"]="retrieval_diagnostic"
+ result["answer"]["mode"]="retrieval_diagnostic" if retrieval.get("ok") else "retrieval_error"
  return result
 def process_message(message,secrets,s):
  store=get_store(s);budget=BudgetPolicy(**store["budget"]);before=deepcopy(store["memory"].to_dict());key_before=_context_key(message,store["memory"]);cached=store["exact_turn_cache"].get(key_before)
