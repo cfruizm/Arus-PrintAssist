@@ -6,22 +6,24 @@ from .understanding import ConversationUnderstanding
 from .policy import ConversationPolicy
 from .response import NaturalResponseComposer
 from .agent import CleanConversationalAgent
-from .telemetry import empty,normalize,add_result,turn_metrics,snapshot
+from .telemetry import empty,add_result,turn_metrics,snapshot
 from .budget import BudgetPolicy
 KEY="agent_core_v2_clean_store"
 def get_store(s):
- if KEY not in s:s[KEY]={"memory":ConversationMemory(),"messages":[],"turns":[],"errors":[],"telemetry":empty(),"budget":BudgetPolicy.for_mode("normal").to_dict(),"deterministic_results":[]}
- store=s[KEY]
- store["telemetry"]=normalize(store.get("telemetry"))
- store.setdefault("deterministic_results",[]);store.setdefault("errors",[]);store.setdefault("turns",[]);store.setdefault("messages",[])
- return store
+ if KEY not in s:s[KEY]={"memory":ConversationMemory(),"messages":[],"turns":[],"errors":[],"telemetry":empty(),"budget":BudgetPolicy.for_mode("normal").to_dict(),"deterministic_results":[],"exact_turn_cache":{}}
+ s[KEY].setdefault("exact_turn_cache",{})
+ return s[KEY]
 def reset_store(s):s.pop(KEY,None);return get_store(s)
 def build_agent(secrets,s,budget):
  g=LLMGateway(load_gateway_config(secrets),s)
  # The selected mode is authoritative. Old token secrets cannot silently override it.
  return CleanConversationalAgent(ConversationUnderstanding(g,budget.understanding_max_tokens),ConversationPolicy(),NaturalResponseComposer(g,budget.response_max_tokens))
 def process_message(message,secrets,s):
- store=get_store(s);budget=BudgetPolicy(**store["budget"]);allowed,reason=budget.can_call(store["telemetry"])
+ store=get_store(s);budget=BudgetPolicy(**store["budget"])
+ cache_key=" ".join(str(message).split()).casefold()+"|"+str(store["memory"].active_topic or "")+"|"+str(store["memory"].pending_goal.summary or "")
+ if cache_key in store["exact_turn_cache"]:
+  cached=deepcopy(store["exact_turn_cache"][cache_key]);cached["cache"]={"hit":True,"type":"exact_turn","calls_avoided":1,"tokens_avoided_estimate":cached.get("turn_metrics",{}).get("total_tokens",0)};cached["turn_metrics"]={"calls":0,"total_tokens":0,"provider_failed_calls":0,"contract_failed_calls":0,"functional_failed_calls":0};store["messages"] += [{"role":"user","content":message},{"role":"assistant","content":cached["answer"]["text"]}];store["turns"].append(cached);return cached
+ allowed,reason=budget.can_call(store["telemetry"])
  if not allowed:return {"input":message,"blocked":True,"decision":{"action":"budget_block","reason":reason},"answer":{"text":"La prueba no se ejecutó porque alcanzaría el presupuesto configurado.","mode":"budget_block","knowledge_used":False},"turn_metrics":{"calls":0,"total_tokens":0},"production_changed":False}
  store["messages"].append({"role":"user","content":message})
  try:
@@ -29,6 +31,8 @@ def process_message(message,secrets,s):
   add_result(store["telemetry"],trace.get("understanding"),contract);add_result(store["telemetry"],trace.get("response"));result["turn_metrics"]=turn_metrics(trace.get("understanding"),trace.get("response"),contract);result["session_metrics_after_turn"]=snapshot(store["telemetry"])
  except Exception as exc:
   store["errors"].append({"turn":store["memory"].turn_number+1,"message":message,"error_type":type(exc).__name__,"error":str(exc)});text="No pude procesar este turno. El error quedó registrado.";result={"input":message,"error":{"type":type(exc).__name__,"message":str(exc)},"production_changed":False}
+ result.setdefault("cache",{"hit":False,"type":None,"calls_avoided":0,"tokens_avoided_estimate":0})
+ if not result.get("blocked") and not result.get("error") and (result.get("understanding_contract") or {}).get("valid"):store["exact_turn_cache"][cache_key]=deepcopy(result)
  store["messages"].append({"role":"assistant","content":text});store["turns"].append(result);return result
 def export_session(s):
  x=get_store(s);return {"format":"agent_core_v2_clean_contract_diagnostic","messages":deepcopy(x["messages"]),"turns":deepcopy(x["turns"]),"state":x["memory"].to_dict(),"budget":deepcopy(x["budget"]),"telemetry":snapshot(x["telemetry"]),"deterministic_results":deepcopy(x.get("deterministic_results",[])),"errors":deepcopy(x["errors"]),"retrieval_enabled":False,"production_changed":False}
