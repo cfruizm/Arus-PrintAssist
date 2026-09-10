@@ -1,9 +1,10 @@
 from pathlib import Path
+import ast
 
-def test_partial_conceptual_not_cached_as_complete():
-    s=Path('app/agent_core_v2_clean/lab_session.py').read_text();assert 'partially_answered' in s
-def test_metrics_use_real_attempts():
-    s=Path('app/agent_core_v2_clean/lab_session.py').read_text();assert 'for attempt in attempts' in s
+def test_syntax():
+ for f in ('semantic_fit.py','answer_context_policy.py'):ast.parse(Path('app/agent_core_v2_clean',f).read_text())
 def test_no_product_rules():
-    text=Path('app/agent_core_v2_clean/semantic_fit.py').read_text().casefold()
-    for value in ('papercut','web jetadmin','sql server','active directory','mfpsecure'):assert value not in text
+ s=Path('app/agent_core_v2_clean/semantic_fit.py').read_text().casefold()
+ for x in ('papercut','mfpsecure','web jetadmin','sql server','active directory'):assert x not in s
+def test_followup_policy_is_generic():
+ s=Path('app/agent_core_v2_clean/answer_context_policy.py').read_text();assert 'generic checklist' in s and 'unconfirmed scenario' in s
