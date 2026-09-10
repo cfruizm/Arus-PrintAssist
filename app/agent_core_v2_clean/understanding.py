@@ -25,9 +25,11 @@ class ConversationUnderstanding:
     if x.topic_relation=="same_topic" and memory.active_topic:x.user_act="follow_up";corrections.append("answer_without_pending_question_to_follow_up")
     else:x.user_act="new_request";corrections.append("answer_without_pending_question_to_new_request")
    if x.domain_relevance=="out_of_scope" and x.needs_clarification and str(x.clarification_target or "").strip():x.domain_relevance="in_scope";x.should_retrieve=False;corrections.append("resolvable_scope_uncertainty_to_material_clarification")
-   if x.intent=="conceptual" and x.user_act in {"new_request","independent_question"} and str(x.current_goal or "").strip():
+   if x.intent=="conceptual" and x.domain_relevance=="in_scope" and x.user_act in {"new_request","independent_question","follow_up"} and str(x.current_goal or "").strip():
     if x.needs_clarification:corrections.append("non_material_conceptual_clarification_suppressed")
     x.needs_clarification=False;x.clarification_target=None
+    if not x.should_retrieve:corrections.append("in_scope_conceptual_retrieval_enforced")
+    x.should_retrieve=True
    if x.needs_clarification and not str(x.clarification_target or "").strip():x.needs_clarification=False;corrections.append("empty_clarification_suppressed")
    if x.user_act=="new_request" and memory.pending_goal.summary and x.current_goal and x.current_goal.casefold()!=memory.pending_goal.summary.casefold() and x.topic_relation!="new_topic":x.topic_relation="new_topic";corrections.append("self_contained_changed_goal_to_new_topic")
    if x.topic_relation=="new_topic":

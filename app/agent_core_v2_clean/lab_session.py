@@ -45,8 +45,8 @@ def _conceptual(result,message,secrets,s,budget,store):
  if cached:result["answer"]=deepcopy(cached["answer"]);result["documented_answer"]={**deepcopy(cached["diagnostic"]),"cache_hit":True};store["cache_metrics"]["documented_answer_hits"]+=1;return result,{"skipped":True,"reason":"documented_answer_cache"}
  allowed,_=budget.can_call(store["telemetry"],estimated_tokens=1100)
  if not allowed:return result,None
- c=DocumentedAnswerComposer(_gateway(secrets,s),260);a=c.compose(message,u,r);payload=a.to_dict();payload.update({"documented_evidence_used":a.mode=="documented_answer","internal_knowledge_used":False,"knowledge_mode":"documented_only" if a.mode=="documented_answer" else "none"});result["answer"]=payload;diag={"enabled":True,"cache_hit":False,"prompt_version":PROMPT_VERSION,"quality_budget_preserved":True};result["documented_answer"]=diag
- if a.mode=="documented_answer":store["memory"].pending_goal.status="complete";result["state_after"]=deepcopy(store["memory"].to_dict());store["documented_answer_cache"][key]={"answer":deepcopy(payload),"diagnostic":deepcopy(diag)}
+ c=DocumentedAnswerComposer(_gateway(secrets,s),260);a=c.compose(message,u,r);payload=a.to_dict();payload.update({"documented_evidence_used":a.mode in {"documented_answer","documented_answer_partial"},"internal_knowledge_used":False,"knowledge_mode":"documented_only" if a.mode in {"documented_answer","documented_answer_partial"} else "none"});result["answer"]=payload;diag={"enabled":True,"cache_hit":False,"prompt_version":PROMPT_VERSION,"quality_budget_preserved":True};result["documented_answer"]=diag
+ if a.mode in {"documented_answer","documented_answer_partial"}:store["memory"].pending_goal.status="complete";result["state_after"]=deepcopy(store["memory"].to_dict());store["documented_answer_cache"][key]={"answer":deepcopy(payload),"diagnostic":deepcopy(diag)}
  return result,c.last_provider_result
 def _answers(result,message,secrets,s,budget,store):
  if (result.get("decision") or {}).get("action")!="defer_to_retrieval":
@@ -58,11 +58,16 @@ def _trace_list(value):
 def _apply_answer_traces(result,c,p,store):
  traces=_trace_list(c)+_trace_list(p)
  result.setdefault("provider_trace",{}).update({"documented_answer":c or {"skipped":True,"reason":"documented_answer_not_called"},"procedural_answer":p or {"skipped":True,"reason":"procedural_answer_not_called"}})
+ recorded=[]
  for trace in traces:
-  if not trace.get("skipped"):add_result(store["telemetry"],trace)
- return traces
+  if trace.get("skipped"):continue
+  attempts=trace.get("attempts") or []
+  if attempts:
+   for attempt in attempts:add_result(store["telemetry"],attempt);recorded.append(attempt)
+  else:add_result(store["telemetry"],trace);recorded.append(trace)
+ return recorded
 def _combined_turn_metrics(understanding,traces):
- items=([understanding] if understanding else [])+[x for x in traces if x and not x.get("skipped")]
+ items=[x for x in (understanding if isinstance(understanding,list) else [understanding]) if x]+[x for x in traces if x and not x.get("skipped")]
  out=_zero();out["calls"]=len(items)
  for item in items:
   usage=item.get("aggregate_usage") or item.get("usage") or {}
@@ -80,7 +85,7 @@ def process_message(message,secrets,s):
  if not allowed:return {"input":message,"blocked":True,"answer":{"text":"La prueba no se ejecutó porque alcanzaría el presupuesto configurado.","mode":"budget_block","knowledge_used":False},"turn_metrics":_zero(),"execution":execution,"production_changed":False}
  store["messages"].append({"role":"user","content":message})
  try:
-  result=build_agent(secrets,s,budget).process(message,store["memory"]);result=_attach_retrieval(result,message,store);base=result.get("provider_trace") or {};contract=(result.get("understanding_contract") or {}).get("valid");add_result(store["telemetry"],base.get("understanding"),contract);add_result(store["telemetry"],base.get("response"));result,c,p=_answers(result,message,secrets,s,budget,store);traces=_apply_answer_traces(result,c,p,store);result["turn_metrics"]=_combined_turn_metrics(base.get("understanding"),traces or _trace_list(base.get("response")));result["session_metrics_after_turn"]=snapshot(store["telemetry"]);result["execution"]={**execution,"cache_hit":False};result["cache"]={"hit":False};text=result["answer"]["text"]
+  result=build_agent(secrets,s,budget).process(message,store["memory"]);result=_attach_retrieval(result,message,store);base=result.get("provider_trace") or {};contract=(result.get("understanding_contract") or {}).get("valid");add_result(store["telemetry"],base.get("understanding"),contract);add_result(store["telemetry"],base.get("response"));result,c,p=_answers(result,message,secrets,s,budget,store);traces=_apply_answer_traces(result,c,p,store);base_traces=[x for x in (base.get("understanding"),base.get("response")) if x and not x.get("skipped")];result["turn_metrics"]=_combined_turn_metrics(base_traces,traces);result["session_metrics_after_turn"]=snapshot(store["telemetry"]);result["execution"]={**execution,"cache_hit":False};result["cache"]={"hit":False};text=result["answer"]["text"]
   if contract and _cacheable_final(result):
    entry={"artifact":_artifact(result),"tokens_estimate":result["turn_metrics"].get("total_tokens",0)};store["exact_turn_cache"][key]=entry;store["exact_turn_cache"][_context_key(message,store["memory"])]=entry
  except Exception as exc:
