@@ -105,6 +105,6 @@ def capture_answer_context(result):
   if title and title not in titles:titles.append(title)
   compact.append({"id":item.get("id"),"title":title,"source":item.get("source"),"url":item.get("url"),"page":item.get("page"),"text":" ".join(str(item.get("text") or "").split())[:1000],"metadata":{k:v for k,v in (item.get("metadata") or {}).items() if k in {"product","component","document_family","canonical_url","source_group"}}})
  normalized=" ".join(text.split())
- questions=re.findall(r"[^?¿]*(?:¿[^?]*\?)",normalized)
- closing_question=questions[-1].strip()[-420:] if questions else None
+ inverted=list(re.finditer(r"¿[^?]{1,420}\?",normalized))
+ closing_question=inverted[-1].group(0).strip() if inverted else None
  return {"answer_mode":answer.get("mode"),"goal":(result.get("understanding") or {}).get("current_goal"),"main_text_excerpt":normalized[:1000],"closing_question":closing_question,"source_identities":identities,"source_titles":titles,"cited_ids":sorted(cited),"cited_evidence":compact,"finish_reason":answer.get("finish_reason"),"partial":str(answer.get("mode") or "").endswith("_partial") or str(answer.get("finish_reason") or "").casefold() in {"length","max_tokens"}}
