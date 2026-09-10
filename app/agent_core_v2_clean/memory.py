@@ -5,17 +5,20 @@ def normalize_goal_updates(updates):
 def _add(xs,v):
  v=" ".join(str(v or "").split())
  if v and v.casefold() not in {x.casefold() for x in xs}:xs.append(v)
+def _record_user_facts(m,clean):
+ for k,v in clean.items():
+  m.fact_records[str(k)]={"key":str(k),"value":str(v),"origin":"user","status":"confirmed","turn":m.turn_number+1}
 def apply_understanding(m,u):
  if u.degraded:m.turn_number+=1;return
  answering=u.user_act=="answer_to_question" and bool(m.last_assistant_question)
  if not answering and u.topic_relation in {"new_topic","independent"} and u.domain_relevance=="in_scope" and m.active_topic and u.current_goal!=m.active_topic:
-  m.topic_history.append({"topic":m.active_topic,"goal":m.pending_goal.summary,"case":m.support_case.__dict__.copy()});m.pending_goal=PendingGoal();m.support_case=type(m.support_case)()
+  m.topic_history.append({"topic":m.active_topic,"goal":m.pending_goal.summary,"case":m.support_case.__dict__.copy()});m.pending_goal=PendingGoal();m.support_case=type(m.support_case)();m.fact_records={}
  if u.domain_relevance=="in_scope":
   if not answering:
    m.active_topic=u.current_goal or m.active_topic
    if u.current_goal:m.pending_goal.summary=u.current_goal
   if u.intent!="unknown" and not answering:m.pending_goal.intent=u.intent
-  clean,_=normalize_goal_updates(u.goal_updates);m.pending_goal.known_details.update(clean)
+  clean,_=normalize_goal_updates(u.goal_updates);m.pending_goal.known_details.update(clean);_record_user_facts(m,clean)
   if u.needs_clarification and u.clarification_target:m.pending_goal.missing_detail=u.clarification_target;m.pending_goal.status="waiting_user"
   else:m.pending_goal.missing_detail=None;m.pending_goal.status="complete" if u.goal_complete else "active"
   for f in u.case_updates:
@@ -29,4 +32,4 @@ def apply_understanding(m,u):
     else:m.support_case.attempts.append({"action":"previous validation","result":v})
     m.support_case.status="diagnosing"
  m.turn_number+=1
-def compact_context(m):return {"active_topic":m.active_topic,"pending_goal":m.pending_goal.__dict__,"support_case":m.support_case.__dict__,"last_assistant_question":m.last_assistant_question,"summary":m.summary,"recent_topics":m.topic_history[-2:]}
+def compact_context(m):return {"active_topic":m.active_topic,"pending_goal":m.pending_goal.__dict__,"confirmed_facts":list(m.fact_records.values()),"support_case":m.support_case.__dict__,"last_assistant_question":m.last_assistant_question,"summary":m.summary,"recent_topics":m.topic_history[-2:]}
