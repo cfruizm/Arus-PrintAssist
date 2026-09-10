@@ -13,6 +13,7 @@ from .retrieval import RetrievalQueryBuilder, ReadOnlyRetrieval, retrieval_summa
 from .documented_answer import DocumentedAnswerComposer, answer_fingerprint, PROMPT_VERSION
 from .documented_router import maybe_generate_procedural
 from .semantic_fit import apply_semantic_fit, capture_answer_context
+from .response_reconciler import reconcile
 
 KEY = "agent_core_v2_clean_store"
 
@@ -176,6 +177,7 @@ def process_message(message, secrets_obj, s):
         result, conceptual, procedural = _answers(result, message, secrets_obj, s, budget, store)
         traces = _apply_answer_traces(result, conceptual, procedural, store)
         result["turn_metrics"] = _combined_turn_metrics([], traces)
+        result = reconcile(result, store["memory"])
         _finalize_answer_context(result, store)
         result["session_metrics_after_turn"] = snapshot(store["telemetry"])
         text = result["answer"]["text"]
@@ -199,6 +201,7 @@ def process_message(message, secrets_obj, s):
         traces = _apply_answer_traces(result, conceptual, procedural, store)
         base_traces = [x for x in (base.get("understanding"), base.get("response")) if x and not x.get("skipped")]
         result["turn_metrics"] = _combined_turn_metrics(base_traces, traces)
+        result = reconcile(result, store["memory"])
         _finalize_answer_context(result, store)
         result["session_metrics_after_turn"] = snapshot(store["telemetry"])
         result["execution"] = {**execution, "cache_hit": False}
