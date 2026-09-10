@@ -22,6 +22,7 @@ def _internal(result,message,gateway,budget,store,model,assessment):
  return result,composer.last_provider_result
 
 def maybe_generate_procedural(result,message,gateway,budget,store,model=""):
+ if (result.get("decision") or {}).get("action")!="defer_to_retrieval":return result,{"skipped":True,"reason":"decision_does_not_authorize_retrieval"}
  u=result.get("understanding") or {};r=result.get("retrieval") or {}
  if u.get("intent")!="procedural":return result,None
  assessment=assess_procedural_evidence(r).to_dict();result["evidence_sufficiency"]=assessment

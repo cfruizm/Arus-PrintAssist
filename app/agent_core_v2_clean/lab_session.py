@@ -38,6 +38,7 @@ def _attach_retrieval(result,message,store):
  except Exception as exc:r={"enabled":True,"ok":False,"llm_called":False,"production_changed":False,"count":0,"evidence":[],"errors":[{"type":type(exc).__name__,"message":str(exc)}]}
  result["retrieval"]=r;result["answer"]["text"]=retrieval_summary(r);result["answer"]["mode"]="retrieval_diagnostic" if r.get("ok") else "retrieval_error";return result
 def _conceptual(result,message,secrets,s,budget,store):
+ if (result.get("decision") or {}).get("action")!="defer_to_retrieval":return result,{"skipped":True,"reason":"decision_does_not_authorize_retrieval"}
  r=result.get("retrieval") or {};u=result.get("understanding") or {}
  if u.get("intent")!="conceptual" or not r.get("ok") or not r.get("evidence"):return result,None
  model=str(getattr(load_gateway_config(secrets),"model","") or "");key=answer_fingerprint(message,u,r,model);cached=store["documented_answer_cache"].get(key)
@@ -48,6 +49,8 @@ def _conceptual(result,message,secrets,s,budget,store):
  if a.mode=="documented_answer":store["memory"].pending_goal.status="complete";result["state_after"]=deepcopy(store["memory"].to_dict());store["documented_answer_cache"][key]={"answer":deepcopy(payload),"diagnostic":deepcopy(diag)}
  return result,c.last_provider_result
 def _answers(result,message,secrets,s,budget,store):
+ if (result.get("decision") or {}).get("action")!="defer_to_retrieval":
+  skipped={"skipped":True,"reason":"decision_does_not_authorize_retrieval"};return result,skipped,skipped
  result,c=_conceptual(result,message,secrets,s,budget,store);result,p=maybe_generate_procedural(result,message,_gateway(secrets,s),budget,store,str(getattr(load_gateway_config(secrets),"model","") or ""));return result,c,p
 def _trace_list(value):
  if not value:return []
