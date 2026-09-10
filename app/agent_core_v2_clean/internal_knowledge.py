@@ -2,7 +2,7 @@ from __future__ import annotations
 import hashlib,json,re,unicodedata
 from .models import AgentResponse
 from .answer_context_policy import enrich_internal_payload
-PROMPT_VERSION="controlled_internal_knowledge_v8_answer_aware"
+PROMPT_VERSION="controlled_internal_knowledge_v9_deterministic_citation_repair"
 WARNING="⚠️ **Orientación complementaria basada en conocimiento general del modelo**"
 SYSTEM="""Actúa como colega de soporte empresarial de impresión. Responde concreta y prudentemente. Usa exactamente estos encabezados Markdown: ### Lo que indica la documentación, ### Orientación complementaria, ### Antes de continuar. La primera sección solo puede usar los extractos suministrados y citas [R#]. Si ningún extracto responde, dilo en una frase. La orientación debe responder al objetivo actual y, cuando exista contexto de una respuesta anterior, debe validar, precisar o corregir esa respuesta en vez de comenzar una lista genérica. Si la respuesta anterior asumió una modalidad no confirmada, indícalo claramente. No presentes una modalidad particular como si fuera todo el objetivo general. No afirmes rutas, claves, versiones, botones o políticas exactas sin evidencia. En las secciones 2 y 3 no uses citas. Evita listas universales de firmware, certificados, red, directorio o permisos si no se relacionan directamente con lo documentado o con el seguimiento. Termina con comprobaciones concretas y reversibles. Máximo 240 palabras."""
 RETRY_SYSTEM="""Reescribe en máximo 170 palabras. Conserva los tres encabezados. Las citas [R#] solo pueden aparecer en la primera sección. Responde al seguimiento usando la respuesta anterior. Elimina listas genéricas y no agregues hechos nuevos."""
@@ -22,6 +22,14 @@ def evidence_excerpt(retrieval,question='',goal='',max_items=5,max_chars=4600):
   if len(out)>=max_items:break
  return out
 
+def repair_citation_placement(text):
+ value=str(text or '')
+ names=['Lo que indica la documentación','Orientación complementaria','Antes de continuar'];positions=[]
+ for name in names:
+  m=re.search(re.escape(name),value,re.I);positions.append(m.start() if m else -1)
+ if not (all(p>=0 for p in positions) and positions==sorted(positions)):return value,False
+ head=value[:positions[1]];rest=re.sub(r'\s*\[(R\d+)\]','',value[positions[1]:]);return head+rest,rest!=value[positions[1]:]
+
 def validate_internal(text,finish_reason=None,valid_ids=None):
  value=str(text or '').strip();names=['Lo que indica la documentación','Orientación complementaria','Antes de continuar'];positions=[]
  for name in names:
@@ -34,10 +42,14 @@ class ControlledInternalKnowledgeComposer:
  def __init__(self,gateway,max_tokens=420):self.gateway=gateway;self.max_tokens=max(320,min(520,int(max_tokens)));self.last_provider_result={};self.validation={};self.attempts=[]
  def _call(self,messages,max_tokens):
   from app.llm_gateway.models import LLMRequest
-  res=self.gateway.complete(LLMRequest(messages,'agent_core_v2_clean_internal_knowledge',max_tokens,0.0,None));self.attempts.append(res.to_dict());return res
+  res=self.gateway.complete(LLMRequest(messages,'agent_core_v2_clean_internal_knowledge',max_tokens,0.0,None));row=res.to_dict();row['purpose']=row.get('purpose') or 'agent_core_v2_clean_internal_knowledge';row.setdefault('metadata',{})['attempted_purpose']='agent_core_v2_clean_internal_knowledge';self.attempts.append(row);return res
  def compose(self,message,u,r,a):
-  ev=evidence_excerpt(r,message,u.get('current_goal') or '');payload={'question':message,'goal':u.get('current_goal'),'documentation_assessment':a,'documented_excerpt':ev};payload=enrich_internal_payload(payload,r.get('_answer_context') or {},u);messages=[{'role':'system','content':SYSTEM},{'role':'user','content':json.dumps(payload,ensure_ascii=False,separators=(',',':'))}];first=self._call(messages,self.max_tokens);valid_ids=[str(x.get('id')) for x in ev];candidates=[];ok,diag=validate_internal(first.text if first.ok else '',first.finish_reason,valid_ids);candidates.append((first,ok,diag))
-  if first.ok and not ok:
+  ev=evidence_excerpt(r,message,u.get('current_goal') or '');payload={'question':message,'goal':u.get('current_goal'),'documentation_assessment':a,'documented_excerpt':ev};payload=enrich_internal_payload(payload,r.get('_answer_context') or {},u);messages=[{'role':'system','content':SYSTEM},{'role':'user','content':json.dumps(payload,ensure_ascii=False,separators=(',',':'))}];first=self._call(messages,self.max_tokens);valid_ids=[str(x.get('id')) for x in ev];candidates=[];ok,diag=validate_internal(first.text if first.ok else '',first.finish_reason,valid_ids)
+  if first.ok and not ok and diag.get('separation_valid') and not diag.get('unknown_citations') and diag.get('finish_complete'):
+   repaired,changed=repair_citation_placement(first.text)
+   if changed:first.text=repaired;ok,diag=validate_internal(repaired,first.finish_reason,valid_ids);diag['deterministic_citation_repair']=True
+  candidates.append((first,ok,diag))
+  if first.ok and not ok and not diag.get('safe_partial'):
    retry=[{'role':'system','content':SYSTEM+'\n'+RETRY_SYSTEM},{'role':'user','content':json.dumps(payload,ensure_ascii=False,separators=(',',':'))},{'role':'assistant','content':str(first.text or '')},{'role':'user','content':'Entrega la versión completa y compacta.'}];second=self._call(retry,300);ok2,diag2=validate_internal(second.text if second.ok else '',second.finish_reason,valid_ids);candidates.append((second,ok2,diag2))
   def rank(item):
    res,valid,diagnostic=item;return (1 if valid else 0,1 if diagnostic.get('safe_partial') else 0,1 if diagnostic.get('finish_complete') else 0,len(str(res.text or '')))

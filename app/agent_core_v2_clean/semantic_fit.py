@@ -1,7 +1,7 @@
 from __future__ import annotations
 import copy, hashlib, re, unicodedata
 
-VERSION = "semantic_evidence_fit_v2_group_scope_continuity"
+VERSION = "semantic_evidence_fit_v3_modifier_alignment"
 STOP = {"para","como","que","del","las","los","una","uno","con","por","sin","antes","debo","debe","deben","en","el","la","y","o","how","what","the","and","for","from","with","this","that","before","after","into","using","is","are","to","configure","configurar","explicar","realizar","aplicar","revisar","necesito","quiero"}
 # Canonical concepts are language bridges, not product or benchmark rules.
 CONCEPTS = {
@@ -12,6 +12,7 @@ CONCEPTS = {
  "security":{"segura","seguro","seguridad","secure","security","protection","proteccion"},
  "user":{"usuario","usuarios","user","users","account","accounts","cuenta","cuentas"},
  "device":{"dispositivo","dispositivos","device","devices","mfd","mfp","equipo","equipos"},
+ "cost":{"cost","costes","costo","costos","gasto","gastos","expense","expenses"},
  "configuration":{"configuracion","configure","configured","configuration","setting","settings","ajuste","ajustes"},
 }
 
@@ -45,9 +46,11 @@ def evaluate_item(item,query_text,fields=None,answer_context=None):
  product_bonus=0.12 if product and any(part and part in confirmed for part in re.split(r"[_\s-]+",product)) else 0.0
  # Penalize scope-heavy titles only when their distinctive terms are neither in the query nor in the previous answer context.
  prior_terms=_terms(answer_context.get("main_text_excerpt") or "");distinct={x for x in specific["title_terms"] if not x.startswith("concept:")} - {x for x in q if not x.startswith("concept:")} - {x for x in prior_terms if not x.startswith("concept:")}
- penalty=min(0.24,0.035*len(distinct))
+ query_concepts={x for x in q if x.startswith("concept:")};document_concepts={x for x in d if x.startswith("concept:")};unrequested_concepts=document_concepts-query_concepts
+ modifier_penalty=min(0.32,0.16*len(unrequested_concepts))
+ penalty=min(0.24,0.035*len(distinct))+modifier_penalty
  score=max(0.0,min(1.0,0.42*coverage+0.22*title_coverage+0.24*concept_coverage+continuity+product_bonus-penalty))
- return {"score":round(score,4),"query_terms":sorted(q),"matched_terms":sorted(overlap),"title_matched_terms":sorted(title_overlap),"concept_matches":sorted(concept_match),"unconfirmed_title_terms":sorted(distinct)[:12],"continuity_boost":continuity,"product_context_bonus":product_bonus,"assumption_penalty":round(penalty,4)}
+ return {"score":round(score,4),"query_terms":sorted(q),"matched_terms":sorted(overlap),"title_matched_terms":sorted(title_overlap),"concept_matches":sorted(concept_match),"unconfirmed_title_terms":sorted(distinct)[:12],"continuity_boost":continuity,"product_context_bonus":product_bonus,"unrequested_concepts":sorted(unrequested_concepts),"modifier_penalty":round(modifier_penalty,4),"assumption_penalty":round(penalty,4)}
 
 def _prior_evidence(answer_context):
  out=[]
