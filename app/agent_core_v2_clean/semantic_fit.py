@@ -1,7 +1,7 @@
 from __future__ import annotations
 import copy, hashlib, re, unicodedata
 
-VERSION = "semantic_evidence_fit_v3_modifier_alignment"
+VERSION = "semantic_evidence_fit_v4_selective_modifiers_intent_affinity"
 STOP = {"para","como","que","del","las","los","una","uno","con","por","sin","antes","debo","debe","deben","en","el","la","y","o","how","what","the","and","for","from","with","this","that","before","after","into","using","is","are","to","configure","configurar","explicar","realizar","aplicar","revisar","necesito","quiero"}
 # Canonical concepts are language bridges, not product or benchmark rules.
 CONCEPTS = {
@@ -46,11 +46,18 @@ def evaluate_item(item,query_text,fields=None,answer_context=None):
  product_bonus=0.12 if product and any(part and part in confirmed for part in re.split(r"[_\s-]+",product)) else 0.0
  # Penalize scope-heavy titles only when their distinctive terms are neither in the query nor in the previous answer context.
  prior_terms=_terms(answer_context.get("main_text_excerpt") or "");distinct={x for x in specific["title_terms"] if not x.startswith("concept:")} - {x for x in q if not x.startswith("concept:")} - {x for x in prior_terms if not x.startswith("concept:")}
- query_concepts={x for x in q if x.startswith("concept:")};document_concepts={x for x in d if x.startswith("concept:")};unrequested_concepts=document_concepts-query_concepts
- modifier_penalty=min(0.32,0.16*len(unrequested_concepts))
+ query_concepts={x for x in q if x.startswith("concept:")};document_concepts={x for x in d if x.startswith("concept:")}
+ # Only meaning-changing qualifiers are restrictive. Context concepts such as user, device, printing, security or configuration must not be punished.
+ restrictive={"concept:cost"};unrequested_concepts=(document_concepts-query_concepts)&restrictive
+ modifier_penalty=min(0.32,0.20*len(unrequested_concepts))
+ intent=str(fields.get("intent") or "").casefold();title_raw=_raw_terms(item.get("title"))
+ conceptual_cues={"about","overview","definition","concept","introduccion","descripcion"};procedural_cues={"configure","configuration","install","enable","setup","configurar","instalar","habilitar"}
+ intent_bonus=0.0
+ if intent=="conceptual":intent_bonus=0.10 if title_raw&conceptual_cues else (-0.06 if title_raw&procedural_cues else 0.0)
+ elif intent=="procedural":intent_bonus=0.08 if title_raw&procedural_cues else 0.0
  penalty=min(0.24,0.035*len(distinct))+modifier_penalty
- score=max(0.0,min(1.0,0.42*coverage+0.22*title_coverage+0.24*concept_coverage+continuity+product_bonus-penalty))
- return {"score":round(score,4),"query_terms":sorted(q),"matched_terms":sorted(overlap),"title_matched_terms":sorted(title_overlap),"concept_matches":sorted(concept_match),"unconfirmed_title_terms":sorted(distinct)[:12],"continuity_boost":continuity,"product_context_bonus":product_bonus,"unrequested_concepts":sorted(unrequested_concepts),"modifier_penalty":round(modifier_penalty,4),"assumption_penalty":round(penalty,4)}
+ score=max(0.0,min(1.0,0.42*coverage+0.22*title_coverage+0.24*concept_coverage+continuity+product_bonus+intent_bonus-penalty))
+ return {"score":round(score,4),"query_terms":sorted(q),"matched_terms":sorted(overlap),"title_matched_terms":sorted(title_overlap),"concept_matches":sorted(concept_match),"unconfirmed_title_terms":sorted(distinct)[:12],"continuity_boost":continuity,"product_context_bonus":product_bonus,"unrequested_concepts":sorted(unrequested_concepts),"modifier_penalty":round(modifier_penalty,4),"intent_affinity":round(intent_bonus,4),"assumption_penalty":round(penalty,4)}
 
 def _prior_evidence(answer_context):
  out=[]
