@@ -2,16 +2,16 @@ from __future__ import annotations
 import hashlib,json,re
 from .models import AgentResponse
 
-PROMPT_VERSION="procedural_documented_v4_semantic_fidelity"
+PROMPT_VERSION="procedural_documented_v5_operational_evidence"
 SYSTEM="""Eres un colega de soporte empresarial de impresión. Responde solo con la evidencia documental suministrada. Redacta un procedimiento práctico, completo y compacto en el idioma del usuario. Usa secciones numeradas en Markdown con el formato **1. Título**. Dentro de cada sección agrupa acciones relacionadas para evitar una lista excesivamente larga. Conserva literalmente nombres de archivos, hojas, campos, botones, validaciones y advertencias. No inventes pasos ni completes vacíos con conocimiento interno. Conserva exactamente las relaciones lógicas de la evidencia: no conviertas alternativas (A o B) en requisitos conjuntos (A y B), no sustituyas el método solicitado por otro parecido y no presentes una modalidad parcial como equivalente al objetivo. Antes de responder, contrasta cada instrucción con la pregunta y con el fragmento citado. Si la evidencia describe opciones pero no el procedimiento exacto solicitado, indícalo en vez de deducir pasos. Cada párrafo o viñeta factual debe terminar con una o más citas [R#]. Finaliza siempre con una sección **Validaciones finales** citada. No incluyas introducciones largas ni menciones el laboratorio."""
 
 BOILERPLATE=("aviso legal","información restringida","control de registros","control de cambios","tiempo de retención","disposición final")
-ACTION_MARKERS=("objetivo","contenido","debemos","luego","botón","archivo","validar","nota","hoja","columna","consumo","proceso","actualizar","copiar","guardar","abrir")
+ACTION_MARKERS=("objetivo","contenido","debemos","luego","botón","archivo","validar","verificar","comprobar","confirmar","requisito","requiere","compatible","compatibilidad","admite","soporta","configurar","seleccionar","habilitar","instalar","conectar","sincronizar","importar","asignar","probar","nota","hoja","columna","consumo","proceso","actualizar","copiar","guardar","abrir")
 
 def _clean(text):return " ".join(str(text or "").split())
 def _usable(e):
  text=_clean(e.get("text"));low=text.casefold();actions=sum(1 for x in ACTION_MARKERS if x in low);noise=sum(1 for x in BOILERPLATE if x in low)
- return len(text)>=80 and actions>=2 and actions>noise
+ return len(text)>=80 and actions>=1 and actions>noise
 
 def evidence_pack(retrieval,max_items=8,max_chars=9000):
  """Keeps actionable evidence, removes legal/control-only chunks, preserves source IDs."""

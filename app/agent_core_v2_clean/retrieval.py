@@ -9,8 +9,12 @@ class RetrievalQuery:
 class RetrievalQueryBuilder:
  def build(self,message,memory,understanding):
   details={str(k):str(v) for k,v in memory.pending_goal.known_details.items() if str(v).strip()}
-  fields={"goal":memory.pending_goal.summary or understanding.current_goal,"intent":memory.pending_goal.intent or understanding.intent,"details":details,"symptoms":list(memory.support_case.symptoms),"observations":list(memory.support_case.observations[-3:]),"affected_scope":memory.support_case.affected_scope,"current_message":message}
-  parts=[str(fields["goal"] or "").strip()]+[f"{k}: {v}" for k,v in details.items()]+fields["symptoms"]
+  user_act=str(getattr(understanding,"user_act","") or "");topic_relation=str(getattr(understanding,"topic_relation","") or "")
+  contextual_operation=str(message or "").strip() if user_act in {"follow_up","answer_to_question","reported_failure","attempt_result"} or topic_relation=="same_topic" else ""
+  fields={"goal":memory.pending_goal.summary or understanding.current_goal,"intent":memory.pending_goal.intent or understanding.intent,"details":details,"symptoms":list(memory.support_case.symptoms),"observations":list(memory.support_case.observations[-3:]),"affected_scope":memory.support_case.affected_scope,"current_message":message,"contextual_operation":contextual_operation or None,"user_act":user_act,"topic_relation":topic_relation}
+  parts=[str(fields["goal"] or "").strip()]
+  if contextual_operation and contextual_operation.casefold()!=str(fields["goal"] or "").strip().casefold():parts.append(contextual_operation)
+  parts += [f"{k}: {v}" for k,v in details.items()]+fields["symptoms"]+fields["observations"]
   if fields["affected_scope"]:parts.append(f"alcance: {fields['affected_scope']}")
   text=". ".join(dict.fromkeys(x for x in parts if x))[:1200];fingerprint=hashlib.sha256(json.dumps(fields,sort_keys=True,ensure_ascii=False).encode()).hexdigest()[:20]
   return RetrievalQuery(text,fields,fingerprint)
