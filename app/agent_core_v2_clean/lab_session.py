@@ -70,6 +70,7 @@ def _attach_retrieval(result, message, store):
             raw["cache_hit"] = False
             store["retrieval_cache"][query.fingerprint] = deepcopy(raw)
         retrieval = apply_semantic_fit(raw, store.get("answer_context"))
+        retrieval["_answer_context"] = deepcopy(store.get("answer_context") or {})
     except Exception as exc:
         retrieval = {"enabled": True, "ok": False, "llm_called": False, "production_changed": False, "count": 0, "evidence": [], "errors": [{"type": type(exc).__name__, "message": str(exc)}]}
     result["retrieval"] = retrieval

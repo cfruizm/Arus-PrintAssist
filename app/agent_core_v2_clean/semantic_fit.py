@@ -72,11 +72,15 @@ def apply_semantic_fit(retrieval,answer_context=None):
  for key,items in groups.items():
   scores=sorted((x["semantic_fit"]["score"] for x in items),reverse=True);group_scores.append((round(0.72*scores[0]+0.28*(sum(scores[:3])/max(1,min(3,len(scores)))),4),key,items))
  group_scores.sort(reverse=True,key=lambda x:x[0]);selected_group=group_scores[0] if group_scores else (0.0,"",[])
- # Keep a coherent leading group. Other documents remain diagnostic, but generators receive the selected group first.
- selected_ids={id(x) for x in selected_group[2]};result["evidence"]=selected_group[2]+[x for x in ordered if id(x) not in selected_ids]
+ # Isolate generation evidence from diagnostic candidates. Generators must not mix documents accidentally.
+ diagnostic=ordered
+ generation=selected_group[2]
+ result["diagnostic_evidence"]=diagnostic
+ result["generation_evidence"]=generation
+ result["evidence"]=generation
  best=selected_group[0];prior_quality=float(((result.get("selection") or {}).get("quality") or 0.0));combined=round(max(0.0,min(1.0,0.76*best+0.24*prior_quality)),4)
  result.setdefault("selection",{})["quality"]=combined
- result["semantic_fit"]={"version":VERSION,"best_group_score":best,"combined_quality":combined,"selected_document":selected_group[1],"selected_group_ids":[str(x.get("id")) for x in selected_group[2]],"carried_previous_evidence":sum(1 for x in evidence if x.get("carried_from_previous_answer")),"previous_answer_sources_used":bool(follow and answer_context and answer_context.get("source_identities")),"accepted_for_generation":combined>=0.38,"low_fit":combined<0.38,"ranked_ids":[str(x.get("id")) for x in result["evidence"]]}
+ result["semantic_fit"]={"version":VERSION,"best_group_score":best,"combined_quality":combined,"selected_document":selected_group[1],"selected_group_ids":[str(x.get("id")) for x in selected_group[2]],"carried_previous_evidence":sum(1 for x in evidence if x.get("carried_from_previous_answer")),"previous_answer_sources_used":bool(follow and answer_context and answer_context.get("source_identities")),"accepted_for_generation":combined>=0.38,"low_fit":combined<0.38,"ranked_ids":[str(x.get("id")) for x in diagnostic],"generation_ids":[str(x.get("id")) for x in generation],"diagnostic_count":len(diagnostic),"generation_count":len(generation)}
  return result
 
 def capture_answer_context(result):
