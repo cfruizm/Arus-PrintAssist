@@ -6,9 +6,9 @@ import unicodedata
 from .models import AgentResponse
 from .answer_context_policy import enrich_internal_payload
 
-PROMPT_VERSION = "controlled_internal_knowledge_v12_compact_followup_context"
+PROMPT_VERSION = "controlled_internal_knowledge_v13_scope_contract"
 WARNING = "⚠️ **Orientación complementaria basada en conocimiento general del modelo**"
-SYSTEM = """Actúa como colega de soporte empresarial de impresión. Usa exactamente: ### Lo que indica la documentación, ### Orientación complementaria, ### Antes de continuar. La primera sección solo usa extractos autorizados y citas [R#]. Las otras secciones no usan citas. Responde al objetivo actual. Respeta hechos confirmados. No conviertas modalidades sugeridas en hechos. Formula como máximo una pregunta indispensable. No menciones procesos internos. Máximo 220 palabras."""
+SYSTEM = """Actúa como colega de soporte empresarial de impresión. Usa exactamente: ### Lo que indica la documentación, ### Orientación complementaria, ### Antes de continuar. La primera sección solo usa extractos autorizados y citas [R#]. Las otras secciones no usan citas. Responde al objetivo actual. Respeta hechos confirmados. La evidencia describe posibilidades, no elecciones del usuario. No conviertas modalidades sugeridas en hechos. Si una modalidad no está confirmada, usa lenguaje condicional. Da primero comprobaciones comunes y después comprobaciones condicionales. Formula como máximo una pregunta indispensable. No menciones procesos internos. Máximo 220 palabras."""
 
 MAX_AUTHORIZED_ITEMS = 4
 MAX_AUTHORIZED_CHARS = 3200
