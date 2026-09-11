@@ -3,7 +3,7 @@ import hashlib,json,re
 from .models import AgentResponse
 
 PROMPT_VERSION="conceptual_documented_v3_partial_length_visible"
-SYSTEM="""Eres un colega de soporte empresarial de impresión. Responde únicamente con la evidencia documental suministrada. Usa el idioma del usuario. Sé útil, directo y natural. No inventes menús, pasos, requisitos ni funciones. Cada afirmación factual debe terminar con una cita [R#]. Si la evidencia solo permite una respuesta parcial, indícalo claramente. Para una consulta conceptual, explica qué es, para qué sirve y sus funciones documentadas. No menciones procesos internos del laboratorio."""
+SYSTEM="""Eres un colega de soporte empresarial de impresión. Responde únicamente con la evidencia documental suministrada. Usa el idioma del usuario. Sé útil, directo y natural. No inventes menús, pasos, requisitos ni funciones. Cada afirmación factual debe terminar con una cita [R#]. Si la evidencia solo permite una respuesta parcial, indícalo claramente. Para una consulta conceptual, explica qué es, para qué sirve y sus funciones documentadas. En comparaciones o recomendaciones, verifica que la evidencia cubra cada alternativa nombrada; si una alternativa no tiene cobertura equivalente, no declares cuál es mejor y explica exactamente qué comparación falta. No conviertas una capacidad documentada de una alternativa en una recomendación frente a otra. No menciones procesos internos del laboratorio."""
 
 def evidence_pack(retrieval,max_items=4,max_chars=5200):
  """Keeps the approved quality envelope. Only removes empty or exact-duplicate chunks."""
@@ -50,3 +50,7 @@ class DocumentedAnswerComposer:
   if sources:text += "\n\n**Fuentes documentales**\n"+"\n".join(f"- {line}" for line in sources)
   mode="documented_answer_partial" if truncated else "documented_answer"
   return AgentResponse(text,mode,True,r.provider,r.model,r.usage,r.finish_reason)
+
+
+
+

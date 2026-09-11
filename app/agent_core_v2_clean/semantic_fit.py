@@ -41,7 +41,7 @@ def evaluate_item(item,query_text,fields=None,answer_context=None):
  q=_terms(stable);d=_document_terms(item);title_terms=_terms(item.get("title"));overlap=q&d;title_overlap=q&title_terms
  concept_q={x for x in q if x.startswith("concept:")};concept_match=concept_q&d
  coverage=len(overlap)/max(1,len(q));title_coverage=len(title_overlap)/max(1,len(q));concept_coverage=len(concept_match)/max(1,len(concept_q)) if concept_q else 0.0
- previous_ids=set(answer_context.get("source_identities") or []);follow=fields.get("user_act") in {"follow_up","answer_to_question","attempt_result","reported_failure"};continuity=0.20 if follow and _identity(item) in previous_ids else 0.0
+ previous_ids=set(answer_context.get("source_identities") or []);follow=fields.get("user_act") in {"follow_up","answer_to_question","request_elaboration","attempt_result","reported_failure"};continuity=0.20 if follow and _identity(item) in previous_ids else 0.0
  specific=_specificity(item);confirmed=" ".join(str(v).casefold() for v in details.values());product= specific["product"]
  product_bonus=0.12 if product and any(part and part in confirmed for part in re.split(r"[_\s-]+",product)) else 0.0
  # Penalize scope-heavy titles only when their distinctive terms are neither in the query nor in the previous answer context.
@@ -66,7 +66,7 @@ def _prior_evidence(answer_context):
  return out
 
 def apply_semantic_fit(retrieval,answer_context=None):
- result=copy.deepcopy(retrieval or {});query=result.get("query") or {};fields=query.get("fields") or {};follow=fields.get("user_act") in {"follow_up","answer_to_question","attempt_result","reported_failure"}
+ result=copy.deepcopy(retrieval or {});query=result.get("query") or {};fields=query.get("fields") or {};follow=fields.get("user_act") in {"follow_up","answer_to_question","request_elaboration","attempt_result","reported_failure"}
  evidence=list(result.get("evidence") or [])
  if follow:
   known={_identity(x) for x in evidence}
@@ -108,3 +108,7 @@ def capture_answer_context(result):
  inverted=list(re.finditer(r"¿[^?]{1,420}\?",normalized))
  closing_question=inverted[-1].group(0).strip() if inverted else None
  return {"answer_mode":answer.get("mode"),"goal":(result.get("understanding") or {}).get("current_goal"),"main_text_excerpt":normalized[:1000],"closing_question":closing_question,"source_identities":identities,"source_titles":titles,"cited_ids":sorted(cited),"cited_evidence":compact,"finish_reason":answer.get("finish_reason"),"partial":str(answer.get("mode") or "").endswith("_partial") or str(answer.get("finish_reason") or "").casefold() in {"length","max_tokens"}}
+
+
+
+

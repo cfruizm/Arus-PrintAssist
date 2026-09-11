@@ -10,7 +10,7 @@ class RetrievalQueryBuilder:
  def build(self,message,memory,understanding):
   details={str(k):str(v) for k,v in memory.pending_goal.known_details.items() if str(v).strip()}
   user_act=str(getattr(understanding,"user_act","") or "");topic_relation=str(getattr(understanding,"topic_relation","") or "")
-  contextual_operation=str(message or "").strip() if user_act in {"follow_up","answer_to_question","reported_failure","attempt_result"} or topic_relation=="same_topic" else ""
+  contextual_operation=str(message or "").strip() if user_act in {"follow_up","answer_to_question","request_elaboration","reported_failure","attempt_result"} or topic_relation=="same_topic" else ""
   fields={"goal":memory.pending_goal.summary or understanding.current_goal,"intent":memory.pending_goal.intent or understanding.intent,"details":details,"symptoms":list(memory.support_case.symptoms),"observations":list(memory.support_case.observations[-3:]),"affected_scope":memory.support_case.affected_scope,"current_message":message,"contextual_operation":contextual_operation or None,"user_act":user_act,"topic_relation":topic_relation}
   parts=[str(fields["goal"] or "").strip()]
   if contextual_operation and contextual_operation.casefold()!=str(fields["goal"] or "").strip().casefold():parts.append(contextual_operation)
@@ -83,3 +83,7 @@ def retrieval_summary(r):
   if g["title"] not in titles:titles.append(g["title"])
  exp=r.get("procedural_expansion") or {};extra=f" Evidencia procedimental ordenada en {len(exp.get('pages') or [])} página(s) del documento principal." if exp.get("attempted") and exp.get("ok") else ""
  return f"Encontré {r['count']} fragmentos en {len(r.get('document_groups') or [])} documento(s). Fuentes principales: "+"; ".join(titles[:3])+"."+extra+" La respuesta documentada procedimental se habilitará después de validar esta evidencia."
+
+
+
+

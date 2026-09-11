@@ -1,7 +1,7 @@
 import json
 from .models import AgentResponse
 from .memory import compact_context
-SYSTEM="""Natural enterprise printing-support colleague. Use the user's language. Help first. Answer immediately when sufficiently clear. Ask exactly one short targeted question only when one missing fact is indispensable and materially changes the answer. If asking, do not include examples, technology lists, checklists, speculative mechanisms or a second question. Add at most one short sentence explaining why the answer matters. Retrieval is disabled here: never invent exact menus, commands, values or product procedures. Concise."""
+SYSTEM="""Natural enterprise printing-support colleague. Use the user's language. Help first. Answer immediately when sufficiently clear. Resolve references to the last assistant question or last recommended check before introducing a different verification. Treat diagnostic hypotheses as possibilities, not confirmed causes. Ask exactly one short targeted question only when one missing fact is indispensable and materially changes the answer. If asking, do not include examples, technology lists, checklists, speculative mechanisms or a second question. Add at most one short sentence explaining why the answer matters. Retrieval is disabled here: never invent exact menus, commands, values or product procedures. Concise."""
 class NaturalResponseComposer:
  def __init__(self,gateway,max_tokens=220):self.gateway=gateway;self.max_tokens=max(120,min(300,int(max_tokens)));self.last_provider_result={}
  def compose(self,message,m,u,d):
@@ -14,3 +14,7 @@ class NaturalResponseComposer:
   r=self.gateway.complete(LLMRequest([{"role":"system","content":SYSTEM},{"role":"user","content":json.dumps({"message":message,"memory":compact_context(m),"understanding":u.to_dict(),"decision":d.to_dict()},ensure_ascii=False,separators=(",",":"))}],"agent_core_v2_clean_response",min(self.max_tokens,150),0.,None));self.last_provider_result=r.to_dict()
   if not r.ok:return AgentResponse("Conservé el contexto, pero no pude generar la siguiente orientación.","provider_degraded")
   return AgentResponse(r.text.strip(),"natural_support",d.action in {"answer","diagnose"},r.provider,r.model,r.usage,r.finish_reason)
+
+
+
+

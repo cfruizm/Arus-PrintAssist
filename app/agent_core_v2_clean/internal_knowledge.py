@@ -6,9 +6,9 @@ import unicodedata
 from .models import AgentResponse
 from .answer_context_policy import enrich_internal_payload
 
-PROMPT_VERSION = "controlled_internal_knowledge_v13_scope_contract"
+PROMPT_VERSION = "controlled_internal_knowledge_v14_resilient_completion"
 WARNING = "⚠️ **Orientación complementaria basada en conocimiento general del modelo**"
-SYSTEM = """Actúa como colega de soporte empresarial de impresión. Usa exactamente: ### Lo que indica la documentación, ### Orientación complementaria, ### Antes de continuar. La primera sección solo usa extractos autorizados y citas [R#]. Las otras secciones no usan citas. Responde al objetivo actual. Respeta hechos confirmados. La evidencia describe posibilidades, no elecciones del usuario. No conviertas modalidades sugeridas en hechos. Si una modalidad no está confirmada, usa lenguaje condicional. Da primero comprobaciones comunes y después comprobaciones condicionales. Formula como máximo una pregunta indispensable. No menciones procesos internos. Máximo 220 palabras."""
+SYSTEM = """Actúa como colega de soporte empresarial de impresión. Usa exactamente: ### Lo que indica la documentación, ### Orientación complementaria, ### Antes de continuar. La primera sección solo usa extractos autorizados y citas [R#]. Las otras secciones no usan citas. Responde al objetivo actual. Respeta hechos confirmados. La evidencia describe posibilidades, no elecciones del usuario. No conviertas modalidades sugeridas en hechos. Si una modalidad no está confirmada, usa lenguaje condicional. Da primero comprobaciones comunes y después comprobaciones condicionales. La sección Antes de continuar no exige una pregunta: úsala para una pregunta solo si falta un dato indispensable; de lo contrario indica el siguiente paso útil o una limitación. No repitas una pregunta anterior salvo que siga siendo indispensable para la solicitud actual. Si la documentación cubre requisitos, opciones o contexto pero no el procedimiento solicitado, dilo claramente y ofrece solo preparación segura. No menciones procesos internos. Máximo 180 palabras."""
 
 MAX_AUTHORIZED_ITEMS = 4
 MAX_AUTHORIZED_CHARS = 3200
@@ -167,99 +167,39 @@ class ControlledInternalKnowledgeComposer:
         self.last_provider_result = {}
         self.validation = {}
         self.attempts = []
-
-    def compose(self, message, understanding, retrieval, assessment):
+    def _call(self, payload, compact=False):
         from app.llm_gateway.models import LLMRequest
-
-        evidence = authorized_evidence(
-            retrieval,
-            message,
-            understanding.get("current_goal") or "",
-        )
-        payload = {
-            "question": message,
-            "goal": understanding.get("current_goal"),
-            "documentation_assessment": assessment,
-            "authorized_evidence": evidence,
-        }
-        payload = enrich_internal_payload(
-            payload,
-            retrieval.get("_answer_context") or {},
-            understanding,
-        )
-        result = self.gateway.complete(
-            LLMRequest(
-                [
-                    {"role": "system", "content": SYSTEM},
-                    {
-                        "role": "user",
-                        "content": json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
-                    },
-                ],
-                "agent_core_v2_clean_internal_knowledge",
-                self.max_tokens,
-                0.0,
-                None,
-            )
-        )
+        system = SYSTEM + (" Responde de nuevo de forma completa en máximo 130 palabras. Conserva las tres secciones; evita repetir requisitos y no dejes una pregunta incompleta." if compact else "")
+        return self.gateway.complete(LLMRequest(
+            [{"role":"system","content":system},{"role":"user","content":json.dumps(payload,ensure_ascii=False,separators=(",",":"))}],
+            "agent_core_v2_clean_internal_knowledge", self.max_tokens, 0.0, None))
+    def compose(self, message, understanding, retrieval, assessment):
+        evidence = authorized_evidence(retrieval, message, understanding.get("current_goal") or "")
+        payload = {"question":message,"goal":understanding.get("current_goal"),"documentation_assessment":assessment,"authorized_evidence":evidence}
+        payload = enrich_internal_payload(payload, retrieval.get("_answer_context") or {}, understanding)
+        result = self._call(payload)
         self.attempts = [result.to_dict()]
+        length_retry = bool(result.ok and str(result.finish_reason or "").casefold() in {"length","max_tokens"})
+        if length_retry:
+            compact_payload = dict(payload)
+            compact_payload["authorized_evidence"] = evidence[:2]
+            compact_payload["completion_recovery"] = {"reason":"previous_output_truncated","must_finish":True}
+            result = self._call(compact_payload, True)
+            self.attempts.append(result.to_dict())
         valid_ids = [item["id"] for item in evidence]
-        valid, diagnostic = validate_internal(
-            result.text if result.ok else "",
-            result.finish_reason,
-            valid_ids,
-        )
-
+        valid, diagnostic = validate_internal(result.text if result.ok else "", result.finish_reason, valid_ids)
         if result.ok and not valid and diagnostic.get("separation_valid") and diagnostic.get("finish_complete"):
             repaired, changed = repair_citation_placement(result.text)
             if changed:
                 result.text = repaired
                 valid, diagnostic = validate_internal(repaired, result.finish_reason, valid_ids)
                 diagnostic["deterministic_citation_repair"] = True
-
-        self.validation = {
-            **diagnostic,
-            "retry_used": False,
-            "attempt_count": 1,
-            "selected_attempt": 1,
-            "published_partial": False,
-            "selected_evidence_ids": valid_ids,
-            "authorized_stable_ids": [item["stable_id"] for item in evidence],
-            "authorized_evidence_count": len(evidence),
-            "authorized_evidence_chars": sum(len(item.get("text") or "") for item in evidence),
-            "answer_context_used": bool(payload.get("previous_answer_context")),
-            "compact_followup_context": bool(payload.get("previous_answer_context")),
-        }
-        self.last_provider_result = {
-            **result.to_dict(),
-            "selected_attempt": 1,
-            "attempts": self.attempts,
-            "aggregate_usage": result.usage,
-            "aggregate_latency_ms": float(getattr(result, "latency_ms", 0) or 0),
-        }
-
+        usage={k:sum(int((a.get("usage") or {}).get(k,0) or 0) for a in self.attempts) for k in ("prompt_tokens","completion_tokens","total_tokens")}
+        self.validation = {**diagnostic,"retry_used":length_retry,"length_recovery_attempted":length_retry,"length_recovery_succeeded":bool(length_retry and valid),"attempt_count":len(self.attempts),"selected_attempt":len(self.attempts),"published_partial":False,"selected_evidence_ids":valid_ids,"authorized_stable_ids":[item["stable_id"] for item in evidence],"authorized_evidence_count":len(evidence),"authorized_evidence_chars":sum(len(item.get("text") or "") for item in evidence),"answer_context_used":bool(payload.get("previous_answer_context")),"compact_followup_context":bool(payload.get("previous_answer_context"))}
+        self.last_provider_result = {**result.to_dict(),"selected_attempt":len(self.attempts),"attempts":self.attempts,"aggregate_usage":usage,"aggregate_latency_ms":sum(float(a.get("latency_ms") or 0) for a in self.attempts)}
         if not result.ok:
-            return AgentResponse(
-                "La documentación no es suficiente y no fue posible generar orientación complementaria.",
-                "internal_knowledge_provider_degraded",
-                False,
-            )
+            return AgentResponse("La documentación no es suficiente y no fue posible generar orientación complementaria.","internal_knowledge_provider_degraded",False)
         if not valid:
-            return AgentResponse(
-                "Encontré orientación relacionada, pero no puedo publicarla sin una separación documental válida.",
-                "internal_knowledge_separation_guard",
-                False,
-                result.provider,
-                result.model,
-                result.usage,
-                result.finish_reason,
-            )
-        return AgentResponse(
-            f"{WARNING}\n\n{str(result.text).strip()}",
-            "controlled_internal_knowledge",
-            True,
-            result.provider,
-            result.model,
-            result.usage,
-            result.finish_reason,
-        )
+            reason="La orientación generada quedó incompleta y no fue posible recuperarla de forma segura." if not diagnostic.get("finish_complete") else "La orientación generada no superó la validación documental y no será publicada."
+            return AgentResponse(reason,"internal_knowledge_completion_guard" if not diagnostic.get("finish_complete") else "internal_knowledge_separation_guard",False,result.provider,result.model,usage,result.finish_reason)
+        return AgentResponse(f"{WARNING}\n\n{str(result.text).strip()}","controlled_internal_knowledge",True,result.provider,result.model,usage,result.finish_reason)
