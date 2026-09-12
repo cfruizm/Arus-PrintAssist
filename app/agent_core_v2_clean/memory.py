@@ -21,7 +21,13 @@ def apply_understanding(m,u):
   clean,_=normalize_goal_updates(u.goal_updates);m.pending_goal.known_details.update(clean);_record_user_facts(m,clean)
   if u.needs_clarification and u.clarification_target:m.pending_goal.missing_detail=u.clarification_target;m.pending_goal.status="waiting_user"
   else:m.pending_goal.missing_detail=None;m.pending_goal.status="complete" if u.goal_complete else "active"
-  for f in u.case_updates:
+  case_updates=list(u.case_updates or [])
+  if u.intent=="troubleshooting":
+   present={str(x.get("type") or "") for x in case_updates}
+   for key in ("symptom","observation","affected_scope","attempted_action","attempt_result"):
+    value=str(clean.get(key) or "").strip()
+    if value and key not in present:case_updates.append({"type":key,"value":value})
+  for f in case_updates:
    k,v=str(f.get("type") or ""),str(f.get("value") or "").strip()
    if k in {"symptom","reported_failure","new_case"}:_add(m.support_case.symptoms,v);m.support_case.status="diagnosing"
    elif k=="observation":_add(m.support_case.observations,v);m.support_case.status="diagnosing"
@@ -33,3 +39,7 @@ def apply_understanding(m,u):
     m.support_case.status="diagnosing"
  m.turn_number+=1
 def compact_context(m):return {"active_topic":m.active_topic,"pending_goal":m.pending_goal.__dict__,"confirmed_facts":list(m.fact_records.values()),"support_case":m.support_case.__dict__,"last_assistant_question":m.last_assistant_question,"summary":m.summary,"recent_topics":m.topic_history[-2:]}
+
+
+
+

@@ -1,14 +1,14 @@
 import json
 from .models import AgentResponse
 from .memory import compact_context
-SYSTEM="""Natural enterprise printing-support colleague. Use the user's language. Help first. Answer immediately when sufficiently clear. Resolve references to the last assistant question or last recommended check before introducing a different verification. Treat diagnostic hypotheses as possibilities, not confirmed causes. Ask exactly one short targeted question only when one missing fact is indispensable and materially changes the answer. If asking, do not include examples, technology lists, checklists, speculative mechanisms or a second question. Add at most one short sentence explaining why the answer matters. Retrieval is disabled here: never invent exact menus, commands, values or product procedures. Concise."""
+SYSTEM="""Natural enterprise printing-support colleague. Use the user's language. Help first. Answer immediately when sufficiently clear. Ask exactly one short targeted question only when one missing fact is indispensable and materially changes the answer. If asking, do not include examples, technology lists, checklists, speculative mechanisms or a second question. Add at most one short sentence explaining why the answer matters. Retrieval is disabled here: never provide exact menus, service names, commands, paths, values or product procedures. Diagnostic hypotheses are possibilities, never confirmed causes or exclusions unless the user supplied confirming evidence. Concise."""
 class NaturalResponseComposer:
  def __init__(self,gateway,max_tokens=220):self.gateway=gateway;self.max_tokens=max(120,min(300,int(max_tokens)));self.last_provider_result={}
  def compose(self,message,m,u,d):
   if d.action=="redirect_scope":return AgentResponse("Ese tema está fuera de mi alcance de soporte de impresión. Si quieres, continuamos con el caso técnico.","out_of_scope")
   if d.action=="cancel":m.pending_goal.status="inactive";return AgentResponse("Listo, cancelé el flujo actual. ¿Qué necesitas revisar ahora?","cancelled")
   if d.action=="degraded_continue":return AgentResponse("No pude interpretar este turno de forma confiable. Conservé el estado anterior sin aplicar cambios.","provider_degraded")
-  if d.action=="defer_to_retrieval":return AgentResponse("La solicitud quedó lista para contrastarla con la documentación.","retrieval_pending")
+  if d.action in {"defer_to_retrieval","diagnose_with_retrieval"}:return AgentResponse("La solicitud quedó lista para contrastarla con la documentación.","retrieval_pending")
   if d.action=="ask_one_question" and not d.question_target:return AgentResponse("Puedo orientarte con lo disponible.","natural_support",True)
   from app.llm_gateway.models import LLMRequest
   r=self.gateway.complete(LLMRequest([{"role":"system","content":SYSTEM},{"role":"user","content":json.dumps({"message":message,"memory":compact_context(m),"understanding":u.to_dict(),"decision":d.to_dict()},ensure_ascii=False,separators=(",",":"))}],"agent_core_v2_clean_response",min(self.max_tokens,150),0.,None));self.last_provider_result=r.to_dict()

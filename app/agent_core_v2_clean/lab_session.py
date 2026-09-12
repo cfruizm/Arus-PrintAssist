@@ -16,6 +16,8 @@ from .semantic_fit import apply_semantic_fit, capture_answer_context
 from .response_reconciler import reconcile
 
 KEY = "agent_core_v2_clean_store"
+ARCHIVE_KEY = "agent_core_v2_clean_session_archive"
+MAX_ARCHIVED_SESSIONS = 12
 
 def _context_key(message, memory):
     return "|".join((" ".join(str(message).split()).casefold(), str(memory.active_topic or "").strip().casefold(), str(memory.pending_goal.summary or "").strip().casefold()))
@@ -41,10 +43,13 @@ def get_store(s):
         x.setdefault(k, d)
     return x
 
+def _session_payload(x):
+    return {"format":"agent_core_v2_clean_phase3a9","session_id":x.get("session_id"),"messages":deepcopy(x.get("messages") or []),"turns":deepcopy(x.get("turns") or []),"state":x["memory"].to_dict(),"answer_context":deepcopy(x.get("answer_context") or {}),"budget":deepcopy(x.get("budget") or {}),"telemetry":snapshot(x.get("telemetry") or empty()),"cache_metrics":deepcopy(x.get("cache_metrics") or {}),"errors":deepcopy(x.get("errors") or [])}
 def reset_store(s):
-    reset_gateway_session(s)
-    s.pop(KEY, None)
-    return get_store(s)
+    current=s.get(KEY)
+    if current and (current.get("messages") or current.get("turns")):
+        archive=s.setdefault(ARCHIVE_KEY,[]);archive.append(_session_payload(current));del archive[:-MAX_ARCHIVED_SESSIONS]
+    reset_gateway_session(s);s.pop(KEY,None);return get_store(s)
 
 def _gateway(secrets_obj, s):
     return LLMGateway(load_gateway_config(secrets_obj), s)
@@ -54,7 +59,7 @@ def build_agent(secrets_obj, s, budget):
     return CleanConversationalAgent(ConversationUnderstanding(g, budget.understanding_max_tokens), ConversationPolicy(), NaturalResponseComposer(g, budget.response_max_tokens))
 
 def _attach_retrieval(result, message, store):
-    if (result.get("decision") or {}).get("action") != "defer_to_retrieval":
+    if (result.get("decision") or {}).get("action") not in {"defer_to_retrieval", "diagnose_with_retrieval"}:
         return result
     try:
         u = type("U", (), result.get("understanding") or {})()
@@ -80,11 +85,11 @@ def _attach_retrieval(result, message, store):
     return result
 
 def _conceptual(result, message, secrets_obj, s, budget, store):
-    if (result.get("decision") or {}).get("action") != "defer_to_retrieval":
+    if (result.get("decision") or {}).get("action") not in {"defer_to_retrieval", "diagnose_with_retrieval"}:
         return result, {"skipped": True, "reason": "decision_does_not_authorize_retrieval"}
     retrieval = result.get("retrieval") or {}
     understanding = result.get("understanding") or {}
-    if understanding.get("intent") != "conceptual" or not retrieval.get("ok") or not retrieval.get("evidence"):
+    if understanding.get("intent") not in {"conceptual", "requirements"} or not retrieval.get("ok") or not retrieval.get("evidence"):
         return result, None
     model = str(getattr(load_gateway_config(secrets_obj), "model", "") or "")
     key = answer_fingerprint(message, understanding, retrieval, model)
@@ -112,7 +117,7 @@ def _conceptual(result, message, secrets_obj, s, budget, store):
     return result, composer.last_provider_result
 
 def _answers(result, message, secrets_obj, s, budget, store):
-    if (result.get("decision") or {}).get("action") != "defer_to_retrieval":
+    if (result.get("decision") or {}).get("action") not in {"defer_to_retrieval", "diagnose_with_retrieval"}:
         skipped = {"skipped": True, "reason": "decision_does_not_authorize_retrieval"}
         return result, skipped, skipped
     result, conceptual_trace = _conceptual(result, message, secrets_obj, s, budget, store)
@@ -162,8 +167,6 @@ def _finalize_answer_context(result, store):
     if context:
         store["answer_context"] = context
         result["answer_context"] = deepcopy(context)
-        # The final published answer can differ from the conversational draft after retrieval.
-        # Persist its actual closing question as a semantic anchor for the next turn.
         store["memory"].last_assistant_question = context.get("closing_question") or None
         result["state_after"] = deepcopy(store["memory"].to_dict())
 
@@ -225,9 +228,4 @@ def process_message(message, secrets_obj, s):
     return result
 
 def export_session(s):
-    x = get_store(s)
-    return {"format": "agent_core_v2_clean_phase3a4", "session_id": x.get("session_id"), "gateway_budget": {"calls": int(s.get("llm_gateway_calls", 0)), "tokens": int(s.get("llm_gateway_tokens", 0))}, "messages": deepcopy(x["messages"]), "turns": deepcopy(x["turns"]), "state": x["memory"].to_dict(), "answer_context": deepcopy(x.get("answer_context") or {}), "budget": deepcopy(x["budget"]), "telemetry": snapshot(x["telemetry"]), "cache_metrics": deepcopy(x["cache_metrics"]), "errors": deepcopy(x["errors"]), "retrieval_enabled": True, "documented_answer_enabled": True, "procedural_answer_enabled": True, "production_changed": False}
-
-
-
-
+    x=get_store(s);current=_session_payload(x);current["gateway_budget"]={"calls":int(s.get("llm_gateway_calls",0)),"tokens":int(s.get("llm_gateway_tokens",0))};current["archived_sessions"]=deepcopy(s.get(ARCHIVE_KEY) or []);current["session_count"]=len(current["archived_sessions"])+1;current["export_scope"]="current_and_archived_sessions";current.update({"retrieval_enabled":True,"documented_answer_enabled":True,"procedural_answer_enabled":True,"production_changed":False});return current

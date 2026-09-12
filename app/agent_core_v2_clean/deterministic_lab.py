@@ -30,7 +30,7 @@ def process_deterministic(message,semantic_input,store):
  u=TurnUnderstanding(user_act=str(semantic_input["user_act"]),intent=str(semantic_input["intent"]),topic_relation=str(semantic_input["topic_relation"]),domain_relevance=str(semantic_input["domain_relevance"]),current_goal=str(semantic_input["current_goal"]),goal_complete=bool(semantic_input.get("goal_complete",False)),goal_updates=dict(semantic_input.get("goal_updates") or {}),case_updates=list(semantic_input.get("case_updates") or []),needs_clarification=bool(semantic_input.get("needs_clarification",False)),clarification_target=semantic_input.get("clarification_target"),should_retrieve=bool(semantic_input.get("should_retrieve",True)),confidence=1.0,reasoning_summary="explicit_zero_llm_contract",degraded=False)
  decision=ConversationPolicy().decide(u,store["memory"]);apply_understanding(store["memory"],u)
  retrieval={"enabled":False,"llm_called":False,"production_changed":False,"skipped_reason":"decision_does_not_require_retrieval"};answer="Turno procesado sin LLM."
- if decision.action=="defer_to_retrieval":
+ if decision.action in {"defer_to_retrieval","diagnose_with_retrieval"}:
   builder=RetrievalQueryBuilder();built=builder.build(message,store["memory"],u);current=builder.current_only(message,u);cache=store.setdefault("retrieval_cache",{});cached=cache.get(built.fingerprint)
   if cached:retrieval=deepcopy(cached);retrieval["cache_hit"]=True
   else:retrieval=ReadOnlyRetrieval(k=6).search(built,current);retrieval["cache_hit"]=False;cache[built.fingerprint]=deepcopy(retrieval)
@@ -41,3 +41,7 @@ def process_deterministic(message,semantic_input,store):
  _publish_exact_cache(store,message,key_before,result)
  store["messages"] += [{"role":"user","content":message},{"role":"assistant","content":answer}];store["turns"].append(result)
  return result
+
+
+
+
