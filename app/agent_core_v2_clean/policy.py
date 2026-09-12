@@ -6,12 +6,7 @@ class ConversationPolicy:
   if u.intent=="cancel" or u.user_act=="cancel":return AgentDecision("cancel","explicit_cancel")
   if u.intent=="escalation" or u.user_act=="escalation":return AgentDecision("offer_escalation","explicit_escalation")
   if u.degraded:return AgentDecision("degraded_continue","provider_degraded")
-  if u.user_act=="request_elaboration" and m.support_case.status=="diagnosing":return AgentDecision("diagnose_with_retrieval","active_case_operational_guidance_requires_grounding")
-  if u.intent=="troubleshooting" and u.should_retrieve and u.user_act=="request_elaboration":return AgentDecision("diagnose_with_retrieval","grounded_diagnostic_guidance_required")
+  if m.support_case.status=="diagnosing" and u.should_retrieve and u.user_act in {"request_elaboration","answer_to_question","attempt_result"}:return AgentDecision("diagnose_with_retrieval","active_case_next_guidance_requires_grounding")
   if u.intent=="troubleshooting":return AgentDecision("diagnose","active_failure")
   if u.should_retrieve:return AgentDecision("defer_to_retrieval","retrieval_required_in_next_phase")
   return AgentDecision("answer","goal_understood")
-
-
-
-
