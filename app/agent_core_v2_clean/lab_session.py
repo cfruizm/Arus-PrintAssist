@@ -16,8 +16,6 @@ from .semantic_fit import apply_semantic_fit, capture_answer_context
 from .response_reconciler import reconcile
 
 KEY = "agent_core_v2_clean_store"
-ARCHIVE_KEY = "agent_core_v2_clean_session_archive"
-MAX_ARCHIVED_SESSIONS = 12
 
 def _context_key(message, memory):
     return "|".join((" ".join(str(message).split()).casefold(), str(memory.active_topic or "").strip().casefold(), str(memory.pending_goal.summary or "").strip().casefold()))
@@ -43,13 +41,10 @@ def get_store(s):
         x.setdefault(k, d)
     return x
 
-def _session_payload(x):
-    return {"format":"agent_core_v2_clean_phase3a9","session_id":x.get("session_id"),"messages":deepcopy(x.get("messages") or []),"turns":deepcopy(x.get("turns") or []),"state":x["memory"].to_dict(),"answer_context":deepcopy(x.get("answer_context") or {}),"budget":deepcopy(x.get("budget") or {}),"telemetry":snapshot(x.get("telemetry") or empty()),"cache_metrics":deepcopy(x.get("cache_metrics") or {}),"errors":deepcopy(x.get("errors") or [])}
 def reset_store(s):
-    current=s.get(KEY)
-    if current and (current.get("messages") or current.get("turns")):
-        archive=s.setdefault(ARCHIVE_KEY,[]);archive.append(_session_payload(current));del archive[:-MAX_ARCHIVED_SESSIONS]
-    reset_gateway_session(s);s.pop(KEY,None);return get_store(s)
+    reset_gateway_session(s)
+    s.pop(KEY, None)
+    return get_store(s)
 
 def _gateway(secrets_obj, s):
     return LLMGateway(load_gateway_config(secrets_obj), s)
@@ -102,7 +97,7 @@ def _conceptual(result, message, secrets_obj, s, budget, store):
     allowed, _ = budget.can_call(store["telemetry"], estimated_tokens=1100)
     if not allowed:
         return result, None
-    composer = DocumentedAnswerComposer(_gateway(secrets_obj, s), 260)
+    composer = DocumentedAnswerComposer(_gateway(secrets_obj, s), 480 if understanding.get("intent") == "requirements" else 260)
     answer = composer.compose(message, understanding, retrieval)
     payload = answer.to_dict()
     payload.update({"documented_evidence_used": answer.mode in {"documented_answer", "documented_answer_partial"}, "internal_knowledge_used": False, "knowledge_mode": "documented_only" if answer.mode in {"documented_answer", "documented_answer_partial"} else "none"})
@@ -228,4 +223,9 @@ def process_message(message, secrets_obj, s):
     return result
 
 def export_session(s):
-    x=get_store(s);current=_session_payload(x);current["gateway_budget"]={"calls":int(s.get("llm_gateway_calls",0)),"tokens":int(s.get("llm_gateway_tokens",0))};current["archived_sessions"]=deepcopy(s.get(ARCHIVE_KEY) or []);current["session_count"]=len(current["archived_sessions"])+1;current["export_scope"]="current_and_archived_sessions";current.update({"retrieval_enabled":True,"documented_answer_enabled":True,"procedural_answer_enabled":True,"production_changed":False});return current
+    x = get_store(s)
+    return {"format": "agent_core_v2_clean_phase3a4", "session_id": x.get("session_id"), "gateway_budget": {"calls": int(s.get("llm_gateway_calls", 0)), "tokens": int(s.get("llm_gateway_tokens", 0))}, "messages": deepcopy(x["messages"]), "turns": deepcopy(x["turns"]), "state": x["memory"].to_dict(), "answer_context": deepcopy(x.get("answer_context") or {}), "budget": deepcopy(x["budget"]), "telemetry": snapshot(x["telemetry"]), "cache_metrics": deepcopy(x["cache_metrics"]), "errors": deepcopy(x["errors"]), "retrieval_enabled": True, "documented_answer_enabled": True, "procedural_answer_enabled": True, "production_changed": False}
+
+
+
+

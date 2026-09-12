@@ -2,10 +2,10 @@ from __future__ import annotations
 import hashlib,json,re
 from .models import AgentResponse
 
-PROMPT_VERSION="conceptual_documented_v3_partial_length_visible"
-SYSTEM="""Eres un colega de soporte empresarial de impresión. Responde únicamente con la evidencia documental suministrada. Usa el idioma del usuario. Sé útil, directo y natural. No inventes menús, pasos, requisitos ni funciones. Cada afirmación factual debe terminar con una cita [R#]. Si la evidencia solo permite una respuesta parcial, indícalo claramente. Para una consulta conceptual, explica qué es, para qué sirve y sus funciones documentadas. Para requisitos, enumera únicamente condiciones y compatibilidades respaldadas, sin exigir pasos operativos. En comparaciones, no recomiendes una alternativa sin cobertura equivalente de todas las opciones. No menciones procesos internos del laboratorio."""
+PROMPT_VERSION="documented_v4_comprehensive_requirements"
+SYSTEM="""Eres un colega de soporte empresarial de impresión. Responde únicamente con la evidencia documental suministrada. Usa el idioma del usuario. Sé útil, directo y natural. No inventes menús, pasos, requisitos ni funciones. Cada afirmación factual debe terminar con una cita [R#]. Si la evidencia solo permite una respuesta parcial, indícalo claramente. Para una consulta conceptual, explica qué es, para qué sirve y sus funciones documentadas. Para requisitos, sintetiza de forma completa todas las categorías respaldadas por la evidencia disponible, por ejemplo software, sistema operativo, hardware, red, conectividad, certificados, puertos, proxy y condiciones del entorno. No respondas con un único requisito cuando la evidencia contiene varias categorías. No menciones procesos internos del laboratorio."""
 
-def evidence_pack(retrieval,max_items=4,max_chars=5200):
+def evidence_pack(retrieval,max_items=8,max_chars=9000):
  """Keeps the approved quality envelope. Only removes empty or exact-duplicate chunks."""
  items=[];used=0;seen=set()
  for e in retrieval.get("evidence") or []:
@@ -34,7 +34,7 @@ def readable_sources(retrieval,cited_ids):
   page=str(e.get("page") or "N/D");lines.append(f"[{rid}] {e.get('title') or 'Fuente sin título'}, página {page}")
  return lines
 class DocumentedAnswerComposer:
- def __init__(self,gateway,max_tokens=260):self.gateway=gateway;self.max_tokens=max(220,min(420,int(max_tokens)));self.last_provider_result={};self.validation={}
+ def __init__(self,gateway,max_tokens=260):self.gateway=gateway;self.max_tokens=max(260,min(520,int(max_tokens)));self.last_provider_result={};self.validation={}
  def compose(self,message,understanding,retrieval):
   evidence=evidence_pack(retrieval)
   if not evidence:return AgentResponse("La recuperación no contiene evidencia suficiente para responder de forma documentada.","documented_insufficient",False)
@@ -43,7 +43,9 @@ class DocumentedAnswerComposer:
   r=self.gateway.complete(LLMRequest([{"role":"system","content":SYSTEM},{"role":"user","content":json.dumps(payload,ensure_ascii=False,separators=(",",":"))}],"agent_core_v2_clean_documented_answer",self.max_tokens,0.,None));self.last_provider_result=r.to_dict()
   if not r.ok:return AgentResponse("Encontré documentación, pero no pude redactar la respuesta en este turno. Las fuentes recuperadas se conservaron.","documented_provider_degraded",False)
   text=str(r.text or "").strip();valid,cited=validate_citations(text,[str(x["id"]) for x in evidence]);truncated=str(r.finish_reason or "").casefold() in {"length","max_tokens"}
-  self.validation={"citations_valid":valid,"cited_ids":cited,"finish_reason":r.finish_reason,"truncated":truncated,"published_partial":bool(valid and truncated)}
+  pages={str(x.get("page") or "") for x in evidence if x.get("page")};requirements=understanding.get("intent")=="requirements";coverage_ok=not requirements or len(pages)<2 or len(cited)>=2
+  valid=bool(valid and coverage_ok)
+  self.validation={"citations_valid":valid,"cited_ids":cited,"finish_reason":r.finish_reason,"truncated":truncated,"published_partial":bool(valid and truncated),"requirements_coverage_valid":coverage_ok,"evidence_pages":sorted(pages)}
   if not valid:return AgentResponse("Encontré documentación, pero la respuesta generada no superó la validación de citas. No mostraré una respuesta sin respaldo.","documented_citation_guard",False,r.provider,r.model,r.usage,r.finish_reason)
   if truncated:text += "\n\n> Respuesta parcial: el proveedor alcanzó el límite de salida. El contenido documentado disponible se conserva; puedes pedirme continuar."
   sources=readable_sources(retrieval,cited)

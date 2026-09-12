@@ -10,7 +10,7 @@ class RetrievalQueryBuilder:
  def build(self,message,memory,understanding):
   details={str(k):str(v) for k,v in memory.pending_goal.known_details.items() if str(v).strip()}
   user_act=str(getattr(understanding,"user_act","") or "");topic_relation=str(getattr(understanding,"topic_relation","") or "")
-  contextual_operation=str(message or "").strip() if user_act in {"follow_up","answer_to_question","request_elaboration","reported_failure","attempt_result"} or topic_relation=="same_topic" else ""
+  contextual_operation=str(message or "").strip() if user_act in {"follow_up","answer_to_question","reported_failure","attempt_result"} or topic_relation=="same_topic" else ""
   fields={"goal":memory.pending_goal.summary or understanding.current_goal,"intent":memory.pending_goal.intent or understanding.intent,"details":details,"symptoms":list(memory.support_case.symptoms),"observations":list(memory.support_case.observations[-3:]),"affected_scope":memory.support_case.affected_scope,"current_message":message,"contextual_operation":contextual_operation or None,"user_act":user_act,"topic_relation":topic_relation}
   parts=[str(fields["goal"] or "").strip()]
   if contextual_operation and contextual_operation.casefold()!=str(fields["goal"] or "").strip().casefold():parts.append(contextual_operation)
@@ -68,8 +68,8 @@ class ReadOnlyRetrieval:
   if current_only is not None and q1<0.5:
    raw2=self.retrieve_fn(current_only.text,self.k) or {};e2=self._normalize(raw2);q2=_quality(current_only.fields.get("current_message"),e2);attempts.append({"mode":"current_turn_only","query":current_only.to_dict(),"quality":q2,"count":len(e2)})
    if q2>q1:chosen=(current_only,raw2,e2,"current_turn_only",q2)
-  query,raw,evidence,mode,quality=chosen;expansion={"enabled":False,"reason":"intent_not_procedural","llm_called":False}
-  if str(query.fields.get("intent") or "")=="procedural":evidence,expansion=_expand_procedure(query.text,evidence,8)
+  query,raw,evidence,mode,quality=chosen;expansion={"enabled":False,"reason":"intent_does_not_require_document_expansion","llm_called":False}
+  if str(query.fields.get("intent") or "") in {"procedural","requirements"}:evidence,expansion=_expand_procedure(query.text,evidence,8)
   groups={}
   for x in evidence:
    identity=_identity(x);g=groups.setdefault(identity,{"identity":identity,"title":x["title"],"pages":[],"chunks":0});g["chunks"]+=1

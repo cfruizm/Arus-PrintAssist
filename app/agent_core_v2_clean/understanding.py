@@ -29,9 +29,7 @@ class ConversationUnderstanding:
      x.user_act="new_request";x.topic_relation="new_topic";corrections.append("orphan_elaboration_to_new_request")
     else:
      x.topic_relation="same_topic"
-     if memory.last_assistant_question and (not x.current_goal or x.current_goal.casefold()==str(memory.pending_goal.summary or "").casefold()):
-      x.current_goal="Explicar o verificar la acción solicitada en la última pregunta: "+memory.last_assistant_question
-      corrections.append("referential_elaboration_anchored_to_last_question")
+     if not x.should_retrieve:x.should_retrieve=True;corrections.append("referential_operational_retrieval_enforced")
    if x.topic_relation=="same_topic" and memory.pending_goal.summary and x.current_goal and x.current_goal.casefold()!=memory.pending_goal.summary.casefold():corrections.append("same_topic_goal_refined")
    if x.intent=="troubleshooting":
     present={str(row.get("type") or "") for row in x.case_updates}
