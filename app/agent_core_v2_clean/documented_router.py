@@ -17,12 +17,12 @@ def _knowledge_flags(validation,valid):
 def _prepare_boundary(result,store):
  before=result.get('state_before') or {}; u=result.get('understanding') or {}; boundary=infer_topic_boundary(before,u); result['topic_boundary']=boundary.to_dict()
  if boundary.relation=='new_topic':
-  u['user_act']='new_request';u['topic_relation']='new_topic';sanitize_new_topic_state(store['memory'],u);result['understanding']=u;result['state_after']=deepcopy(store['memory'].to_dict())
+  u['user_act']='new_request';u['topic_relation']='new_topic';sanitize_new_topic_state(store['memory'],u,before);result['understanding']=u;result['state_after']=deepcopy(store['memory'].to_dict())
  r=result.get('retrieval') or {}; sf=r.get('semantic_fit') or {}
- if boundary.previous_evidence_role=='comparison_only' and sf.get('carried_previous_evidence'):
+ if boundary.previous_evidence_role=='comparison_only':
   new=[x for x in (r.get('diagnostic_evidence') or r.get('evidence') or []) if not x.get('carried_from_previous_answer')]
   if new:
-   r['generation_evidence']=new[:8];sf['previous_evidence_role']='comparison_only';sf['previous_evidence_primary_eligible']=False;sf['generation_ids']=[x.get('id') for x in r['generation_evidence']];sf['generation_count']=len(r['generation_evidence']);r['semantic_fit']=sf;result['retrieval']=r
+   r['generation_evidence']=new[:8];r['evidence']=new[:8];sf['selected_document']=(new[0].get('source') or new[0].get('url')) if new else sf.get('selected_document');sf['selected_group_ids']=[x.get('id') for x in new[:8]];sf['carried_previous_evidence']=0;sf['previous_answer_sources_used']=False;sf['previous_evidence_role']='comparison_only';sf['previous_evidence_primary_eligible']=False;sf['generation_ids']=[x.get('id') for x in r['generation_evidence']];sf['generation_count']=len(r['generation_evidence']);r['semantic_fit']=sf;result['retrieval']=r
  return result
 
 def _internal(result,message,gateway,budget,store,model,assessment):
@@ -50,7 +50,7 @@ def maybe_generate_procedural(result,message,gateway,budget,store,model=''):
   result['procedural_recovery']={'attempted':True,'mode':'compact_documented','knowledge_mode':'documented_only'}
   original=getattr(c,'extra_instruction',None)
   try:
-   c.extra_instruction=compact_documented_instruction();a=c.compose(message,u,r);attempts.append(c.last_provider_result)
+   compact_r=deepcopy(r);compact_r['generation_evidence']=(r.get('generation_evidence') or [])[:4];compact_r['evidence']=compact_r['generation_evidence'];retry_message=message+'\n\n'+compact_documented_instruction();a=c.compose(retry_message,u,compact_r);attempts.append(c.last_provider_result)
   finally:c.extra_instruction=original
  valid=a.mode=='procedural_documented_answer' and not should_compact_retry(c.last_provider_result);payload=a.to_dict();payload.update({'documented_evidence_used':valid,'internal_knowledge_used':False,'knowledge_mode':'documented_only' if valid else 'none'});result['answer']=payload;diag={'enabled':True,'cache_hit':False,'prompt_version':PROCEDURAL_PROMPT_VERSION,'assessment':assessment,'validation':deepcopy(c.validation),'finish_reason':payload.get('finish_reason'),'retry_used':len(attempts)>1,'retry_mode':'compact_documented' if len(attempts)>1 else None};result['procedural_answer']=diag
  if valid:store['memory'].pending_goal.status='complete';result['state_after']=deepcopy(store['memory'].to_dict());store.setdefault(cache,{})[key]={'answer':deepcopy(payload),'diagnostic':deepcopy(diag)};return result,attempts if len(attempts)>1 else attempts[0]

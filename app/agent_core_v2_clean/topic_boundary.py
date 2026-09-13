@@ -4,6 +4,7 @@ import re
 
 _TOKEN_RE = re.compile(r"[\wáéíóúüñ]+", re.I)
 STRUCTURAL = {"operation", "subject", "platform", "product", "component", "device", "scope"}
+MATERIAL_SCOPE = {"platform", "product", "component", "device", "scope"}
 
 @dataclass(frozen=True)
 class TopicBoundary:
@@ -11,6 +12,7 @@ class TopicBoundary:
     reason: str
     shared_ratio: float
     changed_dimensions: list[str]
+    introduced_dimensions: list[str]
     previous_evidence_role: str
     def to_dict(self): return asdict(self)
 
@@ -24,28 +26,37 @@ def infer_topic_boundary(previous_state: dict, understanding: dict) -> TopicBoun
     new_goal = (understanding or {}).get("current_goal") or ""
     old = _tokens(old_goal) | _tokens(" ".join(str(before.get(k, "")) for k in STRUCTURAL))
     new = _tokens(new_goal) | _tokens(" ".join(str(now.get(k, "")) for k in STRUCTURAL))
-    union = old | new
-    shared = len(old & new) / max(1, len(union))
-    changed = [k for k in STRUCTURAL if before.get(k) and now.get(k) and str(before[k]).strip().lower() != str(now[k]).strip().lower()]
+    shared = len(old & new) / max(1, len(old | new))
+    changed = sorted(k for k in STRUCTURAL if before.get(k) and now.get(k) and str(before[k]).strip().lower() != str(now[k]).strip().lower())
+    introduced = sorted(k for k in MATERIAL_SCOPE if not before.get(k) and now.get(k))
     explicit = (understanding or {}).get("topic_relation") == "new_topic"
     independent = bool(new_goal and now.get("operation") and now.get("subject"))
-    if explicit or (independent and len(changed) >= 2 and shared < .34):
-        return TopicBoundary("new_topic", "explicit_or_independent_goal_boundary", round(shared, 3), sorted(changed), "none")
-    if changed:
-        return TopicBoundary("same_topic_changed_scope", "material_scope_changed", round(shared, 3), sorted(changed), "comparison_only")
-    return TopicBoundary("same_topic", "continuity_preserved", round(shared, 3), [], "eligible")
+    op_changed = "operation" in changed
+    subject_changed = "subject" in changed
+    if explicit or (independent and op_changed and subject_changed and shared < .50):
+        return TopicBoundary("new_topic", "explicit_or_independent_goal_boundary", round(shared, 3), changed, introduced, "none")
+    if any(k in MATERIAL_SCOPE for k in changed) or introduced:
+        return TopicBoundary("same_topic_changed_scope", "material_scope_changed_or_introduced", round(shared, 3), changed, introduced, "comparison_only")
+    return TopicBoundary("same_topic", "continuity_preserved", round(shared, 3), changed, introduced, "eligible")
 
-def sanitize_new_topic_state(memory, understanding: dict):
+def sanitize_new_topic_state(memory, understanding: dict, state_before: dict | None = None):
     updates = dict((understanding or {}).get("goal_updates") or {})
-    previous = memory.to_dict() if hasattr(memory, "to_dict") else {}
+    prior = state_before or {}
     history = getattr(memory, "topic_history", None)
-    if isinstance(history, list) and previous.get("active_topic"):
-        history.append({"topic": previous.get("active_topic"), "goal": previous.get("pending_goal", {})})
+    prior_topic = prior.get("active_topic")
+    prior_goal = prior.get("pending_goal") or {}
+    if isinstance(history, list) and prior_topic:
+        marker = (prior_topic, prior_goal.get("summary"), prior_goal.get("status"))
+        exists = any((x.get("topic"), (x.get("goal") or {}).get("summary"), (x.get("goal") or {}).get("status")) == marker for x in history if isinstance(x, dict))
+        if not exists:
+            history.append({"topic": prior_topic, "goal": prior_goal})
     pending = getattr(memory, "pending_goal", None)
     if pending is not None:
         pending.known_details = updates
         pending.summary = (understanding or {}).get("current_goal", "")
         pending.intent = (understanding or {}).get("intent", "unknown")
+    if hasattr(memory, "active_topic"):
+        memory.active_topic = (understanding or {}).get("current_goal", "")
     records = getattr(memory, "fact_records", None)
     if isinstance(records, dict):
         keep = {k: v for k, v in records.items() if k not in STRUCTURAL}
