@@ -1,28 +1,12 @@
 from __future__ import annotations
 from dataclasses import dataclass,asdict
-import re
+from .evidence_authority import canonical_evidence_decision
 @dataclass(frozen=True)
 class EvidenceAssessment:
- status:str;score:float;reasons:list[str];usable_chunks:int;unique_pages:int;same_document_only:bool;ordered:bool;generation_allowed:bool;internal_knowledge_candidate:bool;coverage_basis:str="pages";retrieval_quality:float=0.0;relevance_supported:bool=False
+ status:str;score:float;reasons:list[str];usable_chunks:int;unique_pages:int;same_document_only:bool;ordered:bool;generation_allowed:bool;internal_knowledge_candidate:bool;coverage_basis:str='selected_evidence';retrieval_quality:float=0.0;relevance_supported:bool=False;canonical_decision:dict|None=None
  def to_dict(self):return asdict(self)
-def _text(e):return " ".join(str(e.get("text") or "").split())
-def _page(e):return str(e.get("page") or "").strip()
-def _action_density(text):
- return len(re.findall(r"\b(?:abrir|guardar|copiar|pegar|validar|verificar|ejecutar|presionar|seleccionar|configurar|reiniciar|actualizar|confirmar|asignar|sincronizar|autenticar|open|save|copy|validate|verify|run|press|select|configure|restart|update|confirm|assign|sync|authenticate)\w*\b",text.casefold()))+len(re.findall(r"(?:^|\n)\s*(?:\d+[.)]|[-*•])\s+",text))
-def assess_procedural_evidence(retrieval):
- exp=retrieval.get("procedural_expansion") or {};sel=retrieval.get("selection") or {};quality=float(sel.get("quality") or 0.0);evidence=retrieval.get("evidence") or [];usable=[e for e in evidence if len(_text(e))>=80 and _action_density(_text(e))>0];pages={_page(e) for e in usable if _page(e)};same=bool(exp.get("same_document_only"));ordered=bool(exp.get("ordered"));ok=bool(retrieval.get("ok") and exp.get("ok"));web_without_pages=bool(usable) and not pages and all((e.get("url") or e.get("source")) for e in usable);coverage=len(pages) if pages else len(usable) if web_without_pages else 0;basis="chunks_without_pages" if web_without_pages else "pages";relevance=quality>=0.6;reasons=[]
- if not ok:reasons.append("retrieval_or_expansion_failed")
- if not relevance:reasons.append("retrieval_relevance_below_generation_threshold")
- if not same:reasons.append("multiple_or_unstable_documents")
- if not ordered:reasons.append("unordered_evidence")
- if len(usable)<2:reasons.append("too_few_actionable_chunks")
- if coverage<2:reasons.append("insufficient_evidence_coverage")
- if sum(len(_text(e)) for e in usable)<500:reasons.append("insufficient_actionable_content")
- base=sum((.2 if ok else 0,.2 if relevance else 0,.15 if same else 0,.1 if ordered else 0,min(.175,len(usable)*.04),min(.175,coverage*.04)));score=round(min(1.,base),3)
- blocking={"retrieval_or_expansion_failed","retrieval_relevance_below_generation_threshold","multiple_or_unstable_documents","unordered_evidence","too_few_actionable_chunks","insufficient_evidence_coverage","insufficient_actionable_content"}
- if not (blocking & set(reasons)) and score>=.7:status="sufficient"
- elif ok and same and usable:status="partial"
- else:status="insufficient"
- return EvidenceAssessment(status,score,reasons,len(usable),len(pages),same,ordered,status=="sufficient",status!="sufficient",basis,quality,relevance)
+def assess_procedural_evidence(retrieval,intent='procedural'):
+ d=canonical_evidence_decision(retrieval,intent); ev=retrieval.get('generation_evidence') or retrieval.get('evidence') or []; exp=retrieval.get('procedural_expansion') or {}; pages={str(x.get('page')) for x in ev if x.get('page') not in (None,'')}; same=bool(exp.get('same_document_only', len({x.get('url') or x.get('source') or x.get('title') for x in ev})<=1)); ordered=bool(exp.get('ordered',True)); score=round((d.object_match+d.operation_match+d.intent_match+d.coverage)/4,3); reasons=[] if d.accepted else [d.reason]
+ return EvidenceAssessment(d.status,score,reasons,len(ev),len(pages),same,ordered,d.accepted,d.status!='sufficient','pages' if pages else 'selected_evidence',float((retrieval.get('selection') or {}).get('quality',0) or 0),d.status!='insufficient',d.to_dict())
 def safe_partial_response(a,retrieval):
- return "Encontré contenido relacionado, pero su relevancia o cobertura no permite presentarlo como un procedimiento documentado completo." if a.status=="partial" else "No encontré evidencia documental suficiente y consistente para dar un procedimiento seguro."
+ return 'Encontré documentación relacionada, pero no cubre suficientemente la operación solicitada.' if a.status=='partial' else 'No encontré evidencia documental aplicable a la operación solicitada.'
