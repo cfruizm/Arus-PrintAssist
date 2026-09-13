@@ -6,6 +6,7 @@ from .internal_knowledge import ControlledInternalKnowledgeComposer,fingerprint 
 from .topic_boundary import infer_topic_boundary, sanitize_new_topic_state
 from .procedural_recovery import compact_documented_instruction, should_compact_retry
 from .evidence_boundary import enforce_evidence_boundary, normalize_citation_groups, scoped_generation_instruction
+from .conceptual_route import prepare_conceptual_retrieval, conceptual_assessment, must_preempt_documented_answer
 
 def _valid_cached(item):
  a=(item or {}).get('answer') or {};return a.get('mode') in {'procedural_documented_answer','controlled_internal_knowledge','controlled_internal_knowledge_partial'}
@@ -27,7 +28,7 @@ def _internal(result,message,gateway,budget,store,model,assessment):
  if cached:result['answer']=deepcopy(cached['answer']);result['internal_knowledge']={**deepcopy(cached['diagnostic']),'cache_hit':True};return result,{'skipped':True,'reason':'internal_knowledge_cache'}
  allowed,reason=budget.can_call(store['telemetry'],estimated_tokens=1800)
  if not allowed:return result,{'skipped':True,'reason':'internal_knowledge_budget_block','block_reason':reason}
- c=ControlledInternalKnowledgeComposer(gateway,520);a=c.compose(message,u,r,assessment);valid=a.mode in {'controlled_internal_knowledge','controlled_internal_knowledge_partial'};payload=a.to_dict();payload['text']=normalize_citation_groups(payload.get('text',''));payload.update(_knowledge_flags(c.validation,valid));result['answer']=payload;diag={'enabled':True,'cache_hit':False,'prompt_version':INTERNAL_PROMPT_VERSION,'trigger_status':assessment.get('status'),'trigger_reasons':assessment.get('reasons'),'validation':deepcopy(c.validation)};result['internal_knowledge']=diag
+ c=ControlledInternalKnowledgeComposer(gateway,520);a=c.compose(message,u,r,assessment);valid=a.mode in {'controlled_internal_knowledge','controlled_internal_knowledge_partial'};payload=a.to_dict();payload['text']=normalize_citation_groups(payload.get('text',''));payload.update(_knowledge_flags(c.validation,valid));result['answer']=payload;diag={'enabled':True,'cache_hit':False,'prompt_version':INTERNAL_PROMPT_VERSION,'trigger_status':assessment.get('status'),'trigger_reasons':assessment.get('reasons'),'validation':deepcopy(c.validation),'conceptual_preemption':must_preempt_documented_answer(u)};result['internal_knowledge']=diag
  if valid:store['memory'].pending_goal.status='partially_answered' if a.mode.endswith('_partial') else 'needs_verification';result['state_after']=deepcopy(store['memory'].to_dict());store.setdefault(cache,{})[key]={'answer':deepcopy(payload),'diagnostic':deepcopy(diag)}
  return result,c.last_provider_result
 
@@ -36,11 +37,9 @@ def maybe_generate_procedural(result,message,gateway,budget,store,model=''):
  if (result.get('decision') or {}).get('action') not in {'defer_to_retrieval','diagnose_with_retrieval'}:return result,{'skipped':True,'reason':'decision_does_not_authorize_retrieval'}
  u=result.get('understanding') or {};intent=u.get('intent');r=result.get('retrieval') or {}
  if intent=='conceptual':
-  current=r.get('generation_evidence') or []
-  if not current:
-   assessment={'status':'insufficient','score':0.0,'reasons':['no_current_topic_evidence'],'generation_allowed':False,'internal_knowledge_candidate':True,'canonical_decision':{'status':'insufficient','generation_mode':'internal_only','reason':'no_current_topic_evidence','selected_ids':[],'accepted':False}}
-   result['evidence_sufficiency']=assessment;result['evidence_decision']=assessment['canonical_decision'];return _internal(result,message,gateway,budget,store,model,assessment)
-  return result,None
+  relation=(result.get('topic_boundary') or {}).get('relation') or u.get('topic_relation')
+  r=prepare_conceptual_retrieval(r,relation);result['retrieval']=r;assessment=conceptual_assessment(r);result['evidence_sufficiency']=assessment;result['evidence_decision']=assessment['canonical_decision'];result.pop('documented_answer',None)
+  return _internal(result,message,gateway,budget,store,model,assessment)
  if intent not in {'procedural','requirements','troubleshooting'}:return result,None
  assessment=assess_procedural_evidence(r,intent).to_dict();result['evidence_sufficiency']=assessment;result['evidence_decision']=assessment.get('canonical_decision')
  if assessment['status']!='sufficient':return _internal(result,message,gateway,budget,store,model,assessment)
@@ -48,7 +47,7 @@ def maybe_generate_procedural(result,message,gateway,budget,store,model=''):
  if cached:result['answer']=deepcopy(cached['answer']);result['procedural_answer']={**deepcopy(cached['diagnostic']),'cache_hit':True};return result,{'skipped':True,'reason':'procedural_answer_cache'}
  allowed,reason=budget.can_call(store['telemetry'],estimated_tokens=2700)
  if not allowed:return result,{'skipped':True,'reason':'procedural_budget_block','block_reason':reason}
- c=ProceduralAnswerComposer(gateway,900);note=scoped_generation_instruction(result.get('topic_boundary') or {});generation_message=message+('\n\n'+note if note else '');a=c.compose(generation_message,u,r);attempts=[c.last_provider_result]
+ c=ProceduralAnswerComposer(gateway,900);note=scoped_generation_instruction(result.get('topic_boundary') or {});a=c.compose(message+('\n\n'+note if note else ''),u,r);attempts=[c.last_provider_result]
  if should_compact_retry(c.last_provider_result):
   result['procedural_recovery']={'attempted':True,'mode':'compact_documented','knowledge_mode':'documented_only'};compact_r=deepcopy(r);compact_r['generation_evidence']=(r.get('generation_evidence') or [])[:4];compact_r['evidence']=compact_r['generation_evidence'];a=c.compose(message+'\n\n'+compact_documented_instruction(),u,compact_r);attempts.append(c.last_provider_result)
  valid=a.mode=='procedural_documented_answer' and not should_compact_retry(c.last_provider_result);payload=a.to_dict();payload['text']=normalize_citation_groups(payload.get('text',''));payload.update({'documented_evidence_used':valid,'internal_knowledge_used':False,'knowledge_mode':'documented_only' if valid else 'none'});result['answer']=payload;diag={'enabled':True,'cache_hit':False,'prompt_version':PROCEDURAL_PROMPT_VERSION,'assessment':assessment,'validation':deepcopy(c.validation),'finish_reason':payload.get('finish_reason'),'retry_used':len(attempts)>1,'retry_mode':'compact_documented' if len(attempts)>1 else None};result['procedural_answer']=diag
