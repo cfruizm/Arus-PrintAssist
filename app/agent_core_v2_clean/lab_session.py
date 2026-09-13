@@ -12,6 +12,7 @@ from .budget import BudgetPolicy
 from .retrieval import RetrievalQueryBuilder, ReadOnlyRetrieval, retrieval_summary
 from .documented_answer import DocumentedAnswerComposer, answer_fingerprint, PROMPT_VERSION
 from .documented_router import maybe_generate_procedural
+from .conceptual_route import must_preempt_documented_answer
 from .semantic_fit import apply_semantic_fit, capture_answer_context
 from .response_reconciler import reconcile
 
@@ -115,6 +116,18 @@ def _answers(result, message, secrets_obj, s, budget, store):
     if (result.get("decision") or {}).get("action") not in {"defer_to_retrieval", "diagnose_with_retrieval"}:
         skipped = {"skipped": True, "reason": "decision_does_not_authorize_retrieval"}
         return result, skipped, skipped
+    # Conceptual requests are handled by controlled synthesis before the
+    # documented-only composer can publish a tangential negative answer.
+    if must_preempt_documented_answer(result.get("understanding") or {}):
+        result, procedural_trace = maybe_generate_procedural(
+            result, message, _gateway(secrets_obj, s), budget, store,
+            str(getattr(load_gateway_config(secrets_obj), "model", "") or ""),
+        )
+        conceptual_trace = {
+            "skipped": True,
+            "reason": "conceptual_preempted_by_controlled_synthesis",
+        }
+        return result, conceptual_trace, procedural_trace
     result, conceptual_trace = _conceptual(result, message, secrets_obj, s, budget, store)
     result, procedural_trace = maybe_generate_procedural(result, message, _gateway(secrets_obj, s), budget, store, str(getattr(load_gateway_config(secrets_obj), "model", "") or ""))
     return result, conceptual_trace, procedural_trace
