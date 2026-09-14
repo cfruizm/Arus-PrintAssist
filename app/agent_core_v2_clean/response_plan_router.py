@@ -1,10 +1,5 @@
-from __future__ import annotations
-from .response_planner import build_response_plan,apply_plan_to_retrieval
-
+from .response_planner import build_response_plan,apply_plan
 def plan_turn(result,message):
-    plan=build_response_plan(message,result.get("understanding") or {},result.get("retrieval") or {},result.get("evidence_decision") or {})
-    result["canonical_response_plan"]=plan.to_dict();result["retrieval"]=apply_plan_to_retrieval(result.get("retrieval") or {},plan);return result,plan
-
-def internal_assessment_from_plan(plan):
-    mode=plan.response_plan["mode"];status="partial" if mode in {"hybrid","general_guidance_with_example"} else "insufficient"
-    return {"status":status,"score":0.0,"reasons":["canonical_response_plan:"+mode],"generation_allowed":False,"internal_knowledge_candidate":True,"canonical_decision":{"status":status,"generation_mode":"documented_plus_internal" if mode=="hybrid" else "internal_only","reason":"canonical_response_plan","selected_ids":plan.evidence_plan["documented_ids"],"accepted":False}}
+ p=build_response_plan(message,result.get('understanding') or {},result.get('retrieval') or {},result.get('evidence_decision') or {});result['canonical_response_plan']=p.to_dict();result['retrieval']=apply_plan(result.get('retrieval') or {},p);return result,p
+def assessment_from_plan(plan,base=None):
+ out=dict(base or {});mode=plan.response_plan['mode'];status='sufficient' if mode=='documented' else 'partial' if mode in {'hybrid','general_guidance_with_example'} else 'insufficient';out.update({'status':status,'generation_allowed':mode=='documented','internal_knowledge_candidate':mode!='documented','reasons':list(dict.fromkeys([*(out.get('reasons') or []),'canonical_response_plan:'+mode]))});out['canonical_decision']={'status':status,'generation_mode':'documented' if mode=='documented' else 'documented_plus_internal' if mode=='hybrid' else 'internal_only','reason':'canonical_response_plan:'+mode,'selected_ids':plan.evidence_plan['documented_ids'],'accepted':mode=='documented'};return out
