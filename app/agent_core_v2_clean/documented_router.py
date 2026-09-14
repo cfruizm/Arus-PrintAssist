@@ -4,7 +4,7 @@ from .procedural_answer import ProceduralAnswerComposer,fingerprint as procedura
 from .evidence_sufficiency import assess_procedural_evidence
 from .internal_knowledge import ControlledInternalKnowledgeComposer,fingerprint as internal_fingerprint,PROMPT_VERSION as INTERNAL_PROMPT_VERSION
 from .topic_boundary import infer_topic_boundary,sanitize_new_topic_state
-from .procedural_recovery import compact_documented_instruction,should_compact_retry
+from .procedural_recovery import compact_documented_instruction,should_compact_retry,compact_retrieval_for_retry
 from .evidence_boundary import enforce_evidence_boundary,normalize_citation_groups
 from .conceptual_route import prepare_conceptual_retrieval,conceptual_assessment
 from .procedural_scope import constrain_generic_procedure,scoped_assessment_override
@@ -48,7 +48,7 @@ def maybe_generate_procedural(result,message,gateway,budget,store,model=''):
  allowed,reason=budget.can_call(store['telemetry'],estimated_tokens=2700)
  if not allowed:return result,{'skipped':True,'reason':'procedural_budget_block','block_reason':reason}
  c=ProceduralAnswerComposer(gateway,900);a=c.compose(message,u,r);attempts=[c.last_provider_result]
- if should_compact_retry(c.last_provider_result):compact=deepcopy(r);compact['generation_evidence']=(r.get('generation_evidence') or [])[:4];compact['evidence']=compact['generation_evidence'];a=c.compose(message+'\n\n'+compact_documented_instruction(),u,compact);attempts.append(c.last_provider_result);result['procedural_recovery']={'attempted':True,'mode':'compact_documented'}
+ if should_compact_retry(c.last_provider_result):compact=compact_retrieval_for_retry(r);a=c.compose(message+'\n\n'+compact_documented_instruction(),u,compact);attempts.append(c.last_provider_result);result['procedural_recovery']={'attempted':True,'mode':'ordered_full_stage_compaction','selection':compact.get('procedural_recovery_selection')}
  valid=a.mode=='procedural_documented_answer' and not should_compact_retry(c.last_provider_result);payload=a.to_dict();payload['text']=normalize_citation_groups(payload.get('text',''));payload.update({'documented_evidence_used':valid,'internal_knowledge_used':False,'knowledge_mode':'documented_only' if valid else 'none'});payload,audit=enforce_answer_contract(payload,result.get('canonical_response_plan'));result['answer']=payload;diag={'enabled':True,'cache_hit':False,'prompt_version':PROCEDURAL_PROMPT_VERSION,'assessment':assessment,'validation':deepcopy(c.validation),'retry_used':len(attempts)>1,'citation_audit':audit};result['procedural_answer']=diag
  if valid:store['memory'].pending_goal.status='complete';result['state_after']=deepcopy(store['memory'].to_dict());store.setdefault('procedural_answer_cache',{})[key]={'answer':deepcopy(payload),'diagnostic':deepcopy(diag)};return result,attempts if len(attempts)>1 else attempts[0]
  return _internal(result,message,gateway,budget,store,model,assessment)
