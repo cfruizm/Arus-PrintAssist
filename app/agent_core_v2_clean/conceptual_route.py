@@ -39,6 +39,41 @@ def _tokens(value):
     }
 
 
+def _normalized_text(value):
+    return unicodedata.normalize("NFKD", str(value or "")).encode("ascii", "ignore").decode("ascii").casefold()
+
+
+def _has_conceptual_claim(text, anchors):
+    """Detect an explicit definitional/descriptive claim for a single subject.
+
+    Neutral affinity plus noun mention is insufficient. The evidence must state
+    what the subject is, means, refers to, consists of, or can be described as.
+    Multi-subject relationship questions are governed by joint anchor coverage.
+    """
+    if len(anchors) != 1:
+        return True
+    anchor = re.escape(next(iter(anchors)))
+    normalized = _normalized_text(text)
+    subject = rf"(?:[a-z0-9]+\s+){{0,2}}{anchor}(?:s)?"
+    predicates = (
+        r"(?:is|are|es|son)\s+(?:an?|un|una|el|la|los|las)\s+[a-z]",
+        r"(?:can\s+be|puede(?:n)?\s+ser)\s+(?:[a-z]+\s+){{0,3}}(?:piece|pieza|type|tipo|form|forma|component|componente|system|sistema|process|proceso)",
+        r"(?:means?|significa|refers?\s+to|se\s+refiere\s+a|consists?\s+of|consiste\s+en|describes?|describe|translates?|traduce(?:n)?)",
+    )
+    return any(re.search(rf"\b{subject}\s+{predicate}", normalized) for predicate in predicates)
+
+
+def _evidence_identity(item):
+    metadata = item.get("metadata") or {}
+    return (
+        metadata.get("content_hash")
+        or metadata.get("canonical_url")
+        or item.get("source")
+        or item.get("url")
+        or item.get("id")
+    )
+
+
 def _concept_anchors(understanding):
     understanding = understanding or {}
     updates = understanding.get("goal_updates") or {}
@@ -56,6 +91,7 @@ def _direct_current_evidence(items, understanding):
     anchors = _concept_anchors(understanding)
     selected = []
     rejected = []
+    seen_identities = set()
     for item in items or []:
         if item.get("carried_from_previous_answer"):
             rejected.append((item, "carried_previous_answer"))
@@ -70,7 +106,13 @@ def _direct_current_evidence(items, understanding):
         anchor_complete = bool(anchors) and covered == anchors
         intent_affinity = fit.get("intent_affinity")
         intent_aligned = intent_affinity is None or float(intent_affinity) >= 0.0
-        eligible = anchor_complete and intent_aligned
+        explicit_claim = _has_conceptual_claim(body, anchors)
+        claim_supported = len(anchors) != 1 or explicit_claim or (
+            intent_affinity is not None and float(intent_affinity) > 0.0
+        )
+        identity = _evidence_identity(item)
+        duplicate = identity in seen_identities
+        eligible = anchor_complete and intent_aligned and claim_supported and not duplicate
         annotated = deepcopy(item)
         annotated["conceptual_coverage"] = {
             "required_anchors": sorted(anchors),
@@ -78,14 +120,22 @@ def _direct_current_evidence(items, understanding):
             "anchor_complete": anchor_complete,
             "intent_affinity": intent_affinity,
             "intent_aligned": intent_aligned,
+            "explicit_conceptual_claim": explicit_claim,
+            "claim_supported": claim_supported,
+            "duplicate_evidence": duplicate,
             "complete": eligible,
         }
         if eligible:
             selected.append(annotated)
+            seen_identities.add(identity)
+        elif duplicate:
+            rejected.append((annotated, "duplicate_conceptual_evidence"))
         elif not anchor_complete:
             rejected.append((annotated, "incomplete_concept_coverage"))
-        else:
+        elif not intent_aligned:
             rejected.append((annotated, "conceptual_intent_mismatch"))
+        else:
+            rejected.append((annotated, "missing_conceptual_claim"))
     return selected[:8], rejected
 
 
@@ -139,7 +189,7 @@ def prepare_conceptual_retrieval(retrieval: dict, boundary, understanding: dict 
         "generation_count": len(current),
         "accepted_for_generation": bool(current),
         "low_fit": not bool(current),
-        "conceptual_coverage_policy": "canonical_multilingual_anchors_and_non_negative_intent_affinity",
+        "conceptual_coverage_policy": "canonical_anchors_claim_entailment_intent_and_deduplication",
     })
     clean["conceptual_boundary"] = {
         "isolated": new_topic,
@@ -154,6 +204,8 @@ def prepare_conceptual_retrieval(retrieval: dict, boundary, understanding: dict 
         "dropped_tangential_count": max(0, len(candidates) - len(current)),
         "rejected_incomplete_coverage_ids": [x.get("id") for x, reason in rejected if reason == "incomplete_concept_coverage"],
         "rejected_intent_mismatch_ids": [x.get("id") for x, reason in rejected if reason == "conceptual_intent_mismatch"],
+        "rejected_missing_claim_ids": [x.get("id") for x, reason in rejected if reason == "missing_conceptual_claim"],
+        "rejected_duplicate_ids": [x.get("id") for x, reason in rejected if reason == "duplicate_conceptual_evidence"],
     }
     return clean
 
