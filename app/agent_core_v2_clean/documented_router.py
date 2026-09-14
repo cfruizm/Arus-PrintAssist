@@ -37,8 +37,8 @@ def maybe_generate_procedural(result,message,gateway,budget,store,model=''):
  if (result.get('decision') or {}).get('action') not in {'defer_to_retrieval','diagnose_with_retrieval'}:return result,{'skipped':True,'reason':'decision_does_not_authorize_retrieval'}
  u=result.get('understanding') or {};intent=u.get('intent');r=result.get('retrieval') or {}
  if intent=='conceptual':
-  relation=(result.get('topic_boundary') or {}).get('relation') or u.get('topic_relation')
-  r=prepare_conceptual_retrieval(r,relation);result['retrieval']=r;assessment=conceptual_assessment(r);result['evidence_sufficiency']=assessment;result['evidence_decision']=assessment['canonical_decision'];result.pop('documented_answer',None)
+  boundary=result.get('topic_boundary') or {'relation':u.get('topic_relation'),'changed_dimensions':[]}
+  r=prepare_conceptual_retrieval(r,boundary,u);result['retrieval']=r;assessment=conceptual_assessment(r);result['evidence_sufficiency']=assessment;result['evidence_decision']=assessment['canonical_decision'];result.pop('documented_answer',None)
   return _internal(result,message,gateway,budget,store,model,assessment)
  if intent not in {'procedural','requirements','troubleshooting'}:return result,None
  assessment=assess_procedural_evidence(r,intent).to_dict();result['evidence_sufficiency']=assessment;result['evidence_decision']=assessment.get('canonical_decision')

@@ -1,48 +1,99 @@
 from __future__ import annotations
 from copy import deepcopy
+import re
+import unicodedata
 
 CONCEPTUAL_INTENT = "conceptual"
+_GENERIC = {"concept", "concepto", "explicar", "impresion", "printing", "operation", "subject", "de", "del", "la", "el", "print", "printer", "impresora"}
 
-def prepare_conceptual_retrieval(retrieval: dict, topic_relation: str) -> dict:
-    """Create a generation view that cannot inherit answer context across a topic boundary."""
+def _tokens(value):
+    text = unicodedata.normalize("NFKD", str(value or "")).encode("ascii", "ignore").decode("ascii").casefold()
+    return {x for x in re.findall(r"[a-z0-9]+", text) if len(x) > 2 and x not in _GENERIC}
+
+def _direct_current_evidence(items, understanding):
+    updates = (understanding or {}).get("goal_updates") or {}
+    subject = _tokens(updates.get("subject")) or _tokens((understanding or {}).get("current_goal"))
+    selected = []
+    for item in items or []:
+        if item.get("carried_from_previous_answer"):
+            continue
+        fit = item.get("semantic_fit") or {}
+        body = " ".join((str(item.get("title") or ""), str(item.get("text") or ""), " ".join(map(str, fit.get("matched_terms") or []))))
+        if subject and subject.intersection(_tokens(body)):
+            selected.append(deepcopy(item))
+    return selected[:8]
+
+def _context_without_citation_authority(context):
+    """Retain conversational meaning but remove authority to reuse old sources."""
+    context = deepcopy(context or {})
+    if not context:
+        return {}
+    for key, empty in (("source_identities", []), ("source_titles", []), ("cited_ids", []), ("cited_evidence", [])):
+        context[key] = empty
+    context["citation_eligible"] = False
+    context["role"] = "semantic_continuity_only"
+    return context
+
+def prepare_conceptual_retrieval(retrieval: dict, boundary, understanding: dict | None = None) -> dict:
+    """Separate conversational continuity from citation eligibility."""
     clean = deepcopy(retrieval or {})
-    if topic_relation == "new_topic":
-        current = [
-            deepcopy(item)
-            for item in (clean.get("diagnostic_evidence") or clean.get("evidence") or [])
-            if not item.get("carried_from_previous_answer")
-        ]
-        clean["generation_evidence"] = current[:8]
-        clean["evidence"] = current[:8]
+    if isinstance(boundary, str):
+        boundary = {"relation": boundary, "changed_dimensions": []}
+    boundary = boundary or {}
+    changed = set(boundary.get("changed_dimensions") or [])
+    new_topic = boundary.get("relation") == "new_topic"
+    subject_shift = "subject" in changed
+    candidates = clean.get("diagnostic_evidence") or clean.get("evidence") or []
+    if understanding is None:
+        current = [deepcopy(x) for x in candidates if not x.get("carried_from_previous_answer")][:8]
+    else:
+        current = _direct_current_evidence(candidates, understanding)
+    previous_context = clean.get("_answer_context") or {}
+    if new_topic:
         clean["_answer_context"] = {}
-        sf = clean.setdefault("semantic_fit", {})
-        sf.update({
-            "carried_previous_evidence": 0,
-            "previous_answer_sources_used": False,
-            "previous_evidence_primary_eligible": False,
-            "previous_evidence_role": "none",
-            "generation_ids": [x.get("id") for x in current[:8]],
-            "generation_count": len(current[:8]),
-        })
-        clean["conceptual_boundary"] = {
-            "isolated": True,
-            "answer_context_removed": True,
-            "current_evidence_count": len(current),
-        }
+        context_role = "none"
+    elif subject_shift:
+        clean["_answer_context"] = _context_without_citation_authority(previous_context)
+        context_role = "semantic_continuity_only"
+    else:
+        context_role = "eligible"
+    clean["generation_evidence"] = current
+    clean["evidence"] = current
+    sf = clean.setdefault("semantic_fit", {})
+    sf.update({
+        "carried_previous_evidence": 0,
+        "previous_answer_sources_used": False,
+        "previous_evidence_primary_eligible": False if (new_topic or subject_shift) else sf.get("previous_evidence_primary_eligible", False),
+        "previous_evidence_role": context_role,
+        "generation_ids": [x.get("id") for x in current],
+        "generation_count": len(current),
+        "accepted_for_generation": bool(current),
+        "low_fit": not bool(current),
+    })
+    clean["conceptual_boundary"] = {
+        "isolated": new_topic,
+        "answer_context_removed": new_topic,
+        "subject_scope_changed": subject_shift,
+        "conversation_context_preserved": bool(subject_shift and previous_context),
+        "previous_context_citation_eligible": not (new_topic or subject_shift),
+        "direct_evidence_count": len(current),
+        "dropped_tangential_count": max(0, len(candidates) - len(current)),
+    }
     return clean
 
 def conceptual_assessment(retrieval: dict) -> dict:
-    evidence = retrieval.get("generation_evidence") or retrieval.get("evidence") or []
+    evidence = retrieval.get("generation_evidence") or []
+    documented = bool(evidence)
     return {
-        "status": "partial" if evidence else "insufficient",
+        "status": "partial" if documented else "insufficient",
         "score": 0.0,
-        "reasons": ["conceptual_answer_requires_controlled_synthesis"],
+        "reasons": ["conceptual_answer_requires_controlled_synthesis", *([] if documented else ["no_direct_conceptual_evidence"])],
         "usable_chunks": len(evidence),
         "generation_allowed": False,
         "internal_knowledge_candidate": True,
         "canonical_decision": {
-            "status": "partial" if evidence else "insufficient",
-            "generation_mode": "documented_plus_internal" if evidence else "internal_only",
+            "status": "partial" if documented else "insufficient",
+            "generation_mode": "documented_plus_internal" if documented else "internal_only",
             "reason": "conceptual_controlled_synthesis",
             "selected_ids": [x.get("id") for x in evidence],
             "accepted": False,
