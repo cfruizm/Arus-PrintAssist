@@ -12,12 +12,31 @@ _GENERIC = {
     "el", "los", "las", "que", "como", "con", "ese", "esa", "esta",
     "este", "para", "por", "una", "uno", "unos", "unas", "print",
     "printer", "impresora", "software", "sistema", "dispositivo",
+    "define", "definition", "explain", "function", "relationship", "between",
+    "what", "which", "that", "this", "these", "those", "with", "from",
+    "into", "about", "does", "and", "the", "for", "are", "exists",
+    "existing", "list", "main", "general", "procedure", "update", "device",
 }
+
+
+def _canonical_token(token):
+    """Collapse common inflectional plurals without domain vocabulary."""
+    if len(token) > 4 and token.endswith("ies"):
+        return token[:-3] + "y"
+    if len(token) > 4 and token.endswith("es") and not token.endswith(("ses", "xes")):
+        return token[:-1]
+    if len(token) > 3 and token.endswith("s") and not token.endswith(("ss", "us", "is")):
+        return token[:-1]
+    return token
 
 
 def _tokens(value):
     text = unicodedata.normalize("NFKD", str(value or "")).encode("ascii", "ignore").decode("ascii").casefold()
-    return {x for x in re.findall(r"[a-z0-9]+", text) if len(x) > 2 and x not in _GENERIC}
+    return {
+        _canonical_token(x)
+        for x in re.findall(r"[a-z0-9]+", text)
+        if len(x) > 2 and x not in _GENERIC
+    }
 
 
 def _concept_anchors(understanding):
@@ -120,7 +139,7 @@ def prepare_conceptual_retrieval(retrieval: dict, boundary, understanding: dict 
         "generation_count": len(current),
         "accepted_for_generation": bool(current),
         "low_fit": not bool(current),
-        "conceptual_coverage_policy": "all_distinct_anchors_and_non_negative_intent_affinity",
+        "conceptual_coverage_policy": "canonical_multilingual_anchors_and_non_negative_intent_affinity",
     })
     clean["conceptual_boundary"] = {
         "isolated": new_topic,
