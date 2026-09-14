@@ -11,6 +11,7 @@ from .procedural_scope import constrain_generic_procedure,scoped_assessment_over
 from .response_plan_router import plan_turn,assessment_from_plan
 from .citation_finalizer import enforce_answer_contract
 from .state_scope import enrich_understanding
+from .documented_fallback import build_documented_fallback
 
 def _valid_cached(item):
  a=(item or {}).get('answer') or {};return a.get('mode') in {'procedural_documented_answer','controlled_internal_knowledge','controlled_internal_knowledge_partial'}
@@ -51,4 +52,13 @@ def maybe_generate_procedural(result,message,gateway,budget,store,model=''):
  if should_compact_retry(c.last_provider_result):compact=compact_retrieval_for_retry(r);a=c.compose(message+'\n\n'+compact_documented_instruction(),u,compact);attempts.append(c.last_provider_result);result['procedural_recovery']={'attempted':True,'mode':'ordered_full_stage_compaction','selection':compact.get('procedural_recovery_selection')}
  valid=a.mode=='procedural_documented_answer' and not should_compact_retry(c.last_provider_result);payload=a.to_dict();payload['text']=normalize_citation_groups(payload.get('text',''));payload.update({'documented_evidence_used':valid,'internal_knowledge_used':False,'knowledge_mode':'documented_only' if valid else 'none'});payload,audit=enforce_answer_contract(payload,result.get('canonical_response_plan'));result['answer']=payload;diag={'enabled':True,'cache_hit':False,'prompt_version':PROCEDURAL_PROMPT_VERSION,'assessment':assessment,'validation':deepcopy(c.validation),'retry_used':len(attempts)>1,'citation_audit':audit};result['procedural_answer']=diag
  if valid:store['memory'].pending_goal.status='complete';result['state_after']=deepcopy(store['memory'].to_dict());store.setdefault('procedural_answer_cache',{})[key]={'answer':deepcopy(payload),'diagnostic':deepcopy(diag)};return result,attempts if len(attempts)>1 else attempts[0]
+ # When evidence is sufficient, a provider failure must not be mislabeled as insufficient documentation.
+ last=attempts[-1] if attempts else {}
+ fallback=build_documented_fallback(r,reason=str((last or {}).get('error_code') or 'provider_degraded'))
+ if fallback:
+  fallback,audit=enforce_answer_contract(fallback,result.get('canonical_response_plan'));result['answer']=fallback
+  result['procedural_answer']={**diag,'provider_degraded':True,'deterministic_fallback_used':True,'citation_audit':audit}
+  store['memory'].pending_goal.status='complete';result['state_after']=deepcopy(store['memory'].to_dict())
+  store.setdefault('procedural_answer_cache',{})[key]={'answer':deepcopy(fallback),'diagnostic':deepcopy(result['procedural_answer'])}
+  return result,attempts if len(attempts)>1 else last
  return _internal(result,message,gateway,budget,store,model,assessment)
