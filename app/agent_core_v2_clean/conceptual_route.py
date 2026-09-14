@@ -48,17 +48,25 @@ def _direct_current_evidence(items, understanding):
             " ".join(map(str, fit.get("matched_terms") or [])),
         ))
         covered = anchors.intersection(_tokens(body))
-        eligible = bool(anchors) and covered == anchors
+        anchor_complete = bool(anchors) and covered == anchors
+        intent_affinity = fit.get("intent_affinity")
+        intent_aligned = intent_affinity is None or float(intent_affinity) >= 0.0
+        eligible = anchor_complete and intent_aligned
         annotated = deepcopy(item)
         annotated["conceptual_coverage"] = {
             "required_anchors": sorted(anchors),
             "covered_anchors": sorted(covered),
+            "anchor_complete": anchor_complete,
+            "intent_affinity": intent_affinity,
+            "intent_aligned": intent_aligned,
             "complete": eligible,
         }
         if eligible:
             selected.append(annotated)
-        else:
+        elif not anchor_complete:
             rejected.append((annotated, "incomplete_concept_coverage"))
+        else:
+            rejected.append((annotated, "conceptual_intent_mismatch"))
     return selected[:8], rejected
 
 
@@ -112,7 +120,7 @@ def prepare_conceptual_retrieval(retrieval: dict, boundary, understanding: dict 
         "generation_count": len(current),
         "accepted_for_generation": bool(current),
         "low_fit": not bool(current),
-        "conceptual_coverage_policy": "all_distinct_anchors_per_chunk",
+        "conceptual_coverage_policy": "all_distinct_anchors_and_non_negative_intent_affinity",
     })
     clean["conceptual_boundary"] = {
         "isolated": new_topic,
@@ -126,6 +134,7 @@ def prepare_conceptual_retrieval(retrieval: dict, boundary, understanding: dict 
         "direct_evidence_count": len(current),
         "dropped_tangential_count": max(0, len(candidates) - len(current)),
         "rejected_incomplete_coverage_ids": [x.get("id") for x, reason in rejected if reason == "incomplete_concept_coverage"],
+        "rejected_intent_mismatch_ids": [x.get("id") for x, reason in rejected if reason == "conceptual_intent_mismatch"],
     }
     return clean
 
