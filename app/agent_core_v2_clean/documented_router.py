@@ -5,11 +5,12 @@ from .evidence_sufficiency import assess_procedural_evidence
 from .internal_knowledge import ControlledInternalKnowledgeComposer,fingerprint as internal_fingerprint,PROMPT_VERSION as INTERNAL_PROMPT_VERSION
 from .topic_boundary import infer_topic_boundary,sanitize_new_topic_state
 from .procedural_recovery import compact_documented_instruction,should_compact_retry
-from .evidence_boundary import enforce_evidence_boundary,normalize_citation_groups,scoped_generation_instruction
+from .evidence_boundary import enforce_evidence_boundary,normalize_citation_groups
 from .conceptual_route import prepare_conceptual_retrieval,conceptual_assessment
 from .procedural_scope import constrain_generic_procedure,scoped_assessment_override
 from .response_plan_router import plan_turn,assessment_from_plan
 from .citation_finalizer import enforce_answer_contract
+from .state_scope import enrich_understanding
 
 def _valid_cached(item):
  a=(item or {}).get('answer') or {};return a.get('mode') in {'procedural_documented_answer','controlled_internal_knowledge','controlled_internal_knowledge_partial'}
@@ -32,7 +33,7 @@ def _internal(result,message,gateway,budget,store,model,assessment):
  if valid:store['memory'].pending_goal.status='partially_answered' if a.mode.endswith('_partial') else 'needs_verification';result['state_after']=deepcopy(store['memory'].to_dict());store.setdefault('internal_knowledge_cache',{})[key]={'answer':deepcopy(payload),'diagnostic':deepcopy(diag)}
  return result,c.last_provider_result
 def maybe_generate_procedural(result,message,gateway,budget,store,model=''):
- result=_boundary(result,store)
+ result=_boundary(result,store);result=enrich_understanding(result)
  if (result.get('decision') or {}).get('action') not in {'defer_to_retrieval','diagnose_with_retrieval'}:return result,{'skipped':True,'reason':'decision_does_not_authorize_retrieval'}
  u=result.get('understanding') or {};intent=u.get('intent');r=result.get('retrieval') or {}
  if intent=='conceptual':b=result.get('topic_boundary') or {'relation':u.get('topic_relation'),'changed_dimensions':[]};r=prepare_conceptual_retrieval(r,b,u);result['retrieval']=r;base=conceptual_assessment(r);result['evidence_decision']=base['canonical_decision']

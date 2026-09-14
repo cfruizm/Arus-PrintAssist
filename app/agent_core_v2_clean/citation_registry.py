@@ -12,4 +12,3 @@ def register_evidence(items):
   seen.add(stable);row=deepcopy(item);old=str(row.get('id') or '');new=f'R{len(rows)+1}';row.update({'id':new,'stable_id':stable,'original_id':old or None});rows.append(row);mapping[stable]=new
   if old:mapping[old]=new
  return rows,mapping
-def remap_text(text,mapping):return CITE.sub(lambda m:f"[{mapping.get(m.group(1),m.group(1))}]",str(text or ''))
