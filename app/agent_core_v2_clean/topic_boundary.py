@@ -1,10 +1,13 @@
 from __future__ import annotations
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 import re
+import unicodedata
 
 _TOKEN_RE = re.compile(r"[\wáéíóúüñ]+", re.I)
-STRUCTURAL = {"operation", "subject", "platform", "product", "component", "device", "scope", "method", "via", "installation_method", "driver_type"}
-MATERIAL_SCOPE = {"platform", "product", "component", "device", "scope", "method", "via", "installation_method", "driver_type"}
+STRUCTURAL = {"operation", "subject", "platform", "product", "component", "device", "scope"}
+MATERIAL_SCOPE = {"platform", "product", "component", "device", "scope"}
+_REFERENTIAL_ACTS = {"request_elaboration", "answer", "confirmation", "correction", "continue"}
+_REFINEMENT_MARKERS = {"paso", "parte", "opcion", "campo", "despues", "antes", "siguiente", "donde", "cual", "cuando", "como", "porque", "eso", "esa", "ese", "esto", "esta", "that", "this", "it", "step", "option", "field", "next", "after", "before", "where", "which"}
 
 @dataclass(frozen=True)
 class TopicBoundary:
@@ -16,8 +19,22 @@ class TopicBoundary:
     previous_evidence_role: str
     def to_dict(self): return asdict(self)
 
+def _norm(value):
+    return unicodedata.normalize("NFKD", str(value or "")).encode("ascii", "ignore").decode().casefold()
+
 def _tokens(value):
-    return {x.lower() for x in _TOKEN_RE.findall(str(value or "")) if len(x) > 2}
+    return {x.casefold() for x in _TOKEN_RE.findall(_norm(value)) if len(x) > 2}
+
+def _is_refinement(previous_state, understanding, old, new, changed, introduced):
+    pending = (previous_state or {}).get("pending_goal") or {}
+    if not pending.get("summary") or introduced: return False
+    relation = str((understanding or {}).get("topic_relation") or "")
+    act = str((understanding or {}).get("user_act") or "")
+    if relation == "same_topic" or act in _REFERENTIAL_ACTS: return True
+    markers = new & _REFINEMENT_MARKERS
+    subject_only_change = set(changed).issubset({"operation", "subject"})
+    lexical_containment = bool(old & new) and len(old & new) / max(1, len(new)) >= 0.20
+    return subject_only_change and bool(markers) and lexical_containment
 
 def infer_topic_boundary(previous_state: dict, understanding: dict) -> TopicBoundary:
     before = ((previous_state or {}).get("pending_goal") or {}).get("known_details") or {}
@@ -27,40 +44,21 @@ def infer_topic_boundary(previous_state: dict, understanding: dict) -> TopicBoun
     old = _tokens(old_goal) | _tokens(" ".join(str(before.get(k, "")) for k in STRUCTURAL))
     new = _tokens(new_goal) | _tokens(" ".join(str(now.get(k, "")) for k in STRUCTURAL))
     shared = len(old & new) / max(1, len(old | new))
-    changed = sorted(k for k in STRUCTURAL if before.get(k) and now.get(k) and str(before[k]).strip().lower() != str(now[k]).strip().lower())
+    changed = sorted(k for k in STRUCTURAL if before.get(k) and now.get(k) and _norm(before[k]) != _norm(now[k]))
     introduced = sorted(k for k in MATERIAL_SCOPE if not before.get(k) and now.get(k))
-    explicit = (understanding or {}).get("topic_relation") == "new_topic"
+    if _is_refinement(previous_state, understanding, old, new, changed, introduced):
+        return TopicBoundary("same_topic_refinement", "referential_or_contained_goal_refinement", round(shared, 3), changed, introduced, "primary")
+    explicit_new = (understanding or {}).get("topic_relation") == "new_topic"
     independent = bool(new_goal and now.get("operation") and now.get("subject"))
-    op_changed = "operation" in changed
-    subject_changed = "subject" in changed
-    if explicit or (independent and op_changed and subject_changed and shared < .50):
+    if explicit_new or (independent and {"operation", "subject"}.issubset(changed) and shared < .50):
         return TopicBoundary("new_topic", "explicit_or_independent_goal_boundary", round(shared, 3), changed, introduced, "none")
     if any(k in MATERIAL_SCOPE for k in changed) or introduced:
-        return TopicBoundary("same_topic_changed_scope", "material_scope_changed_or_introduced", round(shared, 3), changed, introduced, "comparison_only")
+        return TopicBoundary("same_topic_changed_scope", "material_scope_changed", round(shared, 3), changed, introduced, "comparison_only")
     return TopicBoundary("same_topic", "continuity_preserved", round(shared, 3), changed, introduced, "eligible")
 
-def sanitize_new_topic_state(memory, understanding: dict, state_before: dict | None = None):
-    updates = dict((understanding or {}).get("goal_updates") or {})
-    prior = state_before or {}
-    history = getattr(memory, "topic_history", None)
-    prior_topic = prior.get("active_topic")
-    prior_goal = prior.get("pending_goal") or {}
-    if isinstance(history, list) and prior_topic:
-        marker = (prior_topic, prior_goal.get("summary"), prior_goal.get("status"))
-        exists = any((x.get("topic"), (x.get("goal") or {}).get("summary"), (x.get("goal") or {}).get("status")) == marker for x in history if isinstance(x, dict))
-        if not exists:
-            history.append({"topic": prior_topic, "goal": prior_goal})
+def sanitize_new_topic_state(memory, understanding: dict, previous_state: dict | None = None):
     pending = getattr(memory, "pending_goal", None)
     if pending is not None:
-        pending.known_details = updates
-        pending.summary = (understanding or {}).get("current_goal", "")
-        pending.intent = (understanding or {}).get("intent", "unknown")
-    if hasattr(memory, "active_topic"):
-        memory.active_topic = (understanding or {}).get("current_goal", "")
-    records = getattr(memory, "fact_records", None)
-    if isinstance(records, dict):
-        keep = {k: v for k, v in records.items() if k not in STRUCTURAL}
-        records.clear(); records.update(keep)
-    case = getattr(memory, "support_case", None)
-    if case is not None and (understanding or {}).get("intent") != "troubleshooting":
-        case.status = "idle"; case.symptoms = []; case.observations = []; case.attempts = []; case.affected_scope = None; case.resolution_status = None
+        pending.known_details = dict((understanding or {}).get("goal_updates") or {})
+        pending.summary = str((understanding or {}).get("current_goal") or "")
+    if hasattr(memory, "fact_records"): memory.fact_records = {}

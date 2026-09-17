@@ -1,7 +1,7 @@
 from __future__ import annotations
 import copy, hashlib, re, unicodedata
 
-VERSION = "semantic_evidence_fit_v4_selective_modifiers_intent_affinity"
+VERSION = "semantic_evidence_fit_v5_referential_continuity_and_zero_fit_guard"
 STOP = {"para","como","que","del","las","los","una","uno","con","por","sin","antes","debo","debe","deben","en","el","la","y","o","how","what","the","and","for","from","with","this","that","before","after","into","using","is","are","to","configure","configurar","explicar","realizar","aplicar","revisar","necesito","quiero"}
 # Canonical concepts are language bridges, not product or benchmark rules.
 CONCEPTS = {
@@ -28,6 +28,7 @@ def _terms(value):
  return out
 
 def _identity(item):return str(item.get("url") or item.get("source") or (item.get("metadata") or {}).get("canonical_url") or item.get("title") or "")
+def _chunk_identity(item):return "|".join((_identity(item),str(item.get("page") or ""),_norm(item.get("text") or "")[:240]))
 def _document_terms(item):
  meta=item.get("metadata") or {}
  return _terms(" ".join(str(x or "") for x in (item.get("title"),item.get("text"),meta.get("product"),meta.get("component"),meta.get("document_family"),meta.get("source_group"))))
@@ -41,7 +42,7 @@ def evaluate_item(item,query_text,fields=None,answer_context=None):
  q=_terms(stable);d=_document_terms(item);title_terms=_terms(item.get("title"));overlap=q&d;title_overlap=q&title_terms
  concept_q={x for x in q if x.startswith("concept:")};concept_match=concept_q&d
  coverage=len(overlap)/max(1,len(q));title_coverage=len(title_overlap)/max(1,len(q));concept_coverage=len(concept_match)/max(1,len(concept_q)) if concept_q else 0.0
- previous_ids=set(answer_context.get("source_identities") or []);follow=fields.get("user_act") in {"follow_up","answer_to_question","request_elaboration","attempt_result","reported_failure"};continuity=0.20 if follow and _identity(item) in previous_ids else 0.0
+ previous_ids=set(answer_context.get("source_identities") or []);follow=(fields.get("user_act") in {"follow_up","answer_to_question","request_elaboration","attempt_result","reported_failure","answer","confirmation"} or fields.get("topic_relation") in {"same_topic","same_topic_refinement"});continuity=0.20 if follow and _identity(item) in previous_ids else 0.0
  specific=_specificity(item);confirmed=" ".join(str(v).casefold() for v in details.values());product= specific["product"]
  product_bonus=0.12 if product and any(part and part in confirmed for part in re.split(r"[_\s-]+",product)) else 0.0
  # Penalize scope-heavy titles only when their distinctive terms are neither in the query nor in the previous answer context.
@@ -66,12 +67,13 @@ def _prior_evidence(answer_context):
  return out
 
 def apply_semantic_fit(retrieval,answer_context=None):
- result=copy.deepcopy(retrieval or {});query=result.get("query") or {};fields=query.get("fields") or {};follow=fields.get("user_act") in {"follow_up","answer_to_question","request_elaboration","attempt_result","reported_failure"}
+ result=copy.deepcopy(retrieval or {});query=result.get("query") or {};fields=query.get("fields") or {};follow=(fields.get("user_act") in {"follow_up","answer_to_question","request_elaboration","attempt_result","reported_failure","answer","confirmation"} or fields.get("topic_relation") in {"same_topic","same_topic_refinement"})
  evidence=list(result.get("evidence") or [])
  if follow:
-  known={_identity(x) for x in evidence}
+  known={_chunk_identity(x) for x in evidence}
   for old in _prior_evidence(answer_context or {}):
-   if _identity(old) not in known:evidence.append(old);known.add(_identity(old))
+   key=_chunk_identity(old)
+   if key not in known:evidence.append(old);known.add(key)
  ranked=[]
  for pos,item in enumerate(evidence):
   row=copy.deepcopy(item);fit=evaluate_item(row,query.get("text") or "",fields,answer_context or {});row["semantic_fit"]=fit;ranked.append((fit["score"],-pos,row))
@@ -90,7 +92,11 @@ def apply_semantic_fit(retrieval,answer_context=None):
  result["evidence"]=generation
  best=selected_group[0];prior_quality=float(((result.get("selection") or {}).get("quality") or 0.0));combined=round(max(0.0,min(1.0,0.76*best+0.24*prior_quality)),4)
  result.setdefault("selection",{})["quality"]=combined
- result["semantic_fit"]={"version":VERSION,"best_group_score":best,"combined_quality":combined,"selected_document":selected_group[1],"selected_group_ids":[str(x.get("id")) for x in selected_group[2]],"carried_previous_evidence":sum(1 for x in evidence if x.get("carried_from_previous_answer")),"previous_answer_sources_used":bool(follow and answer_context and answer_context.get("source_identities")),"accepted_for_generation":combined>=0.38,"low_fit":combined<0.38,"ranked_ids":[str(x.get("id")) for x in diagnostic],"generation_ids":[str(x.get("id")) for x in generation],"diagnostic_count":len(diagnostic),"generation_count":len(generation)}
+ accepted=bool(generation) and best>0.0 and combined>=0.38
+ if not accepted:generation=[];result["generation_evidence"]=[];result["evidence"]=[]
+ carried=sum(1 for x in generation if x.get("carried_from_previous_answer"))
+ result["semantic_fit"]={"version":VERSION,"best_group_score":best,"combined_quality":combined,"selected_document":selected_group[1] if accepted else None,"selected_group_ids":[str(x.get("id")) for x in generation],"carried_previous_evidence":carried,"previous_answer_sources_used":bool(carried),"accepted_for_generation":accepted,"low_fit":not accepted,"ranked_ids":[str(x.get("id")) for x in diagnostic],"generation_ids":[str(x.get("id")) for x in generation],"diagnostic_count":len(diagnostic),"generation_count":len(generation),"previous_evidence_primary_eligible":bool(carried),"previous_evidence_role":"primary" if carried else "none"}
+ result["followup_grounding"]={"followup_detected":follow,"previous_evidence_considered":len(_prior_evidence(answer_context or {})) if follow else 0,"previous_evidence_selected":carried,"global_retrieval_skipped_reason":"previous_evidence_sufficient" if carried else None}
  return result
 
 def capture_answer_context(result):
@@ -108,7 +114,3 @@ def capture_answer_context(result):
  inverted=list(re.finditer(r"¿[^?]{1,420}\?",normalized))
  closing_question=inverted[-1].group(0).strip() if inverted else None
  return {"answer_mode":answer.get("mode"),"goal":(result.get("understanding") or {}).get("current_goal"),"main_text_excerpt":normalized[:1000],"closing_question":closing_question,"source_identities":identities,"source_titles":titles,"cited_ids":sorted(cited),"cited_evidence":compact,"finish_reason":answer.get("finish_reason"),"partial":str(answer.get("mode") or "").endswith("_partial") or str(answer.get("finish_reason") or "").casefold() in {"length","max_tokens"}}
-
-
-
-
