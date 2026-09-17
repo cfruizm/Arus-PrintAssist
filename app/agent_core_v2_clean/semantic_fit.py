@@ -1,7 +1,7 @@
 from __future__ import annotations
 import copy, hashlib, re, unicodedata
 
-VERSION = "semantic_evidence_fit_v6_primary_followup_evidence"
+VERSION = "semantic_evidence_fit_v7_primary_evidence_entailment"
 STOP = {"para","como","que","del","las","los","una","uno","con","por","sin","antes","debo","debe","deben","en","el","la","y","o","how","what","the","and","for","from","with","this","that","before","after","into","using","is","are","to","configure","configurar","explicar","realizar","aplicar","revisar","necesito","quiero"}
 # Canonical concepts are language bridges, not product or benchmark rules.
 CONCEPTS = {
@@ -42,7 +42,7 @@ def evaluate_item(item,query_text,fields=None,answer_context=None):
  q=_terms(stable);d=_document_terms(item);title_terms=_terms(item.get("title"));overlap=q&d;title_overlap=q&title_terms
  concept_q={x for x in q if x.startswith("concept:")};concept_match=concept_q&d
  coverage=len(overlap)/max(1,len(q));title_coverage=len(title_overlap)/max(1,len(q));concept_coverage=len(concept_match)/max(1,len(concept_q)) if concept_q else 0.0
- previous_ids=set(answer_context.get("source_identities") or []);follow=(fields.get("user_act") in {"follow_up","answer_to_question","request_elaboration","attempt_result","reported_failure","answer","confirmation"} or fields.get("topic_relation") in {"same_topic","same_topic_refinement"});continuity=0.20 if follow and _identity(item) in previous_ids else 0.0
+ previous_ids=set(answer_context.get("source_identities") or []);follow=(fields.get("topic_relation") in {"same_topic","same_topic_refinement"} and fields.get("user_act") in {"follow_up","answer_to_question","request_elaboration","attempt_result","reported_failure","answer","confirmation"});continuity=0.20 if follow and _identity(item) in previous_ids else 0.0
  specific=_specificity(item);confirmed=" ".join(str(v).casefold() for v in details.values());product= specific["product"]
  product_bonus=0.12 if product and any(part and part in confirmed for part in re.split(r"[_\s-]+",product)) else 0.0
  # Penalize scope-heavy titles only when their distinctive terms are neither in the query nor in the previous answer context.
@@ -57,11 +57,11 @@ def evaluate_item(item,query_text,fields=None,answer_context=None):
  if intent=="conceptual":intent_bonus=0.10 if title_raw&conceptual_cues else (-0.06 if title_raw&procedural_cues else 0.0)
  elif intent=="procedural":intent_bonus=0.08 if title_raw&procedural_cues else 0.0
  penalty=min(0.24,0.035*len(distinct))+modifier_penalty
- primary_followup_bonus=0.0
+ primary_bonus=0.0
  if item.get("carried_from_previous_answer") and fields.get("previous_evidence_role")=="primary" and overlap:
-  primary_followup_bonus=0.18
- score=max(0.0,min(1.0,0.42*coverage+0.22*title_coverage+0.24*concept_coverage+continuity+product_bonus+intent_bonus+primary_followup_bonus-penalty))
- return {"score":round(score,4),"query_terms":sorted(q),"matched_terms":sorted(overlap),"title_matched_terms":sorted(title_overlap),"concept_matches":sorted(concept_match),"unconfirmed_title_terms":sorted(distinct)[:12],"continuity_boost":continuity,"product_context_bonus":product_bonus,"unrequested_concepts":sorted(unrequested_concepts),"modifier_penalty":round(modifier_penalty,4),"intent_affinity":round(intent_bonus,4),"primary_followup_bonus":round(primary_followup_bonus,4),"assumption_penalty":round(penalty,4)}
+  primary_bonus=0.12
+ score=max(0.0,min(1.0,0.42*coverage+0.22*title_coverage+0.24*concept_coverage+continuity+product_bonus+intent_bonus+primary_bonus-penalty))
+ return {"score":round(score,4),"query_terms":sorted(q),"matched_terms":sorted(overlap),"title_matched_terms":sorted(title_overlap),"concept_matches":sorted(concept_match),"unconfirmed_title_terms":sorted(distinct)[:12],"continuity_boost":continuity,"product_context_bonus":product_bonus,"unrequested_concepts":sorted(unrequested_concepts),"modifier_penalty":round(modifier_penalty,4),"intent_affinity":round(intent_bonus,4),"primary_evidence_bonus":round(primary_bonus,4),"assumption_penalty":round(penalty,4)}
 
 def _prior_evidence(answer_context):
  out=[]
@@ -70,7 +70,7 @@ def _prior_evidence(answer_context):
  return out
 
 def apply_semantic_fit(retrieval,answer_context=None):
- result=copy.deepcopy(retrieval or {});query=result.get("query") or {};fields=query.get("fields") or {};follow=(fields.get("user_act") in {"follow_up","answer_to_question","request_elaboration","attempt_result","reported_failure","answer","confirmation"} or fields.get("topic_relation") in {"same_topic","same_topic_refinement"})
+ result=copy.deepcopy(retrieval or {});query=result.get("query") or {};fields=query.get("fields") or {};follow=(fields.get("topic_relation") in {"same_topic","same_topic_refinement"} and fields.get("user_act") in {"follow_up","answer_to_question","request_elaboration","attempt_result","reported_failure","answer","confirmation"})
  evidence=list(result.get("evidence") or [])
  if follow:
   known={_chunk_identity(x) for x in evidence}
@@ -95,10 +95,19 @@ def apply_semantic_fit(retrieval,answer_context=None):
  result["evidence"]=generation
  best=selected_group[0];prior_quality=float(((result.get("selection") or {}).get("quality") or 0.0));combined=round(max(0.0,min(1.0,0.76*best+0.24*prior_quality)),4)
  result.setdefault("selection",{})["quality"]=combined
- accepted=bool(generation) and best>0.0 and combined>=0.38
+ primary_candidates=[x for x in ordered if x.get("carried_from_previous_answer") and fields.get("previous_evidence_role")=="primary" and float((x.get("semantic_fit") or {}).get("score",0.0))>=0.30]
+ primary_selected=[]
+ if primary_candidates:
+  primary_doc=_identity(primary_candidates[0]);primary_best=float(primary_candidates[0]["semantic_fit"]["score"])
+  primary_selected=[x for x in primary_candidates if _identity(x)==primary_doc and float(x["semantic_fit"]["score"])>=max(0.30,primary_best-0.08)][:4]
+ if primary_selected:
+  generation=primary_selected;selected_identity=_identity(primary_selected[0]);best=max(float(x["semantic_fit"]["score"]) for x in primary_selected);combined=max(combined,best);accepted=True;decision_path="primary_previous_evidence"
+ else:
+  selected_identity=selected_group[1];accepted=bool(generation) and best>0.0 and combined>=0.38;decision_path="group_threshold"
  if not accepted:generation=[];result["generation_evidence"]=[];result["evidence"]=[]
+ else:result["generation_evidence"]=generation;result["evidence"]=generation
  carried=sum(1 for x in generation if x.get("carried_from_previous_answer"))
- result["semantic_fit"]={"version":VERSION,"best_group_score":best,"combined_quality":combined,"selected_document":selected_group[1] if accepted else None,"selected_group_ids":[str(x.get("id")) for x in generation],"carried_previous_evidence":carried,"previous_answer_sources_used":bool(carried),"accepted_for_generation":accepted,"low_fit":not accepted,"ranked_ids":[str(x.get("id")) for x in diagnostic],"generation_ids":[str(x.get("id")) for x in generation],"diagnostic_count":len(diagnostic),"generation_count":len(generation),"previous_evidence_primary_eligible":bool(carried),"previous_evidence_role":"primary" if carried else "none"}
+ result["semantic_fit"]={"version":VERSION,"best_group_score":best,"combined_quality":combined,"selected_document":selected_identity if accepted else None,"selected_group_ids":[str(x.get("id")) for x in generation],"carried_previous_evidence":carried,"previous_answer_sources_used":bool(carried),"accepted_for_generation":accepted,"low_fit":not accepted,"ranked_ids":[str(x.get("id")) for x in diagnostic],"generation_ids":[str(x.get("id")) for x in generation],"diagnostic_count":len(diagnostic),"generation_count":len(generation),"previous_evidence_primary_eligible":bool(primary_candidates),"previous_evidence_role":"primary" if carried else "none","decision_path":decision_path}
  result["followup_grounding"]={"followup_detected":follow,"previous_evidence_considered":len(_prior_evidence(answer_context or {})) if follow else 0,"previous_evidence_selected":carried,"global_retrieval_skipped_reason":"previous_evidence_sufficient" if carried else None}
  return result
 
