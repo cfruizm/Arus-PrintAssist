@@ -13,6 +13,9 @@ from .citation_finalizer import enforce_answer_contract
 from .state_scope import enrich_understanding
 from .documented_fallback import build_documented_fallback
 
+
+from .fallback_authority import fallback_matches_current_goal
+
 def _valid_cached(item):
  a=(item or {}).get('answer') or {};return a.get('mode') in {'procedural_documented_answer','controlled_internal_knowledge','controlled_internal_knowledge_partial'}
 def _get_cache(store,name,key):
@@ -54,7 +57,7 @@ def maybe_generate_procedural(result,message,gateway,budget,store,model=''):
  if valid:store['memory'].pending_goal.status='complete';result['state_after']=deepcopy(store['memory'].to_dict());store.setdefault('procedural_answer_cache',{})[key]={'answer':deepcopy(payload),'diagnostic':deepcopy(diag)};return result,attempts if len(attempts)>1 else attempts[0]
  # When evidence is sufficient, a provider failure must not be mislabeled as insufficient documentation.
  last=attempts[-1] if attempts else {}
- fallback=build_documented_fallback(r,reason=str((last or {}).get('error_code') or (last or {}).get('finish_reason') or 'provider_degraded'))
+ fallback=build_documented_fallback(r,reason=str((last or {}).get('error_code') or (last or {}).get('finish_reason') or 'provider_degraded')) if fallback_matches_current_goal(result,r) else None
  if fallback:
   fallback,audit=enforce_answer_contract(fallback,result.get('canonical_response_plan'));result['answer']=fallback
   result['procedural_answer']={**diag,'provider_degraded':True,'deterministic_fallback_used':True,'citation_audit':audit}
