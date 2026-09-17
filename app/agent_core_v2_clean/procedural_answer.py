@@ -1,7 +1,7 @@
 from __future__ import annotations
 import hashlib,json,re,unicodedata
 from .models import AgentResponse
-PROMPT_VERSION="procedural_documented_v7_goal_proportional_response"
+PROMPT_VERSION="procedural_documented_v8_focused_followup_contract"
 SYSTEM="""Eres un colega de soporte empresarial de impresión. Responde solo con la evidencia documental suministrada. Redacta una orientación operativa práctica, completa y proporcional al alcance de la pregunta en el idioma del usuario. Si el usuario pregunta por una decisión, opción, paso o dato específico dentro de un procedimiento ya tratado, responde directamente ese punto y no repitas el procedimiento completo. Usa una o más secciones numeradas en Markdown con el formato **1. Título**. La evidencia puede describir pasos, requisitos, compatibilidad, comprobaciones, alternativas o límites. No inventes pasos ni completes vacíos con conocimiento interno. Conserva las relaciones lógicas de la evidencia: no conviertas alternativas en requisitos conjuntos, no sustituyas el método solicitado por otro parecido y no presentes una modalidad parcial como equivalente al objetivo. Si la evidencia describe opciones pero no el procedimiento exacto, indícalo. Cada párrafo o viñeta factual debe terminar con citas [R#]. Finaliza con **Validaciones finales** citada. No menciones el laboratorio."""
 BOILERPLATE=("aviso legal","legal notice","información restringida","restricted information","control de registros","records control","control de cambios","change control","tiempo de retención","retention period","disposición final","final disposition")
 OPERATIONAL_MARKERS=("validar","verificar","comprobar","confirmar","requisito","requiere","compatible","compatibilidad","admite","soporta","configurar","seleccionar","habilitar","instalar","conectar","sincronizar","importar","asignar","probar","actualizar","guardar","abrir","validate","verify","check","confirm","requirement","requires","required","compatible","compatibility","supports","supported","configure","configured","select","enable","enabled","install","connect","synchronize","sync","import","assign","test","update","authenticate","authentication","available","depends")
@@ -40,7 +40,10 @@ class ProceduralAnswerComposer:
   if not r.ok:return AgentResponse("Encontré evidencia operacional, pero no pude redactar la respuesta en este turno.","procedural_provider_degraded",False)
   text=str(r.text or "").strip()
   fields=(retrieval.get("query") or {}).get("fields") or {}
-  focused_followup=fields.get("topic_relation") in {"same_topic","same_topic_refinement"} and fields.get("user_act") in {"follow_up","request_elaboration","answer_to_question"} and understanding.get("intent") in {"requirements","verification","procedural","compatibility"} and len(evidence)<=4
+  details=fields.get("details") or {}
+  relation=fields.get("topic_relation") or understanding.get("topic_relation")
+  act=fields.get("user_act") or understanding.get("user_act")
+  focused_followup=relation in {"same_topic","same_topic_refinement"} and act in {"follow_up","request_elaboration","answer_to_question"} and bool(details.get("detail") or understanding.get("intent") in {"requirements","verification","compatibility"})
   ok,cited,self.validation=validate(text,[str(x["id"]) for x in evidence],r.finish_reason,1 if focused_followup else 2)
   self.validation["focused_followup"]=focused_followup
   self.validation["minimum_sections"]=1 if focused_followup else 2
