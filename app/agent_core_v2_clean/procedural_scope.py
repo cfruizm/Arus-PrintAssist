@@ -30,7 +30,8 @@ def _requested_scope(message, understanding):
 def _evidence_scope(item):
     metadata = item.get("metadata") or {}
     values = []
-    for key in ("product", "vendor", "platform", "collection_name"):
+    # vendor and collection_name describe provenance, not a required product.
+    for key in ("product", "platform"):
         value = metadata.get(key)
         if value and _norm(value) not in _GENERIC_PRODUCTS:
             values.append(_norm(value))
@@ -62,7 +63,12 @@ def constrain_generic_procedure(message, understanding, retrieval):
         scope = _evidence_scope(item)
         annotated = deepcopy(item)
         annotated["procedural_scope"] = {"evidence_scope": scope["values"], "requested": _scope_is_requested(scope, request), "product_specific": bool(scope["values"])}
-        if scope["values"] and not annotated["procedural_scope"]["requested"]:
+        fit = float((annotated.get("semantic_fit") or {}).get("score", 0.0) or 0.0)
+        title_terms = _words(scope["title"])
+        request_terms = request["words"]
+        direct_procedure_match = bool(request_terms and len(request_terms & title_terms) >= 2 and fit >= 0.30)
+        annotated["procedural_scope"]["direct_procedure_match"] = direct_procedure_match
+        if scope["values"] and not annotated["procedural_scope"]["requested"] and not direct_procedure_match:
             scoped.append(annotated)
         else:
             neutral.append(annotated)
@@ -81,6 +87,7 @@ def constrain_generic_procedure(message, understanding, retrieval):
         "explicit_scope": sorted(request["explicit"]),
         "unrequested_product_evidence_count": len(scoped),
         "neutral_evidence_count": len(neutral),
+        "direct_procedure_match_count": sum(1 for x in neutral if (x.get("procedural_scope") or {}).get("direct_procedure_match")),
         "restricted_to_example": restricted,
         "requires_general_guidance": restricted,
         "requires_missing_details": ["manufacturer_or_model", "operating_system"] if restricted else [],

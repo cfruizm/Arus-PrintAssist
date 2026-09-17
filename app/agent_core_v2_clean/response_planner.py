@@ -9,7 +9,7 @@ class ResponsePlan:
  def to_dict(self):return asdict(self)
 def build_response_plan(message,u,retrieval,decision=None):
  u=u or {};details=u.get('goal_updates') or {};scope=normalize_scope(details);intent=str(u.get('intent') or 'unknown');guard=(retrieval or {}).get('procedural_scope_guard') or {};evidence=list((retrieval or {}).get('generation_evidence') or (retrieval or {}).get('evidence') or []);decision=decision or {};missing=[]
- if intent=='procedural':
+ if intent=='procedural' and not guard.get('direct_procedure_match_count'):
   if not (scope.manufacturer or scope.model or scope.product):missing.append('manufacturer_or_model')
   if not scope.operating_system:missing.append('operating_system')
  example=bool(evidence) and bool(guard.get('restricted_to_example'));documented=bool(evidence) and not example and decision.get('status')!='insufficient';registered,mapping=register_evidence(evidence if documented else []);mode='documented' if documented and decision.get('status')=='sufficient' else 'hybrid' if documented else 'general_guidance_with_example' if example else 'internal'

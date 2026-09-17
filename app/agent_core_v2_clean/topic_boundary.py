@@ -3,8 +3,8 @@ from dataclasses import dataclass, asdict
 import re
 
 _TOKEN_RE = re.compile(r"[\wáéíóúüñ]+", re.I)
-STRUCTURAL = {"operation", "subject", "platform", "product", "component", "device", "scope"}
-MATERIAL_SCOPE = {"platform", "product", "component", "device", "scope"}
+STRUCTURAL = {"operation", "subject", "platform", "product", "component", "device", "scope", "method", "via", "installation_method", "driver_type"}
+MATERIAL_SCOPE = {"platform", "product", "component", "device", "scope", "method", "via", "installation_method", "driver_type"}
 
 @dataclass(frozen=True)
 class TopicBoundary:

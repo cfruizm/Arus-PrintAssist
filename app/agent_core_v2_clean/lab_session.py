@@ -68,7 +68,10 @@ def _attach_retrieval(result, message, store):
             raw["cache_hit"] = True
             store["cache_metrics"]["retrieval_hits"] += 1
         else:
-            raw = ReadOnlyRetrieval(k=6).search(query, current)
+            from .topic_boundary import infer_topic_boundary
+            boundary = infer_topic_boundary(result.get("state_before") or {}, result.get("understanding") or {})
+            preferred = (store.get("answer_context") or {}).get("source_identities") if boundary.relation == "same_topic" else []
+            raw = ReadOnlyRetrieval(k=10).search(query, current, preferred)
             raw["cache_hit"] = False
             store["retrieval_cache"][query.fingerprint] = deepcopy(raw)
         retrieval = apply_semantic_fit(raw, store.get("answer_context"))
@@ -85,7 +88,7 @@ def _conceptual(result, message, secrets_obj, s, budget, store):
         return result, {"skipped": True, "reason": "decision_does_not_authorize_retrieval"}
     retrieval = result.get("retrieval") or {}
     understanding = result.get("understanding") or {}
-    if understanding.get("intent") not in {"conceptual", "requirements"} or not retrieval.get("ok") or not retrieval.get("evidence"):
+    if understanding.get("intent") != "conceptual" or not retrieval.get("ok") or not retrieval.get("evidence"):
         return result, None
     model = str(getattr(load_gateway_config(secrets_obj), "model", "") or "")
     key = answer_fingerprint(message, understanding, retrieval, model)
@@ -237,8 +240,4 @@ def process_message(message, secrets_obj, s):
 
 def export_session(s):
     x = get_store(s)
-    return {"format": "agent_core_v2_clean_phase3a4", "session_id": x.get("session_id"), "gateway_budget": {"calls": int(s.get("llm_gateway_calls", 0)), "tokens": int(s.get("llm_gateway_tokens", 0))}, "messages": deepcopy(x["messages"]), "turns": deepcopy(x["turns"]), "state": x["memory"].to_dict(), "answer_context": deepcopy(x.get("answer_context") or {}), "budget": deepcopy(x["budget"]), "telemetry": snapshot(x["telemetry"]), "cache_metrics": deepcopy(x["cache_metrics"]), "errors": deepcopy(x["errors"]), "retrieval_enabled": True, "documented_answer_enabled": True, "procedural_answer_enabled": True, "production_changed": False}
-
-
-
-
+    return {"format": "agent_core_v2_clean_phase3a12_1", "session_id": x.get("session_id"), "gateway_budget": {"calls": int(s.get("llm_gateway_calls", 0)), "tokens": int(s.get("llm_gateway_tokens", 0))}, "messages": deepcopy(x["messages"]), "turns": deepcopy(x["turns"]), "state": x["memory"].to_dict(), "answer_context": deepcopy(x.get("answer_context") or {}), "budget": deepcopy(x["budget"]), "telemetry": snapshot(x["telemetry"]), "cache_metrics": deepcopy(x["cache_metrics"]), "errors": deepcopy(x["errors"]), "retrieval_enabled": True, "documented_answer_enabled": True, "procedural_answer_enabled": True, "production_changed": False}

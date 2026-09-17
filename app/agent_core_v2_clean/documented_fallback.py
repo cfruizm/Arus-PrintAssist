@@ -13,7 +13,7 @@ _ACTION_MARKERS = (
     "agregar", "seleccionar", "ingresar", "digitar", "identificar", "crear",
     "usar", "hacer clic", "clic", "desactivar", "retirar", "reemplazar",
     "remplazar", "asignar", "colocar", "finalizar", "instalar", "abrir",
-    "indicar", "confirmar", "buscar", "elegir", "configurar",
+    "indicar", "confirmar", "buscar", "elegir", "configurar", "seleccion", "ruta", "controlador",
 )
 
 

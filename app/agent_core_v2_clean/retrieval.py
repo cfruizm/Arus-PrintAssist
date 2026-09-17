@@ -63,8 +63,22 @@ class ReadOnlyRetrieval:
   from app.integration.lab_retrieval_adapter import retrieve_from_existing_backend
   return retrieve_from_existing_backend(query,k)
  def _normalize(self,raw):return _normalize_items(raw.get("evidence") or [])
- def search(self,built,current_only=None):
-  raw1=self.retrieve_fn(built.text,self.k) or {};e1=self._normalize(raw1);q1=_quality(built.fields.get("current_message"),e1);attempts=[{"mode":"contextual","query":built.to_dict(),"quality":q1,"count":len(e1)}];chosen=(built,raw1,e1,"contextual",q1)
+ def search(self,built,current_only=None,preferred_sources=None):
+  preferred_sources=[str(x) for x in (preferred_sources or []) if str(x).strip()]
+  preferred_attempt=None
+  if current_only is not None and preferred_sources:
+   try:
+    from app.integration.document_expansion_adapter import retrieve_same_document
+    source=preferred_sources[0];rawp=retrieve_same_document(current_only.text,source,self.k) or {};ep=self._normalize(rawp);qp=_quality(current_only.fields.get("current_message"),ep)
+    preferred_attempt={"mode":"active_document","query":current_only.to_dict(),"source":source,"quality":qp,"count":len(ep)}
+    if ep and qp>=0.30:
+     ep,exp=_expand_procedure(current_only.text,ep,8);groups={}
+     for x in ep:
+      identity=_identity(x);g=groups.setdefault(identity,{"identity":identity,"title":x["title"],"pages":[],"chunks":0});g["chunks"]+=1
+      if x["page"] and x["page"] not in g["pages"]:g["pages"].append(x["page"])
+     return {"enabled":True,"llm_called":False,"production_changed":False,"query":current_only.to_dict(),"ok":bool(rawp.get("ok",True)),"adapter":rawp.get("adapter"),"count":len(ep),"evidence":ep,"document_groups":list(groups.values()),"errors":rawp.get("errors") or [],"diagnostic_only":True,"selection":{"chosen_mode":"active_document","quality":qp,"attempts":[preferred_attempt],"context_contamination_avoided":True,"active_document_reused":True},"procedural_expansion":exp}
+   except Exception as exc:preferred_attempt={"mode":"active_document","quality":0.0,"count":0,"error":f"{type(exc).__name__}: {exc}"}
+  raw1=self.retrieve_fn(built.text,self.k) or {};e1=self._normalize(raw1);q1=_quality(built.fields.get("current_message"),e1);attempts=([preferred_attempt] if preferred_attempt else [])+[{"mode":"contextual","query":built.to_dict(),"quality":q1,"count":len(e1)}];chosen=(built,raw1,e1,"contextual",q1)
   if current_only is not None and q1<0.5:
    raw2=self.retrieve_fn(current_only.text,self.k) or {};e2=self._normalize(raw2);q2=_quality(current_only.fields.get("current_message"),e2);attempts.append({"mode":"current_turn_only","query":current_only.to_dict(),"quality":q2,"count":len(e2)})
    if q2>q1:chosen=(current_only,raw2,e2,"current_turn_only",q2)
@@ -83,7 +97,3 @@ def retrieval_summary(r):
   if g["title"] not in titles:titles.append(g["title"])
  exp=r.get("procedural_expansion") or {};extra=f" Evidencia procedimental ordenada en {len(exp.get('pages') or [])} página(s) del documento principal." if exp.get("attempted") and exp.get("ok") else ""
  return f"Encontré {r['count']} fragmentos en {len(r.get('document_groups') or [])} documento(s). Fuentes principales: "+"; ".join(titles[:3])+"."+extra+" La respuesta documentada procedimental se habilitará después de validar esta evidencia."
-
-
-
-

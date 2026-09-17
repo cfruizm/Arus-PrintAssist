@@ -54,7 +54,7 @@ def maybe_generate_procedural(result,message,gateway,budget,store,model=''):
  if valid:store['memory'].pending_goal.status='complete';result['state_after']=deepcopy(store['memory'].to_dict());store.setdefault('procedural_answer_cache',{})[key]={'answer':deepcopy(payload),'diagnostic':deepcopy(diag)};return result,attempts if len(attempts)>1 else attempts[0]
  # When evidence is sufficient, a provider failure must not be mislabeled as insufficient documentation.
  last=attempts[-1] if attempts else {}
- fallback=build_documented_fallback(r,reason=str((last or {}).get('error_code') or 'provider_degraded'))
+ fallback=build_documented_fallback(r,reason=str((last or {}).get('error_code') or (last or {}).get('finish_reason') or 'provider_degraded'))
  if fallback:
   fallback,audit=enforce_answer_contract(fallback,result.get('canonical_response_plan'));result['answer']=fallback
   result['procedural_answer']={**diag,'provider_degraded':True,'deterministic_fallback_used':True,'citation_audit':audit}

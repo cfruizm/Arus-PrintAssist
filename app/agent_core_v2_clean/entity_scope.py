@@ -16,7 +16,7 @@ def _split_model(value):
  value=_clean(value)
  if not value:return None,None
  match=_MODEL.search(value)
- if not match:return (None,None) if value.casefold() in _GENERIC else (None,value)
+ if not match:return None,None
  model=match.group(0);prefix=value[:match.start()].strip().split();manufacturer=prefix[-1] if prefix and prefix[-1].casefold() not in _GENERIC else None
  return manufacturer,model
 def normalize_scope(details=None):
