@@ -1,7 +1,7 @@
 from __future__ import annotations
 import copy, hashlib, re, unicodedata
 
-VERSION = "semantic_evidence_fit_v5_referential_continuity_and_zero_fit_guard"
+VERSION = "semantic_evidence_fit_v6_primary_followup_evidence"
 STOP = {"para","como","que","del","las","los","una","uno","con","por","sin","antes","debo","debe","deben","en","el","la","y","o","how","what","the","and","for","from","with","this","that","before","after","into","using","is","are","to","configure","configurar","explicar","realizar","aplicar","revisar","necesito","quiero"}
 # Canonical concepts are language bridges, not product or benchmark rules.
 CONCEPTS = {
@@ -57,8 +57,11 @@ def evaluate_item(item,query_text,fields=None,answer_context=None):
  if intent=="conceptual":intent_bonus=0.10 if title_raw&conceptual_cues else (-0.06 if title_raw&procedural_cues else 0.0)
  elif intent=="procedural":intent_bonus=0.08 if title_raw&procedural_cues else 0.0
  penalty=min(0.24,0.035*len(distinct))+modifier_penalty
- score=max(0.0,min(1.0,0.42*coverage+0.22*title_coverage+0.24*concept_coverage+continuity+product_bonus+intent_bonus-penalty))
- return {"score":round(score,4),"query_terms":sorted(q),"matched_terms":sorted(overlap),"title_matched_terms":sorted(title_overlap),"concept_matches":sorted(concept_match),"unconfirmed_title_terms":sorted(distinct)[:12],"continuity_boost":continuity,"product_context_bonus":product_bonus,"unrequested_concepts":sorted(unrequested_concepts),"modifier_penalty":round(modifier_penalty,4),"intent_affinity":round(intent_bonus,4),"assumption_penalty":round(penalty,4)}
+ primary_followup_bonus=0.0
+ if item.get("carried_from_previous_answer") and fields.get("previous_evidence_role")=="primary" and overlap:
+  primary_followup_bonus=0.18
+ score=max(0.0,min(1.0,0.42*coverage+0.22*title_coverage+0.24*concept_coverage+continuity+product_bonus+intent_bonus+primary_followup_bonus-penalty))
+ return {"score":round(score,4),"query_terms":sorted(q),"matched_terms":sorted(overlap),"title_matched_terms":sorted(title_overlap),"concept_matches":sorted(concept_match),"unconfirmed_title_terms":sorted(distinct)[:12],"continuity_boost":continuity,"product_context_bonus":product_bonus,"unrequested_concepts":sorted(unrequested_concepts),"modifier_penalty":round(modifier_penalty,4),"intent_affinity":round(intent_bonus,4),"primary_followup_bonus":round(primary_followup_bonus,4),"assumption_penalty":round(penalty,4)}
 
 def _prior_evidence(answer_context):
  out=[]
