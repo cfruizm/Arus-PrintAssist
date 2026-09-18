@@ -1,5 +1,5 @@
 from .models import ConversationMemory,TurnUnderstanding,PendingGoal
-import hashlib
+from .case_context import fact_id
 STRUCTURAL_GOAL_KEYS={"intent","status","summary","known_details","missing_detail","goal_complete","current_goal","goal_type","goal_updates","answer_to_question"}
 def normalize_goal_updates(updates):
  raw=dict(updates or {});clean={str(k):str(v) for k,v in raw.items() if str(k) not in STRUCTURAL_GOAL_KEYS and str(v).strip()};return clean,sorted(set(map(str,raw))-set(clean))
@@ -7,12 +7,12 @@ def _add(xs,v):
  v=" ".join(str(v or "").split())
  if v and v.casefold() not in {x.casefold() for x in xs}:xs.append(v)
 def _record_user_facts(m,clean):
- if set(clean).issuperset({"fact","field"}):
-  value=str(clean.get("fact") or "").strip()
-  if value:
-   key="confirmed."+hashlib.sha1(value.casefold().encode()).hexdigest()[:12];m.fact_records[key]={"key":key,"value":value,"origin":"user","status":"confirmed","turn":m.turn_number+1};_add(m.support_case.observations,value)
-  return
- for k,v in clean.items():m.fact_records[str(k)]={"key":str(k),"value":str(v),"origin":"user","status":"confirmed","turn":m.turn_number+1}
+ for k,v in clean.items():
+  if str(k) in {"fact","field"} and str(k)=="field":continue
+  value=str(clean.get("fact") if str(k)=="fact" else v).strip()
+  if not value:continue
+  key=fact_id(value) if str(k) in {"fact","observation"} else str(k)
+  m.fact_records[key]={"key":key,"value":value,"origin":"user","status":"confirmed","turn":m.turn_number+1}
 def apply_understanding(m,u):
  if u.degraded:m.turn_number+=1;return
  answering=u.user_act=="answer_to_question" and bool(m.last_assistant_question)
@@ -25,7 +25,7 @@ def apply_understanding(m,u):
   if u.intent!="unknown" and not answering:m.pending_goal.intent=u.intent
   clean,_=normalize_goal_updates(u.goal_updates);m.pending_goal.known_details.update(clean);_record_user_facts(m,clean)
   if u.needs_clarification and u.clarification_target:m.pending_goal.missing_detail=u.clarification_target;m.pending_goal.status="waiting_user"
-  else:m.pending_goal.missing_detail=None;m.pending_goal.status="complete" if u.goal_complete else "active"
+  else:m.pending_goal.missing_detail=None;m.pending_goal.status="complete" if u.goal_complete else "active";m.pending_goal.followup_available=bool(u.goal_complete or m.pending_goal.summary)
   case_updates=list(u.case_updates or [])
   if u.intent=="troubleshooting" and answering and m.last_assistant_question and not case_updates:
    raw=str((u.goal_updates or {}).get("answer_to_question") or "").strip()
@@ -46,4 +46,4 @@ def apply_understanding(m,u):
     else:m.support_case.attempts.append({"action":"previous validation","result":v})
     m.support_case.status="diagnosing"
  m.turn_number+=1
-def compact_context(m):return {"active_topic":m.active_topic,"pending_goal":m.pending_goal.__dict__,"confirmed_facts":list(m.fact_records.values()),"support_case":m.support_case.__dict__,"last_assistant_question":m.last_assistant_question,"summary":m.summary,"recent_topics":m.topic_history[-2:]}
+def compact_context(m):return {"active_topic":m.active_topic,"pending_goal":m.pending_goal.__dict__,"confirmed_facts":list(m.fact_records.values()),"support_case":m.support_case.__dict__,"last_assistant_question":m.last_assistant_question,"last_assistant_request":getattr(m,"last_assistant_request",None),"topic_followup_available":bool(getattr(m.pending_goal,"followup_available",False)),"summary":m.summary,"recent_topics":m.topic_history[-2:]}

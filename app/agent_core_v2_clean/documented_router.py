@@ -12,6 +12,7 @@ from .response_plan_router import plan_turn,assessment_from_plan
 from .citation_finalizer import enforce_answer_contract
 from .state_scope import enrich_understanding
 from .documented_fallback import build_documented_fallback
+from .case_context import inject_context
 
 def _valid_cached(item):
  a=(item or {}).get('answer') or {};return a.get('mode') in {'procedural_documented_answer','controlled_internal_knowledge','controlled_internal_knowledge_partial'}
@@ -26,7 +27,7 @@ def _boundary(result,store):
  if b.relation=='new_topic':u['user_act']='new_request';u['topic_relation']='new_topic';sanitize_new_topic_state(store['memory'],u,before);result['understanding']=u;result['state_after']=deepcopy(store['memory'].to_dict())
  result['retrieval']=enforce_evidence_boundary(result.get('retrieval') or {},b.relation);return result
 def _internal(result,message,gateway,budget,store,model,assessment):
- u=result.get('understanding') or {};r=result.get('retrieval') or {};key=internal_fingerprint(message,u,r,assessment,model);cached=_get_cache(store,'internal_knowledge_cache',key)
+ u=result.get('understanding') or {};r=inject_context(result.get('retrieval') or {},store['memory']);result['retrieval']=r;key=internal_fingerprint(message,u,r,assessment,model);cached=_get_cache(store,'internal_knowledge_cache',key)
  if cached:result['answer']=deepcopy(cached['answer']);result['internal_knowledge']={**deepcopy(cached['diagnostic']),'cache_hit':True};return result,{'skipped':True,'reason':'internal_knowledge_cache'}
  allowed,reason=budget.can_call(store['telemetry'],estimated_tokens=1800)
  if not allowed:return result,{'skipped':True,'reason':'internal_knowledge_budget_block','block_reason':reason}
@@ -44,7 +45,7 @@ def maybe_generate_procedural(result,message,gateway,budget,store,model=''):
  else:return result,None
  result,plan=plan_turn(result,message);assessment=assessment_from_plan(plan,base);result['evidence_sufficiency']=assessment;mode=plan.response_plan['mode']
  if mode!='documented':return _internal(result,message,gateway,budget,store,model,assessment)
- r=result.get('retrieval') or {};key=procedural_fingerprint(message,u,r,model);cached=_get_cache(store,'procedural_answer_cache',key)
+ r=inject_context(result.get('retrieval') or {},store['memory']);result['retrieval']=r;key=procedural_fingerprint(message,u,r,model);cached=_get_cache(store,'procedural_answer_cache',key)
  if cached:result['answer']=deepcopy(cached['answer']);result['procedural_answer']={**deepcopy(cached['diagnostic']),'cache_hit':True};return result,{'skipped':True,'reason':'procedural_answer_cache'}
  allowed,reason=budget.can_call(store['telemetry'],estimated_tokens=2700)
  if not allowed:return result,{'skipped':True,'reason':'procedural_budget_block','block_reason':reason}

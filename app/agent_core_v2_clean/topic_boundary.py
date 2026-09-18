@@ -49,8 +49,9 @@ def infer_topic_boundary(previous_state: dict, understanding: dict) -> TopicBoun
     if _is_refinement(previous_state, understanding, old, new, changed, introduced):
         return TopicBoundary("same_topic_refinement", "referential_or_contained_goal_refinement", round(shared, 3), changed, introduced, "primary")
     explicit_new = (understanding or {}).get("topic_relation") == "new_topic"
+    lexical_goal_change = bool(old and new and shared < .18 and len(new-old) >= 2)
     independent = bool(new_goal and now.get("operation") and now.get("subject"))
-    if explicit_new or (independent and {"operation", "subject"}.issubset(changed) and shared < .50):
+    if explicit_new or lexical_goal_change or (independent and {"operation", "subject"}.issubset(changed) and shared < .50):
         return TopicBoundary("new_topic", "explicit_or_independent_goal_boundary", round(shared, 3), changed, introduced, "none")
     if any(k in MATERIAL_SCOPE for k in changed) or introduced:
         return TopicBoundary("same_topic_changed_scope", "material_scope_changed", round(shared, 3), changed, introduced, "comparison_only")

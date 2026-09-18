@@ -6,7 +6,7 @@ import unicodedata
 from .models import AgentResponse
 from .answer_context_policy import enrich_internal_payload
 
-PROMPT_VERSION = "controlled_internal_knowledge_v14_resilient_completion"
+PROMPT_VERSION = "controlled_internal_knowledge_v15_case_aware"
 WARNING = "⚠️ **Orientación complementaria basada en conocimiento general del modelo**"
 SYSTEM = """Actúa como colega de soporte empresarial de impresión. Usa exactamente: ### Lo que indica la documentación, ### Orientación complementaria, ### Antes de continuar. La primera sección solo usa extractos autorizados y citas [R#]. Las otras secciones no usan citas. Responde al objetivo actual. Respeta hechos confirmados. La evidencia describe posibilidades, no elecciones del usuario. No conviertas modalidades sugeridas en hechos. Si una modalidad no está confirmada, usa lenguaje condicional. Da primero comprobaciones comunes y después comprobaciones condicionales. La sección Antes de continuar no exige una pregunta: úsala para una pregunta solo si falta un dato indispensable; de lo contrario indica el siguiente paso útil o una limitación. No repitas una pregunta anterior salvo que siga siendo indispensable para la solicitud actual. Si la documentación cubre requisitos, opciones o contexto pero no el procedimiento solicitado, dilo claramente y ofrece solo preparación segura. No menciones procesos internos. Los campos manufacturer, product, model, operating_system y architecture del alcance son hechos aportados por el usuario. Consérvalos literalmente. La ausencia de documentación no constituye evidencia de que sean erróneos. No los reclasifiques como número de serie, código parcial, código regional ni nombre no comercial; no solicites otro modelo salvo contradicción explícita en la evidencia. No inventes un paquete exacto. Si falta documentación específica, indica esa limitación y orienta a consultar la fuente oficial usando exactamente los identificadores aportados. Máximo 180 palabras."""
 
@@ -177,6 +177,8 @@ class ControlledInternalKnowledgeComposer:
         evidence = authorized_evidence(retrieval, message, understanding.get("current_goal") or "")
         payload = {"question":message,"goal":understanding.get("current_goal"),"documentation_assessment":assessment,"authorized_evidence":evidence}
         payload = enrich_internal_payload(payload, retrieval.get("_answer_context") or {}, understanding)
+        payload["confirmed_case_context"] = retrieval.get("_confirmed_case_context") or {}
+        payload["confirmed_case_constraints"] = retrieval.get("_confirmed_case_constraints") or ""
         result = self._call(payload)
         self.attempts = [result.to_dict()]
         length_retry = bool(result.ok and str(result.finish_reason or "").casefold() in {"length","max_tokens"})

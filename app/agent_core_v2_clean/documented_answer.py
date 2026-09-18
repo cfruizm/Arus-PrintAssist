@@ -27,7 +27,7 @@ class DocumentedAnswerComposer:
   evidence=evidence_pack(retrieval)
   if not evidence:return AgentResponse("La recuperación no contiene evidencia suficiente para responder de forma documentada.","documented_insufficient",False)
   from app.llm_gateway.models import LLMRequest
-  payload={"question":message,"intent":understanding.get("intent"),"goal":understanding.get("current_goal"),"evidence":evidence}
+  payload={"question":message,"intent":understanding.get("intent"),"goal":understanding.get("current_goal"),"evidence":evidence,"confirmed_case_context":retrieval.get("_confirmed_case_context") or {},"confirmed_case_constraints":retrieval.get("_confirmed_case_constraints") or ""}
   limit=680 if understanding.get("intent")=="requirements" else self.max_tokens
   r=self.gateway.complete(LLMRequest([{"role":"system","content":SYSTEM},{"role":"user","content":json.dumps(payload,ensure_ascii=False,separators=(",",":"))}],"agent_core_v2_clean_documented_answer",limit,0.,None));self.last_provider_result=r.to_dict()
   if not r.ok:return AgentResponse("Encontré documentación, pero no pude redactar la respuesta en este turno. Las fuentes recuperadas se conservaron.","documented_provider_degraded",False)
