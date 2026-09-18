@@ -10,7 +10,3 @@ def reconcile(result,memory):
   result["functional_events"]=[{"type":"diagnostic_text_suppressed","severity":"high"}]
   result["answer"]={"text":"Encontré documentación relacionada, pero no pude completar una respuesta final dentro del presupuesto de esta sesión.","mode":"controlled_budget_fallback","knowledge_used":False,"documented_evidence_used":False,"internal_knowledge_used":False,"knowledge_mode":"none"}
  return result
-
-
-
-

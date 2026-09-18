@@ -1,4 +1,5 @@
 from .models import ConversationMemory,TurnUnderstanding,PendingGoal
+import hashlib
 STRUCTURAL_GOAL_KEYS={"intent","status","summary","known_details","missing_detail","goal_complete","current_goal","goal_type","goal_updates","answer_to_question"}
 def normalize_goal_updates(updates):
  raw=dict(updates or {});clean={str(k):str(v) for k,v in raw.items() if str(k) not in STRUCTURAL_GOAL_KEYS and str(v).strip()};return clean,sorted(set(map(str,raw))-set(clean))
@@ -6,6 +7,11 @@ def _add(xs,v):
  v=" ".join(str(v or "").split())
  if v and v.casefold() not in {x.casefold() for x in xs}:xs.append(v)
 def _record_user_facts(m,clean):
+ if set(clean).issuperset({"fact","field"}):
+  value=str(clean.get("fact") or "").strip()
+  if value:
+   key="confirmed."+hashlib.sha1(value.casefold().encode()).hexdigest()[:12];m.fact_records[key]={"key":key,"value":value,"origin":"user","status":"confirmed","turn":m.turn_number+1};_add(m.support_case.observations,value)
+  return
  for k,v in clean.items():m.fact_records[str(k)]={"key":str(k),"value":str(v),"origin":"user","status":"confirmed","turn":m.turn_number+1}
 def apply_understanding(m,u):
  if u.degraded:m.turn_number+=1;return

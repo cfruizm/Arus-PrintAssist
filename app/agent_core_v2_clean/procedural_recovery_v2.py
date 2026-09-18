@@ -1,83 +1,31 @@
-from __future__ import annotations
-
-import re
 from collections import OrderedDict
-from typing import Any
+import re
 
-_METHOD_RE = re.compile(r"(?:^|\n)\s*(?:\d+[.)]\s*)?(?P<title>[^\n]{2,80})\s*(?:\n|$)", re.I)
-
-
-def _clean(text: Any) -> str:
-    return " ".join(str(text or "").replace("\x00", " ").split()).strip()
-
-
-def _identity(item: dict[str, Any]) -> str:
-    meta = item.get("metadata") or {}
-    return _clean(item.get("source") or item.get("url") or meta.get("canonical_url") or item.get("title"))
-
-
-def infer_evidence_scope(evidence: list[dict[str, Any]]) -> dict[str, Any]:
-    manufacturers: list[str] = []
-    products: list[str] = []
-    tools: list[str] = []
-    for item in evidence:
-        meta = item.get("metadata") or {}
-        vendor = _clean(meta.get("vendor"))
-        product = _clean(meta.get("product"))
-        title = _clean(item.get("title"))
-        if vendor and vendor.casefold() not in {"unknown", "general", "arus_internal"}:
-            manufacturers.append(vendor)
-        if product and product.casefold() not in {"unknown", "general", "sanitized_support_assets"}:
-            products.append(product)
-        if title:
-            tools.append(title)
-    return {
-        "manufacturers": list(dict.fromkeys(manufacturers)),
-        "products": list(dict.fromkeys(products)),
-        "document_titles": list(dict.fromkeys(tools)),
-        "specific": bool(manufacturers or products),
-    }
-
-
-def _method_name(item: dict[str, Any]) -> str:
-    text = _clean(item.get("text"))
-    # Structural extraction only: names come from document headings, never from a fixed product vocabulary.
-    for raw_line in str(item.get("text") or "").splitlines():
-        line = _clean(raw_line).strip("-:.;")
-        if 2 <= len(line) <= 70 and (re.match(r"^\d+[.)]\s*", line) or line.isupper()):
-            return re.sub(r"^\d+[.)]\s*", "", line).strip()
-    return "Procedimiento documentado"
-
-
-def build_structured_fallback(evidence: list[dict[str, Any]], request_scope: dict[str, Any] | None = None) -> dict[str, Any]:
-    evidence = [dict(x) for x in (evidence or []) if _clean((x or {}).get("text"))]
-    scope = infer_evidence_scope(evidence)
-    branches: OrderedDict[str, list[dict[str, Any]]] = OrderedDict()
-    for item in evidence:
-        name = _method_name(item)
-        branches.setdefault(name, []).append(item)
-    sections: list[str] = ["**Procedimiento documentado**"]
-    if scope["specific"] and not any((request_scope or {}).get(k) for k in ("manufacturer", "product", "model")):
-        covered = ", ".join(scope["manufacturers"] + scope["products"] + scope["document_titles"][:1])
-        sections.append(f"> Alcance: la evidencia disponible corresponde a {covered}. No debe asumirse aplicable a otros fabricantes o modelos.")
-    used: list[str] = []
-    for index, (name, items) in enumerate(branches.items(), 1):
-        sections.append(f"\n**Metodo {index}: {name}**")
-        step_index = 1
-        for item in items:
-            text = _clean(item.get("text"))
-            if not text:
-                continue
-            cid = _clean(item.get("id"))
-            citation = f" [{cid}]" if cid else ""
-            sections.append(f"{step_index}. {text}{citation}")
-            step_index += 1
-            if cid:
-                used.append(cid)
-    return {
-        "text": "\n".join(sections),
-        "used_evidence_ids": list(dict.fromkeys(used)),
-        "branch_count": len(branches),
-        "evidence_scope": scope,
-        "requires_scope_detail": scope["specific"] and not any((request_scope or {}).get(k) for k in ("manufacturer", "product", "model")),
-    }
+def _c(v):return " ".join(str(v or "").split()).strip()
+def _label(x):
+ for raw in str(x.get("text") or "").splitlines():
+  line=_c(raw).strip("-:.;")
+  if 3<=len(line)<=90 and line.isupper() and line not in {"OBJETIVO","ALCANCE","CONTENIDO","RESPONSABLE"}:return line.title()
+ return _c(x.get("title")) or "Procedimiento documentado"
+def build_structured_fallback(evidence,scope=None):
+ groups=OrderedDict();vendors=[];products=[]
+ for x in evidence or []:
+  if not _c(x.get("text")):continue
+  groups.setdefault(_label(x),[]).append(x);m=x.get("metadata") or {}
+  for k,a in (("vendor",vendors),("product",products)):
+   v=_c(m.get(k))
+   if v and v.casefold() not in {"unknown","general","arus_internal","sanitized_support_assets"} and v not in a:a.append(v)
+ explicit=any((scope or {}).get(k) for k in ("manufacturer","product","model"));specific=bool(vendors or products)
+ lines=["**Procedimiento documentado**"]
+ if specific and not explicit:lines += [f"\n> **Alcance limitado:** evidencia para {', '.join(vendors+products)}. Confirma fabricante y modelo antes de ejecutar una ruta específica."]
+ used=[]
+ for i,(label,items) in enumerate(groups.items(),1):
+  lines.append(f"\n**Método {i}: {label}**")
+  for n,x in enumerate(items,1):
+   cid=_c(x.get("id"));lines.append(f"{n}. {_c(x.get('text'))}"+(f" [{cid}]" if cid else ""));used += [cid] if cid else []
+ return {"text":"\n".join(lines),"used_evidence_ids":list(dict.fromkeys(used)),"branch_count":len(groups),"evidence_scope":{"manufacturers":vendors,"products":products,"specific":specific},"requires_scope_detail":specific and not explicit}
+def apply_structured_procedural_recovery(result):
+ a=result.get("answer") or {}
+ if a.get("mode")!="procedural_documented_fallback":result["procedural_recovery"]={"applied":False};return result
+ r=result.get("retrieval") or {};p=result.get("canonical_response_plan") or r.get("response_plan") or {};built=build_structured_fallback(r.get("generation_evidence") or r.get("evidence") or [],(p.get("request") or {}).get("scope") or {})
+ a.update(text=built["text"],mode="procedural_documented_structured_fallback",finish_reason="deterministic_structured_fallback");result["procedural_recovery"]={"applied":True,**{k:v for k,v in built.items() if k!="text"}};return result

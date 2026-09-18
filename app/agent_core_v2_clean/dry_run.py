@@ -16,7 +16,3 @@ class DryRunResponse:
   elif d.action=="ask_one_question":text=f"Aclaración requerida: {d.question_target}"
   else:text="Turno procesado en laboratorio determinista."
   return AgentResponse(text,"dry_run",False)
-
-
-
-

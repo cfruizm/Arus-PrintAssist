@@ -29,7 +29,3 @@ def run_scenario(scenario):
  if "action" in e:add("action",last.action==e["action"],last.action,e["action"])
  return {"id":scenario["id"],"name":scenario["name"],"passed":all(x["passed"] for x in checks),"checks":checks,"steps":steps,"final_state":m.to_dict(),"llm_calls":0,"tokens":0}
 def run_all():return [run_scenario(x) for x in SCENARIOS]
-
-
-
-

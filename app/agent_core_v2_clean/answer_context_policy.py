@@ -12,7 +12,3 @@ def enrich_internal_payload(payload,answer_context,understanding):
   out["scope_contract"]["previous_choice_request_unanswered"]=bool(closing and u.get("user_act")=="follow_up");out["scope_contract"]["previous_choice_request"]=closing
   out["continuity_instruction"]="Answer only the current follow-up. Evidence describes possibilities, not user-confirmed choices. If the previous choice was not answered, give only genuinely scenario-neutral checks first. Never label a check common if it depends on an unconfirmed component, method, architecture, device type, integration, or deployment mode. Put every scenario-specific check behind explicit conditional wording. Ask only the unresolved choice that materially changes the procedure."
  return out
-
-
-
-

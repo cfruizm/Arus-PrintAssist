@@ -41,7 +41,3 @@ def process_deterministic(message,semantic_input,store):
  _publish_exact_cache(store,message,key_before,result)
  store["messages"] += [{"role":"user","content":message},{"role":"assistant","content":answer}];store["turns"].append(result)
  return result
-
-
-
-
