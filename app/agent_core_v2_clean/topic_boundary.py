@@ -5,6 +5,7 @@ import unicodedata
 
 _TOKEN_RE = re.compile(r"[\wáéíóúüñ]+", re.I)
 STRUCTURAL = {"operation", "subject", "platform", "product", "component", "device", "scope"}
+_OPERATION_GENERIC = {"explicar", "procedimiento", "realizar", "consultar", "actualizar", "configurar", "impresora", "impresion", "usuario", "como", "para", "del", "una", "the", "how", "printer", "user"}
 MATERIAL_SCOPE = {"platform", "product", "component", "device", "scope"}
 _REFERENTIAL_ACTS = {"request_elaboration", "answer", "confirmation", "correction", "continue"}
 _REFINEMENT_MARKERS = {"paso", "parte", "opcion", "campo", "despues", "antes", "siguiente", "donde", "cual", "cuando", "como", "porque", "eso", "esa", "ese", "esto", "esta", "that", "this", "it", "step", "option", "field", "next", "after", "before", "where", "which"}
@@ -24,6 +25,16 @@ def _norm(value):
 
 def _tokens(value):
     return {x.casefold() for x in _TOKEN_RE.findall(_norm(value)) if len(x) > 2}
+
+def _material_operation_change(before, now, old_goal, new_goal):
+    old_value = before.get("operation") or old_goal
+    new_value = now.get("operation") or new_goal
+    old_terms = _tokens(old_value) - _OPERATION_GENERIC
+    new_terms = _tokens(new_value) - _OPERATION_GENERIC
+    if not old_terms or not new_terms:
+        return False
+    overlap = len(old_terms & new_terms) / max(1, len(old_terms | new_terms))
+    return overlap < 0.20 and bool(new_terms - old_terms)
 
 def _is_refinement(previous_state, understanding, old, new, changed, introduced):
     pending = (previous_state or {}).get("pending_goal") or {}
@@ -46,12 +57,15 @@ def infer_topic_boundary(previous_state: dict, understanding: dict) -> TopicBoun
     shared = len(old & new) / max(1, len(old | new))
     changed = sorted(k for k in STRUCTURAL if before.get(k) and now.get(k) and _norm(before[k]) != _norm(now[k]))
     introduced = sorted(k for k in MATERIAL_SCOPE if not before.get(k) and now.get(k))
+    material_operation = _material_operation_change(before, now, old_goal, new_goal)
+    if material_operation:
+        changed = sorted(set(changed) | {"operation"})
+        return TopicBoundary("new_topic", "material_operation_changed", round(shared, 3), changed, introduced, "none")
     if _is_refinement(previous_state, understanding, old, new, changed, introduced):
         return TopicBoundary("same_topic_refinement", "referential_or_contained_goal_refinement", round(shared, 3), changed, introduced, "primary")
     explicit_new = (understanding or {}).get("topic_relation") == "new_topic"
-    lexical_goal_change = bool(old and new and shared < .18 and len(new-old) >= 2)
     independent = bool(new_goal and now.get("operation") and now.get("subject"))
-    if explicit_new or lexical_goal_change or (independent and {"operation", "subject"}.issubset(changed) and shared < .50):
+    if explicit_new or (independent and {"operation", "subject"}.issubset(changed) and shared < .50):
         return TopicBoundary("new_topic", "explicit_or_independent_goal_boundary", round(shared, 3), changed, introduced, "none")
     if any(k in MATERIAL_SCOPE for k in changed) or introduced:
         return TopicBoundary("same_topic_changed_scope", "material_scope_changed", round(shared, 3), changed, introduced, "comparison_only")

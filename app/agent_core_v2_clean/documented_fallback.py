@@ -99,9 +99,24 @@ def _merge_short_actions(actions: list[tuple[str, str]]) -> list[tuple[str, list
     return merged
 
 
+def _target_supported(retrieval, evidence):
+    fields = ((retrieval.get("query") or {}).get("fields") or {})
+    target = " ".join(str(x or "") for x in (fields.get("current_message"), fields.get("contextual_operation"), fields.get("goal")))
+    wanted = {x for x in re.findall(r"[a-z0-9]+", target.casefold()) if len(x) > 4 and x not in {"explicar","procedimiento","impresora","usuario","realizar"}}
+    if not wanted:
+        return True
+    for item in evidence:
+        body = f"{item.get('title','')} {item.get('text','')}".casefold()
+        available = set(re.findall(r"[a-z0-9]+", body))
+        if len(wanted & available) / max(1, len(wanted)) >= .25:
+            return True
+    return False
+
 def build_documented_fallback(retrieval: dict[str, Any] | None, reason: str = "provider_degraded") -> dict[str, Any] | None:
     retrieval = retrieval or {}
     evidence = list(retrieval.get("generation_evidence") or retrieval.get("evidence") or [])
+    if not _target_supported(retrieval, evidence):
+        return None
     evidence.sort(key=lambda item: (_identity(item), _page_number(item), str(item.get("id") or "")))
 
     actions: list[tuple[str, str]] = []

@@ -3,14 +3,14 @@ from dataclasses import dataclass,field,asdict
 from typing import Any
 @dataclass
 class PendingGoal:
- summary:str="";intent:str="unknown";known_details:dict[str,str]=field(default_factory=dict);missing_detail:str|None=None;status:str="inactive";followup_available:bool=False
+ summary:str="";intent:str="unknown";known_details:dict[str,str]=field(default_factory=dict);missing_detail:str|None=None;status:str="inactive"
  def is_open(self):return self.status in {"active","waiting_user","partially_answered","blocked_by_evidence"}
 @dataclass
 class SupportCase:
  status:str="idle";symptoms:list[str]=field(default_factory=list);observations:list[str]=field(default_factory=list);attempts:list[dict[str,str|None]]=field(default_factory=list);affected_scope:str|None=None;resolution_status:str|None=None
 @dataclass
 class ConversationMemory:
- conversation_id:str="v2-clean-lab";active_topic:str|None=None;pending_goal:PendingGoal=field(default_factory=PendingGoal);support_case:SupportCase=field(default_factory=SupportCase);last_assistant_question:str|None=None;summary:str="";turn_number:int=0;topic_history:list[dict[str,Any]]=field(default_factory=list);fact_records:dict[str,dict[str,Any]]=field(default_factory=dict);last_assistant_request:str|None=None
+ conversation_id:str="v2-clean-lab";active_topic:str|None=None;pending_goal:PendingGoal=field(default_factory=PendingGoal);support_case:SupportCase=field(default_factory=SupportCase);last_assistant_question:str|None=None;summary:str="";turn_number:int=0;topic_history:list[dict[str,Any]]=field(default_factory=list);fact_records:dict[str,dict[str,Any]]=field(default_factory=dict)
  def to_dict(self):return asdict(self)
 @dataclass
 class TurnUnderstanding:
