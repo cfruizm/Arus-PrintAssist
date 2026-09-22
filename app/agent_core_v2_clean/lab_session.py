@@ -21,8 +21,34 @@ from .operational_coherence import normalize_generation_flags
 
 KEY = "agent_core_v2_clean_store"
 
+def _safe_text(value):
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (int, float, bool)):
+        return str(value)
+    if isinstance(value, list):
+        return " ".join(_safe_text(x) for x in value if _safe_text(x))
+    if isinstance(value, dict):
+        for key in ("summary", "subject", "operation", "product", "value", "text"):
+            if key in value and value.get(key) is not None:
+                return _safe_text(value.get(key))
+        return ""
+    return str(value)
+
+def _stabilize_memory_text(memory):
+    memory.active_topic = _safe_text(getattr(memory, "active_topic", None)) or None
+    goal = getattr(memory, "pending_goal", None)
+    if goal is not None:
+        goal.summary = _safe_text(getattr(goal, "summary", ""))
+        if hasattr(goal, "missing_detail"):
+            goal.missing_detail = _safe_text(getattr(goal, "missing_detail", "")) or None
+    memory.last_assistant_question = _safe_text(getattr(memory, "last_assistant_question", None)) or None
+    return memory
+
 def _context_key(message, memory):
-    return "|".join((" ".join(str(message).split()).casefold(), str(memory.active_topic or "").strip().casefold(), str(memory.pending_goal.summary or "").strip().casefold()))
+    return "|".join((" ".join(_safe_text(message).split()).casefold(), _safe_text(memory.active_topic).strip().casefold(), _safe_text(memory.pending_goal.summary).strip().casefold()))
 
 def _artifact(result):
     return {k: deepcopy(result.get(k)) for k in ("understanding", "understanding_contract", "goal_update_normalization", "decision", "answer", "retrieval", "documented_answer", "procedural_answer", "internal_knowledge", "procedural_recovery", "answer_context")}
@@ -34,6 +60,7 @@ def get_store(s):
     if KEY not in s:
         s[KEY] = {"session_id": secrets.token_hex(12), "memory": ConversationMemory(), "messages": [], "turns": [], "errors": [], "telemetry": empty(), "budget": BudgetPolicy.for_mode("normal").to_dict(), "deterministic_results": [], "exact_turn_cache": {}, "retrieval_cache": {}, "documented_answer_cache": {}, "procedural_answer_cache": {}, "cache_metrics": {}, "answer_context": {}}
     x = s[KEY]
+    x["memory"] = _stabilize_memory_text(x.get("memory") or ConversationMemory())
     x["telemetry"] = normalize(x.get("telemetry"))
     for k in ("exact_turn_cache", "retrieval_cache", "documented_answer_cache", "procedural_answer_cache"):
         x.setdefault(k, {})
@@ -99,8 +126,7 @@ def _conceptual(result, message, secrets_obj, s, budget, store):
         return result, {"skipped": True, "reason": "decision_does_not_authorize_retrieval"}
     retrieval = result.get("retrieval") or {}
     understanding = result.get("understanding") or {}
-    verdict = retrieval.get("evidence_verdict") or {}
-    if not retrieval.get("ok") or not retrieval.get("evidence") or not verdict.get("accepted"):
+    if understanding.get("intent") not in {"conceptual", "requirements"} or not retrieval.get("ok") or not retrieval.get("evidence"):
         return result, None
     model = str(getattr(load_gateway_config(secrets_obj), "model", "") or "")
     key = answer_fingerprint(message, understanding, retrieval, model)
@@ -113,9 +139,7 @@ def _conceptual(result, message, secrets_obj, s, budget, store):
     allowed, _ = budget.can_call(store["telemetry"], estimated_tokens=1100)
     if not allowed:
         return result, None
-    intent = str(understanding.get("intent") or "").casefold()
-    max_tokens = 480 if intent == "requirements" else 520 if intent == "procedural" else 300
-    composer = DocumentedAnswerComposer(_gateway(secrets_obj, s), max_tokens)
+    composer = DocumentedAnswerComposer(_gateway(secrets_obj, s), 480 if understanding.get("intent") == "requirements" else 260)
     answer = composer.compose(message, understanding, retrieval)
     payload = answer.to_dict()
     payload.update({"documented_evidence_used": answer.mode in {"documented_answer", "documented_answer_partial"}, "internal_knowledge_used": False, "knowledge_mode": "documented_only" if answer.mode in {"documented_answer", "documented_answer_partial"} else "none"})
@@ -133,31 +157,28 @@ def _answers(result, message, secrets_obj, s, budget, store):
     if (result.get("decision") or {}).get("action") not in {"defer_to_retrieval", "diagnose_with_retrieval"}:
         skipped = {"skipped": True, "reason": "decision_does_not_authorize_retrieval"}
         return result, skipped, skipped
-
-    retrieval = result.get("retrieval") or {}
-    verdict = retrieval.get("evidence_verdict") or {}
-
-    # One canonical answer composer for every turn with authorized evidence.
-    # This prevents duplicate generations, procedural retries and raw-PDF fallbacks.
-    if verdict.get("accepted") and retrieval.get("generation_evidence"):
-        result, documented_trace = _conceptual(result, message, secrets_obj, s, budget, store)
-        answer_mode = str((result.get("answer") or {}).get("mode") or "")
-        if answer_mode in {"documented_answer", "documented_answer_partial"}:
-            result.setdefault("functional_events", []).append({
-                "type": "terminal_answer_arbitration",
-                "winner": "single_documented_composer",
-                "suppressed": "procedural_composer_and_deterministic_fallback",
-                "reason": "authorized_evidence_single_generation",
-            })
-            return result, documented_trace, {"skipped": True, "reason": "authorized_documented_answer_is_terminal"}
-
-    # Internal knowledge remains the controlled fallback only when evidence was not authorized
-    # or when the single documented composer could not publish a valid answer.
-    result, procedural_trace = maybe_generate_procedural(
-        result, message, _gateway(secrets_obj, s), budget, store,
-        str(getattr(load_gateway_config(secrets_obj), "model", "") or ""),
-    )
-    return result, {"skipped": True, "reason": "no_terminal_documented_answer"}, procedural_trace
+    # Conceptual requests are handled by controlled synthesis before the
+    # documented-only composer can publish a tangential negative answer.
+    if must_preempt_documented_answer(result.get("understanding") or {}):
+        result, procedural_trace = maybe_generate_procedural(
+            result, message, _gateway(secrets_obj, s), budget, store,
+            str(getattr(load_gateway_config(secrets_obj), "model", "") or ""),
+        )
+        conceptual_trace = {
+            "skipped": True,
+            "reason": "conceptual_preempted_by_controlled_synthesis",
+        }
+        return result, conceptual_trace, procedural_trace
+    result, conceptual_trace = _conceptual(result, message, secrets_obj, s, budget, store)
+    intent = str((result.get("understanding") or {}).get("intent") or "").casefold()
+    answer_mode = str((result.get("answer") or {}).get("mode") or "")
+    documented_terminal = intent == "requirements" and answer_mode in {"documented_answer", "documented_answer_partial"}
+    if documented_terminal:
+        result.setdefault("functional_events", []).append({"type":"terminal_answer_arbitration","winner":"documented_requirements","suppressed":"procedural_composer","reason":"single_sufficient_answer"})
+        procedural_trace = {"skipped": True, "reason": "documented_requirements_is_terminal"}
+        return result, conceptual_trace, procedural_trace
+    result, procedural_trace = maybe_generate_procedural(result, message, _gateway(secrets_obj, s), budget, store, str(getattr(load_gateway_config(secrets_obj), "model", "") or ""))
+    return result, conceptual_trace, procedural_trace
 
 def _trace_list(value):
     if not value:
@@ -235,6 +256,10 @@ def process_message(message, secrets_obj, s):
     store["messages"].append({"role": "user", "content": message})
     try:
         result = build_agent(secrets_obj, s, budget).process(message, store["memory"])
+        if (result.get("understanding") or {}).get("degraded"):
+            store["memory"] = memory_before
+            result["state_after"] = deepcopy(store["memory"].to_dict())
+            result.setdefault("functional_events", []).append({"type": "degraded_understanding_memory_rollback", "reason": "provider_contract_invalid"})
         result = _attach_retrieval(result, message, store)
         base = result.get("provider_trace") or {}
         contract = (result.get("understanding_contract") or {}).get("valid")
@@ -266,4 +291,4 @@ def process_message(message, secrets_obj, s):
 
 def export_session(s):
     x = get_store(s)
-    return {"format": "agent_core_v2_clean_phase3b3_5", "session_id": x.get("session_id"), "gateway_budget": {"calls": int(s.get("llm_gateway_calls", 0)), "tokens": int(s.get("llm_gateway_tokens", 0))}, "messages": deepcopy(x["messages"]), "turns": deepcopy(x["turns"]), "state": x["memory"].to_dict(), "answer_context": deepcopy(x.get("answer_context") or {}), "budget": deepcopy(x["budget"]), "telemetry": snapshot(x["telemetry"]), "cache_metrics": deepcopy(x["cache_metrics"]), "errors": deepcopy(x["errors"]), "retrieval_enabled": True, "documented_answer_enabled": True, "procedural_answer_enabled": True, "production_changed": False}
+    return {"format": "agent_core_v2_clean_phase3b4_0", "session_id": x.get("session_id"), "gateway_budget": {"calls": int(s.get("llm_gateway_calls", 0)), "tokens": int(s.get("llm_gateway_tokens", 0))}, "messages": deepcopy(x["messages"]), "turns": deepcopy(x["turns"]), "state": x["memory"].to_dict(), "answer_context": deepcopy(x.get("answer_context") or {}), "budget": deepcopy(x["budget"]), "telemetry": snapshot(x["telemetry"]), "cache_metrics": deepcopy(x["cache_metrics"]), "errors": deepcopy(x["errors"]), "retrieval_enabled": True, "documented_answer_enabled": True, "procedural_answer_enabled": True, "production_changed": False}
