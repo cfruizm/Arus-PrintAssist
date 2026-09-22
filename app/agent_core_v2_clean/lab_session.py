@@ -88,8 +88,7 @@ def _attach_retrieval(result, message, store):
         retrieval["_answer_context"] = deepcopy(answer_context)
         retrieval["pre_retrieval_boundary"] = boundary.to_dict()
     except Exception as exc:
-        retrieval = {"enabled": True, "ok": False, "llm_called": False, "production_changed": False, "count": 0, "evidence": [], "generation_evidence": [], "errors": [{"stage": "attach_retrieval", "type": type(exc).__name__, "message": str(exc)}]}
-        result.setdefault("functional_events", []).append({"type": "retrieval_pipeline_failure", "severity": "critical", "stage": "attach_retrieval", "error_type": type(exc).__name__, "message": str(exc)})
+        retrieval = {"enabled": True, "ok": False, "llm_called": False, "production_changed": False, "count": 0, "evidence": [], "errors": [{"type": type(exc).__name__, "message": str(exc)}]}
     result["retrieval"] = retrieval
     result["answer"]["text"] = retrieval_summary(retrieval)
     result["answer"]["mode"] = "retrieval_diagnostic" if retrieval.get("ok") else "retrieval_error"
@@ -133,18 +132,21 @@ def _answers(result, message, secrets_obj, s, budget, store):
         return result, skipped, skipped
     # Conceptual requests are handled by controlled synthesis before the
     # documented-only composer can publish a tangential negative answer.
-    if must_preempt_documented_answer(result.get("understanding") or {}):
+    verdict = ((result.get("retrieval") or {}).get("evidence_verdict") or {})
+    if must_preempt_documented_answer(result.get("understanding") or {}) and not verdict.get("accepted"):
         result, procedural_trace = maybe_generate_procedural(
             result, message, _gateway(secrets_obj, s), budget, store,
             str(getattr(load_gateway_config(secrets_obj), "model", "") or ""),
         )
-        conceptual_trace = {
-            "skipped": True,
-            "reason": "conceptual_preempted_by_controlled_synthesis",
-        }
+        conceptual_trace = {"skipped": True,"reason": "conceptual_without_authorized_evidence"}
         return result, conceptual_trace, procedural_trace
     result, conceptual_trace = _conceptual(result, message, secrets_obj, s, budget, store)
     intent = str((result.get("understanding") or {}).get("intent") or "").casefold()
+    goal_text = " ".join((str(message or ""), str((result.get("understanding") or {}).get("current_goal") or ""))).casefold()
+    enumeration = any(term in goal_text for term in ("métodos", "metodos", "opciones", "alternativas", "listar", "enumera"))
+    if enumeration and verdict.get("accepted") and str((result.get("answer") or {}).get("mode") or "") in {"documented_answer", "documented_answer_partial"}:
+        result.setdefault("functional_events", []).append({"type":"terminal_answer_arbitration","winner":"documented_enumeration","suppressed":"procedural_composer","reason":"authorized_enumeration_answer"})
+        return result, conceptual_trace, {"skipped": True, "reason": "documented_enumeration_is_terminal"}
     answer_mode = str((result.get("answer") or {}).get("mode") or "")
     documented_terminal = intent == "requirements" and answer_mode in {"documented_answer", "documented_answer_partial"}
     if documented_terminal:
@@ -261,4 +263,4 @@ def process_message(message, secrets_obj, s):
 
 def export_session(s):
     x = get_store(s)
-    return {"format": "agent_core_v2_clean_phase3b3_1", "session_id": x.get("session_id"), "gateway_budget": {"calls": int(s.get("llm_gateway_calls", 0)), "tokens": int(s.get("llm_gateway_tokens", 0))}, "messages": deepcopy(x["messages"]), "turns": deepcopy(x["turns"]), "state": x["memory"].to_dict(), "answer_context": deepcopy(x.get("answer_context") or {}), "budget": deepcopy(x["budget"]), "telemetry": snapshot(x["telemetry"]), "cache_metrics": deepcopy(x["cache_metrics"]), "errors": deepcopy(x["errors"]), "retrieval_enabled": True, "documented_answer_enabled": True, "procedural_answer_enabled": True, "production_changed": False}
+    return {"format": "agent_core_v2_clean_phase3b3", "session_id": x.get("session_id"), "gateway_budget": {"calls": int(s.get("llm_gateway_calls", 0)), "tokens": int(s.get("llm_gateway_tokens", 0))}, "messages": deepcopy(x["messages"]), "turns": deepcopy(x["turns"]), "state": x["memory"].to_dict(), "answer_context": deepcopy(x.get("answer_context") or {}), "budget": deepcopy(x["budget"]), "telemetry": snapshot(x["telemetry"]), "cache_metrics": deepcopy(x["cache_metrics"]), "errors": deepcopy(x["errors"]), "retrieval_enabled": True, "documented_answer_enabled": True, "procedural_answer_enabled": True, "production_changed": False}
