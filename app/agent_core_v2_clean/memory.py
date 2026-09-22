@@ -1,43 +1,101 @@
-from .models import ConversationMemory,TurnUnderstanding,PendingGoal
-STRUCTURAL_GOAL_KEYS={"intent","status","summary","known_details","missing_detail","goal_complete","current_goal","goal_type","goal_updates","answer_to_question"}
-def normalize_goal_updates(updates):
- raw=dict(updates or {});clean={str(k):str(v) for k,v in raw.items() if str(k) not in STRUCTURAL_GOAL_KEYS and str(v).strip()};return clean,sorted(set(map(str,raw))-set(clean))
-def _add(xs,v):
- v=" ".join(str(v or "").split())
- if v and v.casefold() not in {x.casefold() for x in xs}:xs.append(v)
-def _record_user_facts(m,clean):
- for k,v in clean.items():m.fact_records[str(k)]={"key":str(k),"value":str(v),"origin":"user","status":"confirmed","turn":m.turn_number+1}
-def apply_understanding(m,u):
- if u.degraded and not u.should_retrieve:m.turn_number+=1;return
- answering=u.user_act=="answer_to_question" and bool(m.last_assistant_question)
- if not answering and u.topic_relation in {"new_topic","independent"} and not (m.support_case.status in {"diagnosing","reopened"} and u.intent in {"troubleshooting","procedural","requirements","verification"}) and u.domain_relevance=="in_scope" and m.active_topic and u.current_goal!=m.active_topic:
-  m.topic_history.append({"topic":m.active_topic,"goal":m.pending_goal.summary,"case":m.support_case.__dict__.copy()});m.pending_goal=PendingGoal();m.support_case=type(m.support_case)();m.fact_records={}
- if u.domain_relevance=="in_scope":
-  if not answering:
-   m.active_topic=u.current_goal or m.active_topic
-   if u.current_goal:m.pending_goal.summary=u.current_goal
-  if u.intent!="unknown" and not answering:m.pending_goal.intent=u.intent
-  clean,_=normalize_goal_updates(u.goal_updates);m.pending_goal.known_details.update(clean);_record_user_facts(m,clean)
-  if u.needs_clarification and u.clarification_target:m.pending_goal.missing_detail=u.clarification_target;m.pending_goal.status="waiting_user"
-  else:m.pending_goal.missing_detail=None;m.pending_goal.status="complete" if u.goal_complete else "active"
-  case_updates=list(u.case_updates or [])
-  if u.intent=="troubleshooting" and answering and m.last_assistant_question and not case_updates:
-   raw=str((u.goal_updates or {}).get("answer_to_question") or "").strip()
-   if raw:case_updates.append({"type":"observation","value":"Pregunta: "+m.last_assistant_question+" Respuesta: "+raw})
-  if u.intent=="troubleshooting":
-   present={str(x.get("type") or "") for x in case_updates}
-   for key in ("symptom","observation","affected_scope","attempted_action","attempt_result"):
-    value=str(clean.get(key) or "").strip()
-    if value and key not in present:case_updates.append({"type":key,"value":value})
-  for f in case_updates:
-   k,v=str(f.get("type") or ""),str(f.get("value") or "").strip()
-   if k in {"symptom","reported_failure","new_case"}:_add(m.support_case.symptoms,v);m.support_case.status="diagnosing"
-   elif k=="observation":_add(m.support_case.observations,v);m.support_case.status="diagnosing"
-   elif k=="affected_scope":m.support_case.affected_scope=v;m.support_case.status="diagnosing"
-   elif k=="attempted_action":m.support_case.attempts.append({"action":v,"result":None});m.support_case.status="diagnosing"
-   elif k=="attempt_result":
-    if m.support_case.attempts:m.support_case.attempts[-1]["result"]=v
-    else:m.support_case.attempts.append({"action":"previous validation","result":v})
-    m.support_case.status="diagnosing"
- m.turn_number+=1
-def compact_context(m):return {"active_topic":m.active_topic,"pending_goal":m.pending_goal.__dict__,"confirmed_facts":list(m.fact_records.values()),"support_case":m.support_case.__dict__,"last_assistant_question":m.last_assistant_question,"summary":m.summary,"recent_topics":m.topic_history[-2:]}
+from __future__ import annotations
+from copy import deepcopy
+import hashlib, re, unicodedata
+from .models import ConversationMemory, TurnUnderstanding
+
+STRUCTURAL_GOAL_KEYS={"intent","status","summary","current_goal","goal_complete","missing_detail","topic"}
+ALLOWED_CASE_UPDATE_TYPES={"symptom","observation","affected_scope","attempted_action","attempt_result","error_message","evidence","resolution_status"}
+
+def _norm(v):
+    return " ".join(str(v or "").split()).strip()
+
+def normalize_text(v):
+    return unicodedata.normalize("NFKD", _norm(v)).encode("ascii","ignore").decode().casefold()
+
+def normalize_goal_updates(values):
+    clean={};removed=[]
+    for k,v in dict(values or {}).items():
+        key=str(k).strip()
+        if key in STRUCTURAL_GOAL_KEYS: removed.append(key); continue
+        value=_norm(v)
+        if key and value: clean[key]=value
+    return clean,removed
+
+def _record_fact(memory,key,value,turn):
+    value=_norm(value)
+    if not value:return
+    ident=f"fact:{hashlib.sha1(normalize_text(key+':'+value).encode()).hexdigest()[:12]}"
+    memory.fact_records[ident]={"key":key,"value":value,"turn":turn,"status":"confirmed"}
+
+def _append_unique(values,value):
+    value=_norm(value)
+    if value and normalize_text(value) not in {normalize_text(x) for x in values}: values.append(value)
+
+def apply_understanding(memory: ConversationMemory, u: TurnUnderstanding):
+    previous_topic=memory.active_topic
+    rel=str(u.topic_relation or "same_topic")
+    if rel in {"new_topic","independent"}:
+        if memory.active_topic or memory.pending_goal.summary:
+            memory.topic_history.append({"topic":memory.active_topic,"goal":memory.pending_goal.summary,"turn":memory.turn_number})
+            memory.case_history.append({"topic":memory.active_topic,"goal":memory.pending_goal.summary,"goal_state":deepcopy(memory.pending_goal.__dict__),"case_state":deepcopy(memory.support_case.__dict__),"turn":memory.turn_number})
+        memory.active_topic=u.current_goal or None
+        memory.pending_goal=type(memory.pending_goal)()
+        memory.support_case=type(memory.support_case)()
+    elif rel=="return_to_previous" and memory.topic_history:
+        target=str(memory.topic_history[-1].get("topic") or memory.active_topic or "") or None
+        memory.active_topic=target
+        for item in reversed(memory.case_history):
+            if str(item.get("topic") or "") == target:
+                from .models import PendingGoal, SupportCase
+                memory.pending_goal=PendingGoal(**dict(item.get("goal_state") or {}))
+                memory.support_case=SupportCase(**dict(item.get("case_state") or {}))
+                break
+
+    goal=u.current_goal or memory.pending_goal.summary
+    if goal:
+        memory.pending_goal.summary=goal
+        memory.pending_goal.intent=u.intent
+        if u.goal_complete:
+            memory.pending_goal.status="complete"
+        else:
+            memory.pending_goal.status="active"
+    for key,value in (u.goal_updates or {}).items():
+        clean_key=str(key).strip();value=_norm(value)
+        if not clean_key or not value or clean_key in STRUCTURAL_GOAL_KEYS:continue
+        memory.pending_goal.known_details[clean_key]=value
+        _record_fact(memory,clean_key,value,memory.turn_number)
+
+    for item in u.case_updates or []:
+        typ=str(item.get("type") or "").strip();value=_norm(item.get("value"))
+        if typ not in ALLOWED_CASE_UPDATE_TYPES or not value:continue
+        if typ=="symptom":_append_unique(memory.support_case.symptoms,value)
+        elif typ=="observation":_append_unique(memory.support_case.observations,value)
+        elif typ=="affected_scope":memory.support_case.affected_scope=value
+        elif typ=="attempted_action":
+            if not any(normalize_text(x.get("action"))==normalize_text(value) for x in memory.support_case.attempts):
+                memory.support_case.attempts.append({"action":value,"result":None})
+        elif typ=="attempt_result":
+            if memory.support_case.attempts:
+                memory.support_case.attempts[-1]["result"]=value
+            else:
+                memory.support_case.attempts.append({"action":None,"result":value})
+            memory.support_case.resolution_status="unresolved" if normalize_text(value) in {"failed","no resolvio","same"} else memory.support_case.resolution_status
+        elif typ=="error_message":_append_unique(memory.support_case.observations,f"Mensaje: {value}")
+        elif typ=="evidence":_append_unique(memory.support_case.observations,f"Evidencia: {value}")
+        elif typ=="resolution_status":memory.support_case.resolution_status=value
+
+    if u.intent=="troubleshooting" or u.case_updates:
+        memory.support_case.status="resolved" if u.goal_complete and memory.support_case.resolution_status=="resolved" else "diagnosing"
+    memory.turn_number += 1
+
+def compact_context(memory: ConversationMemory):
+    return {
+        "active_topic":memory.active_topic,
+        "pending_goal":{"summary":memory.pending_goal.summary,"intent":memory.pending_goal.intent,"known_details":dict(memory.pending_goal.known_details),"missing_detail":memory.pending_goal.missing_detail,"status":memory.pending_goal.status},
+        "support_case":{"status":memory.support_case.status,"symptoms":list(memory.support_case.symptoms),"observations":list(memory.support_case.observations[-4:]),"attempts":deepcopy(memory.support_case.attempts[-6:]),"affected_scope":memory.support_case.affected_scope,"resolution_status":memory.support_case.resolution_status},
+        "last_assistant_question":memory.last_assistant_question,
+        "topic_history":list(memory.topic_history[-4:]),
+    }
+
+def failed_actions(memory):
+    return [str(x.get("action") or "") for x in memory.support_case.attempts if str(x.get("result") or "").strip().casefold() in {"failed","no resolvio","same","no funciono","sin cambios"}]
