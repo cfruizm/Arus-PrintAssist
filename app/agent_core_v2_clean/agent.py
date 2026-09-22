@@ -1,34 +1,14 @@
-from __future__ import annotations
 from copy import deepcopy
-from .models import ConversationMemory
-from .understanding import ConversationUnderstanding
-from .reconciler import TurnReconciler
+import re
 from .memory import apply_understanding
-from .retrieval import RetrievalQueryBuilder, ReadOnlyRetrieval
-from .evidence import evidence_summary
-from .response import ResponseComposer
-
+from .scope_reconciler import reconcile_turn
+from .operational_coherence import reconcile_understanding_object,apply_reopen_transition
+def _closing_question(text):
+ f=list(re.finditer(r"¿[^?]{1,420}\?"," ".join(str(text or "").split())));return f[-1].group(0).strip() if f else None
 class CleanConversationalAgent:
-    def __init__(self,gateway,budget):
-        self.understanding=ConversationUnderstanding(gateway,budget.understanding_max_tokens)
-        self.reconciler=TurnReconciler()
-        self.response=ResponseComposer(gateway,budget.response_max_tokens)
-    def process(self,message,memory):
-        before=deepcopy(memory.to_dict())
-        u=self.understanding.interpret(message,memory)
-        u,warnings=self.reconciler.reconcile(u,memory,message)
-        decision=self.reconciler.decision(u,memory)
-        apply_understanding(memory,u)
-        retrieval={"enabled":False,"ok":False,"evidence":[],"count":0,"llm_called":False,"production_state_changed":False}
-        if decision["action"]=="retrieve":
-            builder=RetrievalQueryBuilder();q=builder.build(message,memory,u);current=builder.current_only(message,u)
-            retrieval=ReadOnlyRetrieval().search(q,current)
-            assessment=evidence_summary(message,u,retrieval.get("evidence") or [])
-            retrieval.update({"selected":assessment["selected"],"coverage":assessment["coverage"],"sufficient":assessment["sufficient"]})
-        answer=self.response.compose(message,memory,u,decision,retrieval)
-        if answer.mode in {"grounded_answer","guardrail_replaced"} and u.intent in {"conceptual","requirements"} and u.goal_complete:
-            memory.pending_goal.status="complete"
-        if u.goal_complete and u.intent=="troubleshooting":memory.support_case.resolution_status="resolved";memory.support_case.status="resolved"
-        if answer.text.endswith("?"):memory.last_assistant_question=answer.text.split("\n")[-1].strip()
-        else:memory.last_assistant_question=None
-        return {"input":message,"state_before":before,"understanding":u.to_dict(),"understanding_contract":{"valid":self.understanding.contract_valid,"error":self.understanding.validation_error},"goal_update_normalization":self.understanding.normalization,"decision":decision,"answer":answer.to_dict(),"retrieval":retrieval,"warnings":warnings,"state_after":deepcopy(memory.to_dict()),"production_changed":False,"provider_trace":{"understanding":self.understanding.last_provider_result,"response":self.response.last_provider_result}}
+ def __init__(self,understanding,policy,response):self.understanding=understanding;self.policy=policy;self.response=response
+ def process(self,message,memory):
+  before=deepcopy(memory.to_dict());u=self.understanding.interpret(message,memory);u,c,b=reconcile_turn(u,memory,message);u,e=reconcile_understanding_object(u,memory,b);n=deepcopy(self.understanding.normalization or {});n.setdefault("structural_corrections",[]);n["structural_corrections"].extend(x for x in c+[z.get("reason") for z in e] if x and x not in n["structural_corrections"]);d=self.policy.decide(u,memory);apply_understanding(memory,u);apply_reopen_transition(memory,e);a=self.response.compose(message,memory,u,d);q=_closing_question(a.text)
+  if q:memory.last_assistant_question=q
+  elif d.action not in {"redirect_scope","degraded_continue"}:memory.last_assistant_question=None
+  return {"input":message,"state_before":before,"understanding":u.to_dict(),"understanding_contract":{"valid":self.understanding.contract_valid,"error":self.understanding.validation_error,"normalization":deepcopy(self.understanding.normalization or {}),"repair_attempted":bool((self.understanding.normalization or {}).get("repair_attempted")),"repair_succeeded":bool((self.understanding.normalization or {}).get("repair_succeeded"))},"goal_update_normalization":n,"decision":d.to_dict(),"state_after":deepcopy(memory.to_dict()),"answer":a.to_dict(),"provider_trace":{"understanding":self.understanding.last_provider_result,"response":self.response.last_provider_result},"retrieval":{"enabled":False},"topic_boundary":b,"functional_events":e,"production_changed":False}
