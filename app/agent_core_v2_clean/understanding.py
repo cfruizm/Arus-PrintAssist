@@ -10,9 +10,24 @@ class ConversationUnderstanding:
  def _parse(self,text):
   text=str(text or "").strip();a=text.find("{");b=text.rfind("}")
   if a<0 or b<a:raise ValueError("json_object_missing")
-  raw=json.loads(text[a:b+1]);missing=REQUIRED-set(raw)
+  raw=json.loads(text[a:b+1])
   if not isinstance(raw,dict) or not raw:raise ValueError("empty_object")
+  aliases={"thought":"reasoning_summary","clarification_question":"clarification_target","clarification_needed":"needs_clarification"}
+  normalized=[]
+  for old,new in aliases.items():
+   if new not in raw and old in raw:raw[new]=raw.get(old);normalized.append(old+"->"+new)
+  if "current_goal" not in raw and raw.get("topic"):raw["current_goal"]=str(raw.get("topic"));normalized.append("topic->current_goal")
+  if "topic_relation" not in raw and "same_topic" in raw:raw["topic_relation"]="same_topic" if bool(raw.get("same_topic")) else "new_topic";normalized.append("same_topic->topic_relation")
+  raw.setdefault("goal_complete",False);raw.setdefault("goal_updates",{});raw.setdefault("case_updates",[])
+  raw.setdefault("needs_clarification",False);raw.setdefault("clarification_target",None)
+  raw.setdefault("reasoning_summary","normalized_provider_contract")
+  raw.setdefault("confidence",0.72)
+  if "user_act" not in raw:raw["user_act"]="request_elaboration" if raw.get("topic_relation")=="same_topic" else "new_request";normalized.append("derived_user_act")
+  if "domain_relevance" not in raw:raw["domain_relevance"]="in_scope" if str(raw.get("intent") or "unknown")!="unknown" else "uncertain";normalized.append("derived_domain_relevance")
+  if "should_retrieve" not in raw:raw["should_retrieve"]=str(raw.get("intent") or "") in {"conceptual","procedural","requirements","architecture","warranty"};normalized.append("derived_should_retrieve")
+  missing=REQUIRED-set(raw)
   if missing:raise ValueError("missing_fields:"+",".join(sorted(missing)))
+  self.normalization={"removed_goal_update_keys":[],"schema_aliases":normalized}
   raw["goal_updates"],removed=normalize_goal_updates(raw.get("goal_updates"));self.normalization={"removed_goal_update_keys":removed};return TurnUnderstanding(**raw)
  def interpret(self,message,memory):
   from app.llm_gateway.models import LLMRequest

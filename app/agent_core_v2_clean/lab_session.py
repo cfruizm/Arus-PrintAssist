@@ -70,13 +70,20 @@ def _attach_retrieval(result, message, store):
             raw["cache_hit"] = True
             store["cache_metrics"]["retrieval_hits"] += 1
         else:
-            raw = ReadOnlyRetrieval(k=6).search(query, current)
+            preferred=list((store.get("answer_context") or {}).get("source_identities") or []) if (result.get("topic_boundary") or {}).get("previous_evidence_role") in {"primary","eligible"} else []
+            raw = ReadOnlyRetrieval(k=6).search(query, current, preferred_sources=preferred)
             raw["cache_hit"] = False
             store["retrieval_cache"][query.fingerprint] = deepcopy(raw)
         # Resolve the topic boundary before semantic fit. Understanding can label a
         # referential sub-question as new_topic even when it narrows the active goal.
-        boundary = infer_topic_boundary(result.get("state_before") or {}, result.get("understanding") or {})
-        result["topic_boundary"] = boundary.to_dict()
+        boundary_dict=deepcopy(result.get("canonical_topic_boundary") or result.get("topic_boundary") or {})
+        if boundary_dict:
+            boundary=type("CanonicalBoundary",(),boundary_dict)()
+        else:
+            boundary=infer_topic_boundary(result.get("state_before") or {}, result.get("understanding") or {})
+            boundary_dict=boundary.to_dict()
+        result["topic_boundary"] = boundary_dict
+        result["canonical_topic_boundary"] = deepcopy(boundary_dict)
         raw.setdefault("query", {}).setdefault("fields", {})["topic_relation"] = boundary.relation
         raw["query"]["fields"]["previous_evidence_role"] = boundary.previous_evidence_role
         answer_context = store.get("answer_context") or {}
@@ -130,7 +137,8 @@ def _answers(result, message, secrets_obj, s, budget, store):
         return result, skipped, skipped
     # Conceptual requests are handled by controlled synthesis before the
     # documented-only composer can publish a tangential negative answer.
-    if must_preempt_documented_answer(result.get("understanding") or {}):
+    conceptual_direct=bool((result.get("retrieval") or {}).get("generation_evidence"))
+    if must_preempt_documented_answer(result.get("understanding") or {}) and not conceptual_direct:
         result, procedural_trace = maybe_generate_procedural(
             result, message, _gateway(secrets_obj, s), budget, store,
             str(getattr(load_gateway_config(secrets_obj), "model", "") or ""),
@@ -258,4 +266,4 @@ def process_message(message, secrets_obj, s):
 
 def export_session(s):
     x = get_store(s)
-    return {"format": "agent_core_v2_clean_phase3b2_5", "session_id": x.get("session_id"), "gateway_budget": {"calls": int(s.get("llm_gateway_calls", 0)), "tokens": int(s.get("llm_gateway_tokens", 0))}, "messages": deepcopy(x["messages"]), "turns": deepcopy(x["turns"]), "state": x["memory"].to_dict(), "answer_context": deepcopy(x.get("answer_context") or {}), "budget": deepcopy(x["budget"]), "telemetry": snapshot(x["telemetry"]), "cache_metrics": deepcopy(x["cache_metrics"]), "errors": deepcopy(x["errors"]), "retrieval_enabled": True, "documented_answer_enabled": True, "procedural_answer_enabled": True, "production_changed": False}
+    return {"format": "agent_core_v2_clean_phase3b2_6", "session_id": x.get("session_id"), "gateway_budget": {"calls": int(s.get("llm_gateway_calls", 0)), "tokens": int(s.get("llm_gateway_tokens", 0))}, "messages": deepcopy(x["messages"]), "turns": deepcopy(x["turns"]), "state": x["memory"].to_dict(), "answer_context": deepcopy(x.get("answer_context") or {}), "budget": deepcopy(x["budget"]), "telemetry": snapshot(x["telemetry"]), "cache_metrics": deepcopy(x["cache_metrics"]), "errors": deepcopy(x["errors"]), "retrieval_enabled": True, "documented_answer_enabled": True, "procedural_answer_enabled": True, "production_changed": False}

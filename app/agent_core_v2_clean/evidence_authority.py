@@ -52,9 +52,10 @@ def canonical_evidence_decision(retrieval: dict, intent: str) -> EvidenceDecisio
         operation = quality
         intent_fit = combined
         coverage = min(1.0, len(selected_ids) / 3.0)
-    required = (obj >= .35 and intent_fit >= .35 and target_fit >= .25)
+    direct_target = target_fit >= .42 and bool(selected_ids)
+    required = direct_target or (obj >= .35 and intent_fit >= .35 and target_fit >= .25)
     if intent in {'procedural','requirements','troubleshooting'}:
-        required = required and operation >= .30
+        required = direct_target or (required and operation >= .30)
     strong = required and coverage >= .55 and bool(selected_ids)
     partial = bool(selected_ids) and target_fit >= .15 and (required or max(obj, operation, intent_fit) >= .30)
     if strong:

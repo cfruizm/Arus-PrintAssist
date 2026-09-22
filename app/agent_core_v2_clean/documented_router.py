@@ -12,6 +12,7 @@ from .response_plan_router import plan_turn,assessment_from_plan
 from .citation_finalizer import enforce_answer_contract
 from .state_scope import enrich_understanding
 from .documented_fallback import build_documented_fallback
+from .procedural_recovery_v2 import apply_structured_procedural_recovery
 
 def _valid_cached(item):
  a=(item or {}).get('answer') or {};return a.get('mode') in {'procedural_documented_answer','controlled_internal_knowledge','controlled_internal_knowledge_partial'}
@@ -22,9 +23,13 @@ def _get_cache(store,name,key):
 def _flags(validation,valid):
  documented=bool((validation or {}).get('documented_citations'));return {'documented_evidence_used':documented,'internal_knowledge_used':valid,'knowledge_mode':'documented_plus_internal' if documented and valid else 'internal_only' if valid else 'none'}
 def _boundary(result,store):
- before=result.get('state_before') or {};u=result.get('understanding') or {};b=infer_topic_boundary(before,u);result['topic_boundary']=b.to_dict()
- if b.relation=='new_topic':u['user_act']='new_request';u['topic_relation']='new_topic';sanitize_new_topic_state(store['memory'],u,before);result['understanding']=u;result['state_after']=deepcopy(store['memory'].to_dict())
- result['retrieval']=enforce_evidence_boundary(result.get('retrieval') or {},b.relation);return result
+ before=result.get('state_before') or {};u=result.get('understanding') or {}
+ data=deepcopy(result.get('canonical_topic_boundary') or result.get('topic_boundary') or {})
+ if not data:data=infer_topic_boundary(before,u).to_dict()
+ result['topic_boundary']=deepcopy(data);result['canonical_topic_boundary']=deepcopy(data)
+ relation=str(data.get('relation') or 'same_topic')
+ if relation=='new_topic':u['user_act']='new_request';u['topic_relation']='new_topic';sanitize_new_topic_state(store['memory'],u,before);result['understanding']=u;result['state_after']=deepcopy(store['memory'].to_dict())
+ result['retrieval']=enforce_evidence_boundary(result.get('retrieval') or {},relation);return result
 def _internal(result,message,gateway,budget,store,model,assessment):
  u=result.get('understanding') or {};r=result.get('retrieval') or {};r['_case_context']={'attempts':deepcopy(getattr(store['memory'].support_case,'attempts',[]) or [])};result['retrieval']=r;key=internal_fingerprint(message,u,r,assessment,model);cached=_get_cache(store,'internal_knowledge_cache',key)
  if cached:result['answer']=deepcopy(cached['answer']);result['internal_knowledge']={**deepcopy(cached['diagnostic']),'cache_hit':True};return result,{'skipped':True,'reason':'internal_knowledge_cache'}
@@ -57,6 +62,7 @@ def maybe_generate_procedural(result,message,gateway,budget,store,model=''):
  fallback=build_documented_fallback(r,reason=str((last or {}).get('error_code') or (last or {}).get('finish_reason') or 'provider_degraded'))
  if fallback:
   fallback,audit=enforce_answer_contract(fallback,result.get('canonical_response_plan'));result['answer']=fallback
+  result=apply_structured_procedural_recovery(result);fallback=result.get('answer') or fallback
   result['procedural_answer']={**diag,'provider_degraded':True,'deterministic_fallback_used':True,'citation_audit':audit}
   store['memory'].pending_goal.status='complete';result['state_after']=deepcopy(store['memory'].to_dict())
   store.setdefault('procedural_answer_cache',{})[key]={'answer':deepcopy(fallback),'diagnostic':deepcopy(result['procedural_answer'])}
