@@ -22,11 +22,9 @@ def _get_cache(store,name,key):
 def _flags(validation,valid):
  documented=bool((validation or {}).get('documented_citations'));return {'documented_evidence_used':documented,'internal_knowledge_used':valid,'knowledge_mode':'documented_plus_internal' if documented and valid else 'internal_only' if valid else 'none'}
 def _boundary(result,store):
- before=result.get('state_before') or {};u=result.get('understanding') or {};data=deepcopy(result.get('canonical_topic_boundary') or result.get('topic_boundary') or {})
- if not data:data=infer_topic_boundary(before,u).to_dict()
- result['topic_boundary']=deepcopy(data);result['canonical_topic_boundary']=deepcopy(data);relation=str(data.get('relation') or 'same_topic')
- if relation=='new_topic':u['user_act']='new_request';u['topic_relation']='new_topic';sanitize_new_topic_state(store['memory'],u,before);result['understanding']=u;result['state_after']=deepcopy(store['memory'].to_dict())
- result['retrieval']=enforce_evidence_boundary(result.get('retrieval') or {},relation);return result
+ before=result.get('state_before') or {};u=result.get('understanding') or {};b=infer_topic_boundary(before,u);result['topic_boundary']=b.to_dict()
+ if b.relation=='new_topic':u['user_act']='new_request';u['topic_relation']='new_topic';sanitize_new_topic_state(store['memory'],u,before);result['understanding']=u;result['state_after']=deepcopy(store['memory'].to_dict())
+ result['retrieval']=enforce_evidence_boundary(result.get('retrieval') or {},b.relation);return result
 def _internal(result,message,gateway,budget,store,model,assessment):
  u=result.get('understanding') or {};r=result.get('retrieval') or {};r['_case_context']={'attempts':deepcopy(getattr(store['memory'].support_case,'attempts',[]) or [])};result['retrieval']=r;key=internal_fingerprint(message,u,r,assessment,model);cached=_get_cache(store,'internal_knowledge_cache',key)
  if cached:result['answer']=deepcopy(cached['answer']);result['internal_knowledge']={**deepcopy(cached['diagnostic']),'cache_hit':True};return result,{'skipped':True,'reason':'internal_knowledge_cache'}

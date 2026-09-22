@@ -8,7 +8,7 @@ def _add(xs,v):
 def _record_user_facts(m,clean):
  for k,v in clean.items():m.fact_records[str(k)]={"key":str(k),"value":str(v),"origin":"user","status":"confirmed","turn":m.turn_number+1}
 def apply_understanding(m,u):
- if u.degraded:m.turn_number+=1;return
+ if u.degraded and not u.should_retrieve:m.turn_number+=1;return
  answering=u.user_act=="answer_to_question" and bool(m.last_assistant_question)
  if not answering and u.topic_relation in {"new_topic","independent"} and not (m.support_case.status in {"diagnosing","reopened"} and u.intent in {"troubleshooting","procedural","requirements","verification"}) and u.domain_relevance=="in_scope" and m.active_topic and u.current_goal!=m.active_topic:
   m.topic_history.append({"topic":m.active_topic,"goal":m.pending_goal.summary,"case":m.support_case.__dict__.copy()});m.pending_goal=PendingGoal();m.support_case=type(m.support_case)();m.fact_records={}

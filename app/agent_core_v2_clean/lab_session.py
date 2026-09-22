@@ -70,31 +70,24 @@ def _attach_retrieval(result, message, store):
             raw["cache_hit"] = True
             store["cache_metrics"]["retrieval_hits"] += 1
         else:
-            preferred=list((store.get("answer_context") or {}).get("source_identities") or []) if (result.get("topic_boundary") or {}).get("previous_evidence_role") in {"primary","eligible"} else []
-            raw = ReadOnlyRetrieval(k=6).search(query,current,preferred_sources=preferred)
+            raw = ReadOnlyRetrieval(k=6).search(query, current)
             raw["cache_hit"] = False
             store["retrieval_cache"][query.fingerprint] = deepcopy(raw)
         # Resolve the topic boundary before semantic fit. Understanding can label a
         # referential sub-question as new_topic even when it narrows the active goal.
-        boundary_dict=deepcopy(result.get("canonical_topic_boundary") or result.get("topic_boundary") or {})
-        if not boundary_dict:
-            boundary_dict=infer_topic_boundary(result.get("state_before") or {},result.get("understanding") or {}).to_dict()
-        result["topic_boundary"]=deepcopy(boundary_dict);result["canonical_topic_boundary"]=deepcopy(boundary_dict)
-        relation=str(boundary_dict.get("relation") or "same_topic")
-        previous_role=str(boundary_dict.get("previous_evidence_role") or "eligible")
-        raw.setdefault("query", {}).setdefault("fields", {})["topic_relation"] = relation
-        raw["query"]["fields"]["previous_evidence_role"] = previous_role
+        boundary = infer_topic_boundary(result.get("state_before") or {}, result.get("understanding") or {})
+        result["topic_boundary"] = boundary.to_dict()
+        raw.setdefault("query", {}).setdefault("fields", {})["topic_relation"] = boundary.relation
+        raw["query"]["fields"]["previous_evidence_role"] = boundary.previous_evidence_role
         answer_context = store.get("answer_context") or {}
-        if relation in {"new_topic", "same_topic_changed_scope"}:
+        if boundary.relation in {"new_topic", "same_topic_changed_scope"}:
             answer_context = {}
         retrieval = apply_semantic_fit(raw, answer_context)
         retrieval["_answer_context"] = deepcopy(answer_context)
-        retrieval["pre_retrieval_boundary"] = deepcopy(boundary_dict)
+        retrieval["pre_retrieval_boundary"] = boundary.to_dict()
     except Exception as exc:
-        retrieval={"enabled":True,"ok":False,"llm_called":False,"production_changed":False,"count":0,"evidence":[],"errors":[{"stage":"attach_retrieval","type":type(exc).__name__,"message":str(exc)}],"retrieval_health":{"status":"failed","stage":"attach_retrieval","exception_type":type(exc).__name__}}
-        result.setdefault("functional_events",[]).append({"type":"retrieval_pipeline_failure","severity":"critical","stage":"attach_retrieval","error_type":type(exc).__name__,"message":str(exc)})
+        retrieval = {"enabled": True, "ok": False, "llm_called": False, "production_changed": False, "count": 0, "evidence": [], "errors": [{"type": type(exc).__name__, "message": str(exc)}]}
     result["retrieval"] = retrieval
-    if retrieval.get("ok") is False and retrieval.get("errors"):result["decision"]={"action":"retrieval_failed","reason":"retrieval_pipeline_failure","ask_one_question":False,"question_target":None}
     result["answer"]["text"] = retrieval_summary(retrieval)
     result["answer"]["mode"] = "retrieval_diagnostic" if retrieval.get("ok") else "retrieval_error"
     return result
@@ -132,9 +125,6 @@ def _conceptual(result, message, secrets_obj, s, budget, store):
     return result, composer.last_provider_result
 
 def _answers(result, message, secrets_obj, s, budget, store):
-    if (result.get("decision") or {}).get("action")=="retrieval_failed":
-        result["answer"]={"text":"No pude consultar la base documental por un fallo interno de recuperación. No asumiré que la documentación es inexistente. El incidente quedó registrado.","mode":"retrieval_pipeline_failure","knowledge_used":False,"documented_evidence_used":False,"internal_knowledge_used":False,"knowledge_mode":"none"}
-        skipped={"skipped":True,"reason":"retrieval_pipeline_failure_is_terminal"};return result,skipped,skipped
     if (result.get("decision") or {}).get("action") not in {"defer_to_retrieval", "diagnose_with_retrieval"}:
         skipped = {"skipped": True, "reason": "decision_does_not_authorize_retrieval"}
         return result, skipped, skipped
@@ -268,4 +258,4 @@ def process_message(message, secrets_obj, s):
 
 def export_session(s):
     x = get_store(s)
-    return {"format": "agent_core_v2_clean_phase3b2_6_2", "session_id": x.get("session_id"), "gateway_budget": {"calls": int(s.get("llm_gateway_calls", 0)), "tokens": int(s.get("llm_gateway_tokens", 0))}, "messages": deepcopy(x["messages"]), "turns": deepcopy(x["turns"]), "state": x["memory"].to_dict(), "answer_context": deepcopy(x.get("answer_context") or {}), "budget": deepcopy(x["budget"]), "telemetry": snapshot(x["telemetry"]), "cache_metrics": deepcopy(x["cache_metrics"]), "errors": deepcopy(x["errors"]), "retrieval_enabled": True, "documented_answer_enabled": True, "procedural_answer_enabled": True, "production_changed": False}
+    return {"format": "agent_core_v2_clean_phase3b2_6_3", "session_id": x.get("session_id"), "gateway_budget": {"calls": int(s.get("llm_gateway_calls", 0)), "tokens": int(s.get("llm_gateway_tokens", 0))}, "messages": deepcopy(x["messages"]), "turns": deepcopy(x["turns"]), "state": x["memory"].to_dict(), "answer_context": deepcopy(x.get("answer_context") or {}), "budget": deepcopy(x["budget"]), "telemetry": snapshot(x["telemetry"]), "cache_metrics": deepcopy(x["cache_metrics"]), "errors": deepcopy(x["errors"]), "retrieval_enabled": True, "documented_answer_enabled": True, "procedural_answer_enabled": True, "production_changed": False}
