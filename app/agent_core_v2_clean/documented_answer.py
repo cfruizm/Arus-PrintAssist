@@ -1,9 +1,9 @@
 from __future__ import annotations
 import hashlib,json,re
 from .models import AgentResponse
-PROMPT_VERSION="documented_v5_compact_complete_requirements"
+PROMPT_VERSION="documented_v6_single_pass_requirements"
 SYSTEM="""Eres un colega de soporte empresarial de impresión. Responde únicamente con la evidencia documental suministrada. Usa el idioma del usuario. Sé útil, directo y natural. No inventes menús, pasos, requisitos ni funciones. Cada afirmación factual debe terminar con una cita [R#]. Si la evidencia solo permite una respuesta parcial, indícalo claramente. Para una consulta conceptual, explica qué es, para qué sirve y sus funciones documentadas. Para requisitos, sintetiza de forma completa las categorías respaldadas por toda la evidencia disponible. Resume cada categoría en una o dos viñetas y evita enumerar autoridades, endpoints o valores secundarios salvo que el usuario los solicite. Prioriza cobertura completa y concisa sobre detalle exhaustivo. En comparaciones, no recomiendes una alternativa sin cobertura equivalente de todas las opciones. No menciones procesos internos del laboratorio."""
-def evidence_pack(retrieval,max_items=8,max_chars=9000):
+def evidence_pack(retrieval,max_items=8,max_chars=6500):
  items=[];used=0;seen=set()
  for e in retrieval.get("evidence") or []:
   text=" ".join(str(e.get("text") or "").split())

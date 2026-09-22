@@ -141,6 +141,13 @@ def _answers(result, message, secrets_obj, s, budget, store):
         }
         return result, conceptual_trace, procedural_trace
     result, conceptual_trace = _conceptual(result, message, secrets_obj, s, budget, store)
+    intent = str((result.get("understanding") or {}).get("intent") or "").casefold()
+    answer_mode = str((result.get("answer") or {}).get("mode") or "")
+    documented_terminal = intent == "requirements" and answer_mode in {"documented_answer", "documented_answer_partial"}
+    if documented_terminal:
+        result.setdefault("functional_events", []).append({"type":"terminal_answer_arbitration","winner":"documented_requirements","suppressed":"procedural_composer","reason":"single_sufficient_answer"})
+        procedural_trace = {"skipped": True, "reason": "documented_requirements_is_terminal"}
+        return result, conceptual_trace, procedural_trace
     result, procedural_trace = maybe_generate_procedural(result, message, _gateway(secrets_obj, s), budget, store, str(getattr(load_gateway_config(secrets_obj), "model", "") or ""))
     return result, conceptual_trace, procedural_trace
 
@@ -251,4 +258,4 @@ def process_message(message, secrets_obj, s):
 
 def export_session(s):
     x = get_store(s)
-    return {"format": "agent_core_v2_clean_phase3b2_4", "session_id": x.get("session_id"), "gateway_budget": {"calls": int(s.get("llm_gateway_calls", 0)), "tokens": int(s.get("llm_gateway_tokens", 0))}, "messages": deepcopy(x["messages"]), "turns": deepcopy(x["turns"]), "state": x["memory"].to_dict(), "answer_context": deepcopy(x.get("answer_context") or {}), "budget": deepcopy(x["budget"]), "telemetry": snapshot(x["telemetry"]), "cache_metrics": deepcopy(x["cache_metrics"]), "errors": deepcopy(x["errors"]), "retrieval_enabled": True, "documented_answer_enabled": True, "procedural_answer_enabled": True, "production_changed": False}
+    return {"format": "agent_core_v2_clean_phase3b2_5", "session_id": x.get("session_id"), "gateway_budget": {"calls": int(s.get("llm_gateway_calls", 0)), "tokens": int(s.get("llm_gateway_tokens", 0))}, "messages": deepcopy(x["messages"]), "turns": deepcopy(x["turns"]), "state": x["memory"].to_dict(), "answer_context": deepcopy(x.get("answer_context") or {}), "budget": deepcopy(x["budget"]), "telemetry": snapshot(x["telemetry"]), "cache_metrics": deepcopy(x["cache_metrics"]), "errors": deepcopy(x["errors"]), "retrieval_enabled": True, "documented_answer_enabled": True, "procedural_answer_enabled": True, "production_changed": False}
