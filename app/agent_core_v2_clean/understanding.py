@@ -2,12 +2,13 @@ import json
 from .contracts import UNDERSTANDING_SCHEMA
 from .models import TurnUnderstanding
 from .memory import compact_context,normalize_goal_updates
+from .model_profile import profile_for,is_quota_error
 SYSTEM="""Semantic understanding for an enterprise printing-support assistant. Interpret the current message using memory and the last assistant question. The current_goal must express the current request, not copy an earlier operation. Distinguish conceptual, procedural, requirements, troubleshooting, social and capabilities. Use capabilities/request_capabilities for questions about what the assistant can do. Use social/acknowledgement for thanks. These conversation acts never require retrieval. Use requirements for prerequisites, compatibility, constraints or conditions; use procedural for execution steps. A changed operation about the same subject refines the goal and remains same_topic. request_elaboration is valid only when the message depends on an active goal or last assistant question. answer_to_question supplies requested information. Put symptoms and diagnostic facts in case_updates. Clarify only when one missing fact is indispensable. A clear conceptual request never needs clarification. Return one complete JSON object matching the schema. No fields outside the schema. Keep reasoning_summary under 20 words."""
 REQUIRED={"user_act","intent","topic_relation","domain_relevance","current_goal","goal_complete","goal_updates","case_updates","needs_clarification","clarification_target","should_retrieve","confidence","reasoning_summary"}
 ALLOWED=set(REQUIRED)
 ALIASES={"clarification_needed":"needs_clarification","clarification_question":"clarification_target"}
 class ConversationUnderstanding:
- def __init__(self,gateway,max_tokens=300):self.gateway=gateway;self.max_tokens=max(220,min(420,int(max_tokens)));self.last_provider_result={};self.contract_valid=False;self.validation_error=None;self.normalization={"removed_goal_update_keys":[]}
+ def __init__(self,gateway,max_tokens=300,model_name=""):self.gateway=gateway;self.profile=profile_for(model_name);self.max_tokens=max(220,min(420,int(max_tokens)));self.last_provider_result={};self.contract_valid=False;self.validation_error=None;self.normalization={"removed_goal_update_keys":[]}
  def _degraded(self,memory,reason):return TurnUnderstanding("follow_up",memory.pending_goal.intent or "unknown","same_topic","uncertain",memory.pending_goal.summary or memory.active_topic or "",False,{},[],False,None,False,0.,reason,True)
  def _degraded_current(self,message,reason):
   text=" ".join(str(message or "").split());low=text.casefold()
@@ -54,12 +55,15 @@ class ConversationUnderstanding:
   self.normalization.setdefault("structural_corrections",[]);self.normalization["structural_corrections"].extend(corrections);return x
  def interpret(self,message,memory):
   from app.llm_gateway.models import LLMRequest
-  req=lambda payload,purpose:self.gateway.complete(LLMRequest([{"role":"system","content":SYSTEM},{"role":"user","content":json.dumps(payload,ensure_ascii=False,separators=(",",":"))}],purpose,self.max_tokens,0.,UNDERSTANDING_SCHEMA))
+  req=lambda payload,purpose:self.gateway.complete(LLMRequest([{"role":"system","content":SYSTEM + (" Return raw JSON text only; do not use Markdown fences." if self.profile.understanding_mode=="text_json" else "")},{"role":"user","content":json.dumps(payload,ensure_ascii=False,separators=(",",":"))}],purpose,self.max_tokens,0.,None if self.profile.understanding_mode=="text_json" else UNDERSTANDING_SCHEMA))
   r=req({"message":message,"context":compact_context(memory)},"agent_core_v2_clean_understanding");self.last_provider_result=r.to_dict();self.contract_valid=False;self.validation_error=None;self.normalization={"removed_goal_update_keys":[]}
-  if not r.ok:self.validation_error="provider_error:"+str(r.error_code or "unknown");return self._degraded_current(message,self.validation_error)
+  if not r.ok:
+   self.validation_error="provider_error:"+str(r.error_code or "unknown");self.normalization["model_profile"]=self.profile.to_dict();self.normalization["quota_limited"]=is_quota_error(r);return self._degraded_current(message,self.validation_error)
   try:x=self._parse(r.text);self.contract_valid=True;return self._normalize(x,memory)
   except Exception as exc:
-   first_error=str(exc);retry=req({"message":message,"context":compact_context(memory),"invalid_output":str(r.text or "")[:4000],"validation_error":first_error,"instruction":"Return only a complete JSON object matching the schema without extra fields."},"agent_core_v2_clean_understanding_repair")
+   first_error=str(exc)
+   if not self.profile.repair_once or is_quota_error(r):self.validation_error=first_error;self.normalization["model_profile"]=self.profile.to_dict();return self._degraded_current(message,"invalid_understanding:"+first_error)
+   retry=req({"message":message,"context":compact_context(memory),"invalid_output":str(r.text or "")[:4000],"validation_error":first_error,"instruction":"Return only a complete JSON object matching the schema without extra fields."},"agent_core_v2_clean_understanding_repair")
    self.last_provider_result={"initial":r.to_dict(),"repair":retry.to_dict(),"repair_attempted":True};self.normalization={"removed_goal_update_keys":[],"repair_attempted":True,"repair_succeeded":False}
    if retry.ok:
     try:x=self._parse(retry.text);self.contract_valid=True;self.validation_error=None;self.normalization["repair_attempted"]=True;self.normalization["repair_succeeded"]=True;return self._normalize(x,memory)
