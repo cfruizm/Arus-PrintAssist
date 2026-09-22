@@ -10,6 +10,14 @@ def _norm(value):
     return unicodedata.normalize("NFKD", str(value or "")).encode("ascii", "ignore").decode("ascii").casefold()
 
 
+def _safe_text(value):
+    if value is None:return ""
+    if isinstance(value,str):return value
+    if isinstance(value,(int,float,bool)):return str(value)
+    if isinstance(value,dict):return " ".join(_safe_text(v) for v in value.values() if _safe_text(v))
+    if isinstance(value,(list,tuple,set)):return " ".join(_safe_text(v) for v in value if _safe_text(v))
+    return str(value)
+
 def _words(value):
     return set(re.findall(r"[a-z0-9][a-z0-9_.-]+", _norm(value)))
 
@@ -17,7 +25,7 @@ def _words(value):
 def _requested_scope(message, understanding):
     understanding = understanding or {}
     details = understanding.get("goal_updates") or {}
-    text = " ".join((str(message or ""), str(understanding.get("current_goal") or ""), " ".join(map(str, details.values()))))
+    text = " ".join((str(message or ""), str(understanding.get("current_goal") or ""), " ".join(_safe_text(v) for v in details.values())))
     words = _words(text)
     explicit = set()
     for key in ("product", "platform", "vendor", "manufacturer", "model", "operating_system"):
