@@ -16,6 +16,7 @@ from .conceptual_route import must_preempt_documented_answer
 from .semantic_fit import apply_semantic_fit, capture_answer_context
 from .response_reconciler import reconcile
 from .topic_boundary import infer_topic_boundary
+from .operational_coherence import normalize_generation_flags
 
 KEY = "agent_core_v2_clean_store"
 
@@ -204,6 +205,7 @@ def process_message(message, secrets_obj, s):
         traces = _apply_answer_traces(result, conceptual, procedural, store)
         result["turn_metrics"] = _combined_turn_metrics([], traces)
         result = reconcile(result, store["memory"])
+        result = normalize_generation_flags(result)
         _finalize_answer_context(result, store)
         result["session_metrics_after_turn"] = snapshot(store["telemetry"])
         text = result["answer"]["text"]
@@ -228,6 +230,7 @@ def process_message(message, secrets_obj, s):
         base_traces = [x for x in (base.get("understanding"), base.get("response")) if x and not x.get("skipped")]
         result["turn_metrics"] = _combined_turn_metrics(base_traces, traces)
         result = reconcile(result, store["memory"])
+        result = normalize_generation_flags(result)
         _finalize_answer_context(result, store)
         result["session_metrics_after_turn"] = snapshot(store["telemetry"])
         result["execution"] = {**execution, "cache_hit": False}
@@ -248,4 +251,4 @@ def process_message(message, secrets_obj, s):
 
 def export_session(s):
     x = get_store(s)
-    return {"format": "agent_core_v2_clean_phase3b2_2", "session_id": x.get("session_id"), "gateway_budget": {"calls": int(s.get("llm_gateway_calls", 0)), "tokens": int(s.get("llm_gateway_tokens", 0))}, "messages": deepcopy(x["messages"]), "turns": deepcopy(x["turns"]), "state": x["memory"].to_dict(), "answer_context": deepcopy(x.get("answer_context") or {}), "budget": deepcopy(x["budget"]), "telemetry": snapshot(x["telemetry"]), "cache_metrics": deepcopy(x["cache_metrics"]), "errors": deepcopy(x["errors"]), "retrieval_enabled": True, "documented_answer_enabled": True, "procedural_answer_enabled": True, "production_changed": False}
+    return {"format": "agent_core_v2_clean_phase3b2_3", "session_id": x.get("session_id"), "gateway_budget": {"calls": int(s.get("llm_gateway_calls", 0)), "tokens": int(s.get("llm_gateway_tokens", 0))}, "messages": deepcopy(x["messages"]), "turns": deepcopy(x["turns"]), "state": x["memory"].to_dict(), "answer_context": deepcopy(x.get("answer_context") or {}), "budget": deepcopy(x["budget"]), "telemetry": snapshot(x["telemetry"]), "cache_metrics": deepcopy(x["cache_metrics"]), "errors": deepcopy(x["errors"]), "retrieval_enabled": True, "documented_answer_enabled": True, "procedural_answer_enabled": True, "production_changed": False}

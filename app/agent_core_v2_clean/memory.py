@@ -26,10 +26,9 @@ def apply_understanding(m,u):
    if raw:case_updates.append({"type":"observation","value":"Pregunta: "+m.last_assistant_question+" Respuesta: "+raw})
   if u.intent=="troubleshooting":
    present={str(x.get("type") or "") for x in case_updates}
-   aliases={"symptom":"symptom","symptoms":"symptom","observation":"observation","observations":"observation","affected_scope":"affected_scope","attempted_action":"attempted_action","attempt":"attempted_action","attempts":"attempted_action","attempt_result":"attempt_result"}
-   for source,key in aliases.items():
-    value=str(clean.get(source) or "").strip()
-    if value and key not in present:case_updates.append({"type":key,"value":value});present.add(key)
+   for key in ("symptom","observation","affected_scope","attempted_action","attempt_result"):
+    value=str(clean.get(key) or "").strip()
+    if value and key not in present:case_updates.append({"type":key,"value":value})
   for f in case_updates:
    k,v=str(f.get("type") or ""),str(f.get("value") or "").strip()
    if k in {"symptom","reported_failure","new_case"}:_add(m.support_case.symptoms,v);m.support_case.status="diagnosing"
