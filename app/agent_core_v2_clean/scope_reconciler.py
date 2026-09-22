@@ -10,6 +10,7 @@ _GENERIC = {
     "procedimiento", "documentado", "metodo", "metodos", "validar", "antes", "iniciar",
     "que", "debo", "para", "por", "del", "una", "uno", "the", "only", "method",
     "procedure", "before", "start", "update", "actualizar", "actualizacion",
+    "impresion", "impresora", "printing", "printer", "obtener", "describir", "listar", "instalar", "configurar", "asignar", "documentacion", "informacion",
 }
 _REFERENTIAL_ACTS = {
     "request_elaboration", "follow_up", "answer", "answer_to_question", "continue",
@@ -59,7 +60,7 @@ def _semantic_continuation(understanding, memory):
     ratio = len(shared) / max(1, min(len(old), len(new)))
     # Two meaningful shared terms, or one highly discriminative shared term in a referential turn.
     referential = str(getattr(understanding, "user_act", "") or "").casefold() in _REFERENTIAL_ACTS
-    same_family = len(shared) >= 2 or (referential and ratio >= 0.20 and len(shared) >= 1)
+    same_family = len(shared) >= 2 or (referential and ratio >= 0.34 and len(shared) >= 1)
     return same_family, round(ratio, 3)
 
 

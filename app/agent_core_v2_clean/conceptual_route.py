@@ -218,14 +218,14 @@ def conceptual_assessment(retrieval: dict) -> dict:
         "score": 0.0,
         "reasons": ["conceptual_answer_requires_controlled_synthesis", *([] if documented else ["no_direct_conceptual_evidence"])],
         "usable_chunks": len(evidence),
-        "generation_allowed": documented,
-        "internal_knowledge_candidate": not documented,
+        "generation_allowed": False,
+        "internal_knowledge_candidate": True,
         "canonical_decision": {
             "status": "partial" if documented else "insufficient",
-            "generation_mode": "documented" if documented else "internal_only",
-            "reason": "conceptual_direct_partial" if documented else "conceptual_controlled_synthesis",
+            "generation_mode": "documented_plus_internal" if documented else "internal_only",
+            "reason": "conceptual_controlled_synthesis",
             "selected_ids": [x.get("id") for x in evidence],
-            "accepted": documented,
+            "accepted": False,
         },
     }
 
