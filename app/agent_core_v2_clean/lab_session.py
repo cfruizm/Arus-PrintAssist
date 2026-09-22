@@ -22,12 +22,8 @@ from .model_profile import profile_for,is_quota_error,resolve_model_name
 
 KEY = "agent_core_v2_clean_store"
 def _conversation_preflight(message):
- text=" ".join(str(message or "").split()).strip();low=text.casefold().strip(" .!?¿¡")
- if low in {"hola","buenos dias","buenas tardes","buenas noches","hello","hi"}:return {"text":"Hola. ¿Qué necesitas revisar sobre el servicio de impresión?","mode":"social"}
- if low in {"gracias","muchas gracias","thanks","thank you"}:return {"text":"Con gusto. Si necesitas revisar otro caso de impresión, aquí estoy.","mode":"social"}
- if ("pued" in low and ("hacer" in low or "ayud" in low)) or ("can you" in low and ("do" in low or "help" in low)) or low=="capacidades":return {"text":"Puedo explicar conceptos y productos de impresión, consultar procedimientos y requisitos documentados, orientar diagnósticos, comparar alternativas y preparar información para escalamiento.","mode":"capabilities"}
+ # No lexical routing: social, acknowledgement and capability acts are decided by understanding.
  return None
-
 
 def _safe_text(value):
     if value is None:
@@ -297,4 +293,4 @@ def process_message(message, secrets_obj, s):
 
 def export_session(s):
     x = get_store(s)
-    return {"format": "agent_core_v2_clean_phase3b4_5", "session_id": x.get("session_id"), "gateway_budget": {"calls": int(s.get("llm_gateway_calls", 0)), "tokens": int(s.get("llm_gateway_tokens", 0))}, "messages": deepcopy(x["messages"]), "turns": deepcopy(x["turns"]), "state": x["memory"].to_dict(), "answer_context": deepcopy(x.get("answer_context") or {}), "budget": deepcopy(x["budget"]), "telemetry": snapshot(x["telemetry"]), "cache_metrics": deepcopy(x["cache_metrics"]), "errors": deepcopy(x["errors"]), "retrieval_enabled": True, "documented_answer_enabled": True, "procedural_answer_enabled": True, "production_changed": False}
+    return {"format": "agent_core_v2_clean_phase3b4_6", "session_id": x.get("session_id"), "gateway_budget": {"calls": int(s.get("llm_gateway_calls", 0)), "tokens": int(s.get("llm_gateway_tokens", 0))}, "messages": deepcopy(x["messages"]), "turns": deepcopy(x["turns"]), "state": x["memory"].to_dict(), "answer_context": deepcopy(x.get("answer_context") or {}), "budget": deepcopy(x["budget"]), "telemetry": snapshot(x["telemetry"]), "cache_metrics": deepcopy(x["cache_metrics"]), "errors": deepcopy(x["errors"]), "retrieval_enabled": True, "documented_answer_enabled": True, "procedural_answer_enabled": True, "production_changed": False}

@@ -28,6 +28,13 @@ class ConversationUnderstanding:
    facts=[x for x in facts if x];raw["goal_updates"]={"subject":facts[0]} if facts else {}
    if facts and not raw.get("current_goal"):raw["current_goal"]=facts[0]
    aliases["goal_updates:list"]="goal_updates:dict"
+  conversation_act=str(raw.get("conversation_act") or raw.get("user_act") or "").casefold()
+  if conversation_act:
+   raw.setdefault("user_act",conversation_act)
+   if conversation_act in {"request_capabilities","capabilities","meta"}:
+    raw.setdefault("intent","capabilities");raw.setdefault("topic_relation","independent");raw.setdefault("domain_relevance","in_scope");raw.setdefault("current_goal","Explain assistant capabilities");raw.setdefault("goal_complete",True);raw.setdefault("should_retrieve",False)
+   elif conversation_act in {"social","acknowledgement"}:
+    raw.setdefault("intent","social");raw.setdefault("topic_relation","independent");raw.setdefault("domain_relevance","in_scope");raw.setdefault("current_goal","Conversation control");raw.setdefault("goal_complete",True);raw.setdefault("should_retrieve",False)
   probe=" ".join((str(raw.get("current_goal") or ""),str(raw.get("goal_updates") or ""))).casefold()
   raw.setdefault("user_act","new_request");raw.setdefault("intent","conceptual" if any(x in probe for x in ("document","analiz","informacion","información")) else "procedural")
   raw.setdefault("topic_relation","new_topic");raw.setdefault("domain_relevance","in_scope");raw.setdefault("current_goal",probe.strip() or "Atender la solicitud actual")
