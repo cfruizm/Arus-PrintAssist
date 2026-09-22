@@ -21,9 +21,10 @@ def evidence_pack(retrieval,max_items=8,max_chars=9000):
   items.append(item);used+=size
   if len(items)>=max_items:break
  return items
-def _section_numbers(text):return [int(x) for x in re.findall(r"(?m)^\s*(?:#{1,6}\s*)?(?:\*\*)?(\d+)\s*[.)]",str(text or ""))]
-def validate(text,ids,finish_reason=None,minimum_sections=2):
- cited=set(re.findall(r"\[(R\d+)\]",str(text or "")));sections=_section_numbers(text);ordered=sections==sorted(set(sections));complete=str(finish_reason or "").casefold() not in {"length","max_tokens"};valid=bool(str(text or "").strip()) and len(sections)>=max(1,int(minimum_sections)) and ordered and bool(cited) and cited.issubset(set(ids)) and complete
+def _section_numbers(text):
+ return [int(x) for x in re.findall(r"(?m)^\s*(?:#{1,6}\s*)?\*\*(\d+)\s*[.)]\s+[^*\n]+\*\*\s*$",str(text or ""))]
+def validate(text,ids,finish_reason=None,minimum_sections=1):
+ cited=set(re.findall(r"\[(R\d+)\]",str(text or "")));sections=_section_numbers(text);ordered=not sections or sections==list(range(sections[0],sections[0]+len(sections)));complete=str(finish_reason or "").casefold() in {"","none","stop","completed"};valid=bool(str(text or "").strip()) and bool(sections) and ordered and bool(cited) and cited.issubset(set(ids)) and complete
  return valid,sorted(cited),{"sections":sections,"ordered":ordered,"finish_complete":complete,"cited_ids":sorted(cited)}
 def readable_sources(retrieval,cited):
  by={str(e.get("id")):e for e in retrieval.get("evidence") or []};return [f"[{rid}] {by[rid].get('title') or 'Fuente sin título'}, página {by[rid].get('page') or 'N/D'}" for rid in cited if rid in by]
@@ -46,9 +47,9 @@ class ProceduralAnswerComposer:
   message_text=str(fields.get("current_message") or message or "").casefold()
   broad_request=bool(re.search(r"\b(todos?|todas?|completo|completa|completos|completas|entero|entera|principio a fin|paso a paso|full|complete|all steps|entire)\b",message_text))
   focused_followup=relation in {"same_topic","same_topic_refinement"} and act in {"follow_up","request_elaboration","answer_to_question"} and not broad_request and (relation=="same_topic_refinement" or bool(details.get("detail")) or understanding.get("intent") in {"requirements","verification","compatibility"})
-  ok,cited,self.validation=validate(text,[str(x["id"]) for x in evidence],r.finish_reason,1 if focused_followup else 2)
+  ok,cited,self.validation=validate(text,[str(x["id"]) for x in evidence],r.finish_reason,1)
   self.validation["focused_followup"]=focused_followup
-  self.validation["minimum_sections"]=1 if focused_followup else 2
+  self.validation["minimum_sections"]=1
   self.validation["broad_request"]=broad_request
   if not ok:return AgentResponse("La estructura o las citas no superaron la validación. No mostraré instrucciones sin respaldo.","procedural_citation_guard",False,r.provider,r.model,r.usage,r.finish_reason)
   sources=readable_sources(retrieval,cited)
