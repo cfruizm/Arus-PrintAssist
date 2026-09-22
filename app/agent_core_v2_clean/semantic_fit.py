@@ -2,6 +2,13 @@ from __future__ import annotations
 import copy, hashlib, re, unicodedata
 
 VERSION = "semantic_evidence_fit_v7_primary_evidence_entailment"
+def _safe_text(value):
+ if value is None:return ""
+ if isinstance(value,str):return value
+ if isinstance(value,(int,float,bool)):return str(value)
+ if isinstance(value,(list,tuple,set)):return " ".join(_safe_text(x) for x in value if _safe_text(x))
+ if isinstance(value,dict):return " ".join(f"{_safe_text(k)} {_safe_text(v)}" for k,v in value.items() if _safe_text(v))
+ return str(value)
 STOP = {"para","como","que","del","las","los","una","uno","con","por","sin","antes","debo","debe","deben","en","el","la","y","o","how","what","the","and","for","from","with","this","that","before","after","into","using","is","are","to","configure","configurar","explicar","realizar","aplicar","revisar","necesito","quiero"}
 # Canonical concepts are language bridges, not product or benchmark rules.
 CONCEPTS = {
@@ -38,12 +45,12 @@ def _group_key(item):return _identity(item) or str(item.get("title") or "")
 
 def evaluate_item(item,query_text,fields=None,answer_context=None):
  fields=fields or {};answer_context=answer_context or {};details=fields.get("details") or {}
- stable=" ".join(str(x or "") for x in (query_text,fields.get("goal"),fields.get("contextual_operation"),fields.get("current_message")," ".join(str(v) for v in details.values())))
+ stable=" ".join(str(x or "") for x in (query_text,fields.get("goal"),fields.get("contextual_operation"),fields.get("current_message")," ".join(_safe_text(v) for v in details.values())))
  q=_terms(stable);d=_document_terms(item);title_terms=_terms(item.get("title"));overlap=q&d;title_overlap=q&title_terms
  concept_q={x for x in q if x.startswith("concept:")};concept_match=concept_q&d
  coverage=len(overlap)/max(1,len(q));title_coverage=len(title_overlap)/max(1,len(q));concept_coverage=len(concept_match)/max(1,len(concept_q)) if concept_q else 0.0
  previous_ids=set(answer_context.get("source_identities") or []);follow=(fields.get("topic_relation") in {"same_topic","same_topic_refinement"} and fields.get("user_act") in {"follow_up","answer_to_question","request_elaboration","attempt_result","reported_failure","answer","confirmation"});continuity=0.20 if follow and _identity(item) in previous_ids else 0.0
- specific=_specificity(item);confirmed=" ".join(str(v).casefold() for v in details.values());product= specific["product"]
+ specific=_specificity(item);confirmed=" ".join(_safe_text(v).casefold() for v in details.values());product= specific["product"]
  product_bonus=0.12 if product and any(part and part in confirmed for part in re.split(r"[_\s-]+",product)) else 0.0
  # Penalize scope-heavy titles only when their distinctive terms are neither in the query nor in the previous answer context.
  prior_terms=_terms(answer_context.get("main_text_excerpt") or "");distinct={x for x in specific["title_terms"] if not x.startswith("concept:")} - {x for x in q if not x.startswith("concept:")} - {x for x in prior_terms if not x.startswith("concept:")}

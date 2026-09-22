@@ -7,8 +7,8 @@ _TOKEN_RE = re.compile(r"[\wáéíóúüñ]+", re.I)
 STRUCTURAL = {"operation", "subject", "platform", "product", "component", "device", "scope"}
 _OPERATION_GENERIC = {"explicar", "procedimiento", "realizar", "consultar", "actualizar", "configurar", "impresora", "impresion", "usuario", "como", "para", "del", "una", "the", "how", "printer", "user"}
 MATERIAL_SCOPE = {"platform", "product", "component", "device", "scope"}
-_REFERENTIAL_ACTS = {"request_elaboration", "follow_up", "answer_to_question", "answer", "confirmation", "correction", "continue"}
-_REFINEMENT_MARKERS = {"paso", "parte", "opcion", "campo", "despues", "antes", "siguiente", "donde", "cual", "cuando", "como", "porque", "eso", "esa", "ese", "esto", "esta", "su", "sus", "their", "its", "that", "this", "it", "step", "option", "field", "next", "after", "before", "where", "which"}
+_REFERENTIAL_ACTS = {"request_elaboration", "answer", "confirmation", "correction", "continue"}
+_REFINEMENT_MARKERS = {"paso", "parte", "opcion", "campo", "despues", "antes", "siguiente", "donde", "cual", "cuando", "como", "porque", "eso", "esa", "ese", "esto", "esta", "that", "this", "it", "step", "option", "field", "next", "after", "before", "where", "which"}
 
 @dataclass(frozen=True)
 class TopicBoundary:
@@ -52,8 +52,8 @@ def infer_topic_boundary(previous_state: dict, understanding: dict) -> TopicBoun
     now = (understanding or {}).get("goal_updates") or {}
     old_goal = ((previous_state or {}).get("pending_goal") or {}).get("summary") or ""
     new_goal = (understanding or {}).get("current_goal") or ""
-    old = _tokens(old_goal) | _tokens(" ".join(str(before.get(k, "")) for k in STRUCTURAL))
-    new = _tokens(new_goal) | _tokens(" ".join(str(now.get(k, "")) for k in STRUCTURAL))
+    old = _tokens(old_goal) | _tokens(" ".join(str(before.get(k, "") if not isinstance(before.get(k),dict) else " ".join(map(str,before.get(k).values()))) for k in STRUCTURAL))
+    new = _tokens(new_goal) | _tokens(" ".join(str(now.get(k, "") if not isinstance(now.get(k),dict) else " ".join(map(str,now.get(k).values()))) for k in STRUCTURAL))
     shared = len(old & new) / max(1, len(old | new))
     changed = sorted(k for k in STRUCTURAL if before.get(k) and now.get(k) and _norm(before[k]) != _norm(now[k]))
     introduced = sorted(k for k in MATERIAL_SCOPE if not before.get(k) and now.get(k))

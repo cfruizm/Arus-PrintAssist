@@ -40,7 +40,7 @@ def canonical_evidence_decision(retrieval: dict, intent: str) -> EvidenceDecisio
         coverage=float(verdict.get("coverage",0.0) or 0.0)
         accepted=bool(verdict.get("accepted"))
         status=str(verdict.get("status") or ("sufficient" if accepted else "insufficient"))
-        mode="documented" if status=="sufficient" else "documented_plus_internal" if status=="partial" else "internal_only"
+        mode="documented" if status=="sufficient" else "documented_partial" if status in {"partial","partial_but_answerable"} else "internal_only"
         return EvidenceDecision(status,mode,str(verdict.get("reason") or "unified_evidence_verdict"),selected,coverage,coverage,coverage,coverage,coverage,accepted)
     sf = retrieval.get('semantic_fit') or {}
     selected = retrieval.get('generation_evidence') or retrieval.get('evidence') or []

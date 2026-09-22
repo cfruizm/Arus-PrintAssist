@@ -29,17 +29,15 @@ class DocumentedAnswerComposer:
   from app.llm_gateway.models import LLMRequest
   payload={"question":message,"intent":understanding.get("intent"),"goal":understanding.get("current_goal"),"evidence":evidence}
   intent=str(understanding.get("intent") or "").casefold()
-  requested_count_match=re.search(r"\b(?:en\s+)?(\d+|cinco|five)\s+(?:puntos|points|pasos|steps)\b",str(message or "").casefold())
-  requested_count=5 if requested_count_match and requested_count_match.group(1) in {"cinco","five"} else int(requested_count_match.group(1)) if requested_count_match else None
+  count_match=re.search(r"\b(?:en\s+)?(\d+|cinco|five)\s+(?:puntos|points|pasos|steps)\b",str(message or "").casefold())
+  requested_count=(5 if count_match and count_match.group(1) in {"cinco","five"} else int(count_match.group(1)) if count_match else None)
   limit=500 if intent=="requirements" else 620 if intent=="procedural" else 360
-  if requested_count: limit=max(limit,min(680,220+requested_count*70))
+  if requested_count:limit=max(limit,min(700,220+requested_count*75))
   r=self.gateway.complete(LLMRequest([{"role":"system","content":SYSTEM},{"role":"user","content":json.dumps(payload,ensure_ascii=False,separators=(",",":"))}],"agent_core_v2_clean_documented_answer",limit,0.,None));self.last_provider_result=r.to_dict()
   if not r.ok:return AgentResponse("Encontré documentación, pero no pude redactar la respuesta en este turno. Las fuentes recuperadas se conservaron.","documented_provider_degraded",False)
   text=str(r.text or "").strip();valid,cited=validate_citations(text,[str(x["id"]) for x in evidence]);truncated=str(r.finish_reason or "").casefold() in {"length","max_tokens"};pages={str(x.get("page") or "") for x in evidence if x.get("page")};coverage=understanding.get("intent")!="requirements" or len(pages)<2 or len(cited)>=2;valid=bool(valid and coverage)
-  list_items=len(re.findall(r"(?m)^\s*(?:[-*]|\d+[.)])\s+",text))
-  count_valid=not requested_count or list_items>=requested_count
-  valid=bool(valid and count_valid)
-  self.validation={"citations_valid":valid,"cited_ids":cited,"finish_reason":r.finish_reason,"truncated":truncated,"published_partial":bool(valid and truncated),"requirements_coverage_valid":coverage,"requested_count":requested_count,"observed_list_items":list_items,"requested_count_valid":count_valid,"evidence_pages":sorted(pages)}
+  items=len(re.findall(r"(?m)^\s*(?:[-*]|\d+[.)])\s+",text));count_valid=not requested_count or items>=requested_count;valid=bool(valid and count_valid)
+  self.validation={"citations_valid":valid,"cited_ids":cited,"finish_reason":r.finish_reason,"truncated":truncated,"published_partial":bool(valid and truncated),"requirements_coverage_valid":coverage,"requested_count":requested_count,"observed_list_items":items,"requested_count_valid":count_valid,"evidence_pages":sorted(pages)}
   if not valid:return AgentResponse("Encontré documentación, pero la respuesta generada no cubrió suficientemente la evidencia o no superó la validación de citas.","documented_citation_guard",False,r.provider,r.model,r.usage,r.finish_reason)
   if truncated:text+="\n\n> Respuesta parcial: el proveedor alcanzó el límite de salida. El contenido documentado disponible se conserva; puedes pedirme continuar."
   sources=readable_sources(retrieval,cited)

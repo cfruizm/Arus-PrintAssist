@@ -21,3 +21,7 @@ def turn_metrics(understanding,response,understanding_contract_valid=None):
  u1=(understanding or {}).get("usage") or {};u2=(response or {}).get("usage") or {};pf=int(bool(understanding) and not understanding.get("ok"))+int(bool(response) and not response.get("ok"));cf=int(understanding_contract_valid is False)
  return {"calls":int(bool(understanding) and not understanding.get("skipped"))+int(bool(response) and not response.get("skipped")),"prompt_tokens":int(u1.get("prompt_tokens") or 0)+int(u2.get("prompt_tokens") or 0),"completion_tokens":int(u1.get("completion_tokens") or 0)+int(u2.get("completion_tokens") or 0),"total_tokens":int(u1.get("total_tokens") or 0)+int(u2.get("total_tokens") or 0),"provider_failed_calls":pf,"contract_failed_calls":cf,"functional_failed_calls":cf}
 def snapshot(t):return deepcopy(t)
+
+def add_functional_failure(t, error_type="runtime_error"):
+ t["functional_failed_calls"]=int(t.get("functional_failed_calls") or 0)+1
+ b=t.setdefault("functional_errors",{});b[error_type]=int(b.get(error_type) or 0)+1

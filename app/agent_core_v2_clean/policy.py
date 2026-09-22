@@ -2,7 +2,7 @@ from .models import AgentDecision
 class ConversationPolicy:
  def decide(self,u,m):
   intent=str(u.intent or "").casefold();act=str(u.user_act or "").casefold()
-  if intent in {"social","meta","capabilities"} or act in {"social","request_capabilities"}:return AgentDecision("answer","conversational_turn_no_retrieval")
+  if intent in {"social","meta","capabilities"} or act in {"social","request_capabilities","acknowledgement"}:return AgentDecision("answer","conversational_turn_no_retrieval")
   if u.needs_clarification and u.clarification_target:return AgentDecision("ask_one_question","material_missing_detail",True,u.clarification_target)
   if intent=="cancel" or act=="cancel":return AgentDecision("cancel","explicit_cancel")
   if intent=="escalation" or act=="escalation":return AgentDecision("offer_escalation","explicit_escalation")

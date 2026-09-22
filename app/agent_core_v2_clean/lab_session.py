@@ -7,7 +7,7 @@ from .understanding import ConversationUnderstanding
 from .policy import ConversationPolicy
 from .response import NaturalResponseComposer
 from .agent import CleanConversationalAgent
-from .telemetry import empty, normalize, add_result, snapshot
+from .telemetry import empty, normalize, add_result, snapshot, add_functional_failure
 from .budget import BudgetPolicy
 from .retrieval import RetrievalQueryBuilder, ReadOnlyRetrieval, retrieval_summary
 from .documented_answer import DocumentedAnswerComposer, answer_fingerprint, PROMPT_VERSION
@@ -21,17 +21,11 @@ from .operational_coherence import normalize_generation_flags
 
 KEY = "agent_core_v2_clean_store"
 def _conversation_preflight(message):
-    text=" ".join(str(message or "").split()).strip()
-    low=text.casefold().strip(" .!?¿¡")
-    if low in {"hola","buenos dias","buenas tardes","buenas noches","hello","hi"}:
-        return {"text":"Hola. ¿Qué necesitas revisar sobre el servicio de impresión?","mode":"social","knowledge_used":False}
-    if low in {"gracias","muchas gracias","thanks","thank you"}:
-        return {"text":"Con gusto. Si necesitas revisar otro caso de impresión, aquí estoy.","mode":"social","knowledge_used":False}
-    if low in {"cerrar","salir","finalizar","terminar","close","exit"}:
-        return {"text":"Entendido. Doy por finalizada la conversación.","mode":"cancelled","knowledge_used":False}
-    if low in {"que puedes hacer","qué puedes hacer","capacidades","ayuda","what can you do"}:
-        return {"text":"Puedo explicar conceptos y productos de impresión, consultar procedimientos y requisitos respaldados por la documentación, orientar diagnósticos, comparar alternativas y preparar información para escalamiento. Cuando la documentación no sea suficiente, separo claramente la orientación general.","mode":"capabilities","knowledge_used":False}
-    return None
+ text=" ".join(str(message or "").split()).strip();low=text.casefold().strip(" .!?¿¡")
+ if low in {"hola","buenos dias","buenas tardes","buenas noches","hello","hi"}:return {"text":"Hola. ¿Qué necesitas revisar sobre el servicio de impresión?","mode":"social"}
+ if low in {"gracias","muchas gracias","thanks","thank you"}:return {"text":"Con gusto. Si necesitas revisar otro caso de impresión, aquí estoy.","mode":"social"}
+ if low in {"que puedes hacer","qué puedes hacer","capacidades","what can you do"}:return {"text":"Puedo explicar conceptos y productos de impresión, consultar procedimientos y requisitos documentados, orientar diagnósticos, comparar alternativas y preparar información para escalamiento.","mode":"capabilities"}
+ return None
 
 
 def _safe_text(value):
@@ -236,11 +230,7 @@ def process_message(message, secrets_obj, s):
     execution = {"mode": budget.mode, "understanding_budget": budget.understanding_max_tokens, "response_budget": budget.response_max_tokens}
     preflight=_conversation_preflight(message)
     if preflight:
-        store["memory"].turn_number += 1
-        if preflight["mode"]=="cancelled":
-            store["memory"].pending_goal.status="inactive";store["memory"].last_assistant_question=None;store["answer_context"]={}
-        result={"input":message,"state_before":before,"understanding":{"user_act":"social" if preflight["mode"]=="social" else "request_capabilities" if preflight["mode"]=="capabilities" else "cancel","intent":"social" if preflight["mode"] in {"social","cancelled"} else "capabilities","topic_relation":"independent","domain_relevance":"in_scope","current_goal":"conversation_control","goal_complete":True,"goal_updates":{},"case_updates":[],"needs_clarification":False,"clarification_target":None,"should_retrieve":False,"confidence":1.0,"reasoning_summary":"deterministic_conversation_preflight"},"understanding_contract":{"valid":True,"source":"deterministic_conversation_preflight"},"decision":{"action":"answer","reason":"conversational_turn_no_retrieval","ask_one_question":False,"question_target":None},"state_after":deepcopy(store["memory"].to_dict()),"answer":{**preflight,"provider":None,"model":None,"usage":{},"finish_reason":"deterministic"},"retrieval":{"enabled":False,"skipped_reason":"conversational_turn"},"provider_trace":{"understanding":{"skipped":True,"reason":"conversation_preflight"},"response":{"skipped":True,"reason":"conversation_preflight"}},"turn_metrics":_zero(),"execution":{**execution,"cache_hit":False},"cache":{"hit":False},"production_changed":False}
-        store["messages"] += [{"role":"user","content":message},{"role":"assistant","content":preflight["text"]}];store["turns"].append(result);return result
+        store["memory"].turn_number+=1;result={"input":message,"state_before":before,"understanding":{"user_act":"request_capabilities" if preflight["mode"]=="capabilities" else "social","intent":"capabilities" if preflight["mode"]=="capabilities" else "social","topic_relation":"independent","domain_relevance":"in_scope","current_goal":"conversation_control","goal_complete":True,"goal_updates":{},"case_updates":[],"needs_clarification":False,"clarification_target":None,"should_retrieve":False,"confidence":1.0,"reasoning_summary":"deterministic_conversation_preflight"},"understanding_contract":{"valid":True,"source":"deterministic_conversation_preflight"},"decision":{"action":"answer","reason":"conversational_turn_no_retrieval","ask_one_question":False,"question_target":None},"state_after":deepcopy(store["memory"].to_dict()),"answer":{"text":preflight["text"],"mode":preflight["mode"],"knowledge_used":False,"provider":None,"model":None,"usage":{},"finish_reason":"deterministic"},"retrieval":{"enabled":False,"skipped_reason":"conversational_turn"},"provider_trace":{"understanding":{"skipped":True},"response":{"skipped":True}},"turn_metrics":_zero(),"execution":{**execution,"cache_hit":False},"cache":{"hit":False},"production_changed":False};store["messages"] += [{"role":"user","content":message},{"role":"assistant","content":preflight["text"]}];store["turns"].append(result);return result
     if cached:
         store["memory"].turn_number += 1
         result = {"input": message, "state_before": before, **deepcopy(cached["artifact"]), "state_after": deepcopy(store["memory"].to_dict()), "provider_trace": {"understanding": {"skipped": True, "reason": "exact_turn_cache"}, "response": {"skipped": True, "reason": "exact_turn_cache"}}, "execution": {**execution, "cache_hit": True}, "cache": {"hit": True, "type": "exact_turn"}, "production_changed": False}
@@ -282,11 +272,7 @@ def process_message(message, secrets_obj, s):
         result["session_metrics_after_turn"] = snapshot(store["telemetry"])
         result["execution"] = {**execution, "cache_hit": False}
         result["cache"] = {"hit": False}
-        text = str((result.get("answer") or {}).get("text") or "").strip()
-        if not text:
-            text="No pude completar la respuesta en este turno. El fallo quedó registrado sin reutilizar evidencia del tema anterior."
-            result["answer"]={"text":text,"mode":"recoverable_error","knowledge_used":False,"documented_evidence_used":False,"internal_knowledge_used":False,"knowledge_mode":"none","finish_reason":"error"}
-            result.setdefault("functional_events",[]).append({"type":"empty_turn_recovered","severity":"high"})
+        text = result["answer"]["text"]
         if contract and _cacheable_final(result):
             entry = {"artifact": _artifact(result), "tokens_estimate": result["turn_metrics"].get("total_tokens", 0)}
             store["exact_turn_cache"][key] = entry
@@ -294,7 +280,8 @@ def process_message(message, secrets_obj, s):
     except Exception as exc:
         store["memory"] = memory_before
         store["errors"].append({"turn": store["memory"].turn_number + 1, "message": message, "error_type": type(exc).__name__, "error": str(exc)})
-        text = "No pude procesar este turno. El error quedó registrado."
+        add_functional_failure(store["telemetry"],type(exc).__name__)
+        text = "No pude completar la respuesta en este turno. Conservé el estado anterior y registré el error sin reutilizar evidencia incorrecta."
         result = {"input": message, "error": {"type": type(exc).__name__, "message": str(exc)}, "execution": execution, "production_changed": False}
     store["messages"].append({"role": "assistant", "content": text})
     store["turns"].append(result)
@@ -302,4 +289,4 @@ def process_message(message, secrets_obj, s):
 
 def export_session(s):
     x = get_store(s)
-    return {"format": "agent_core_v2_clean_phase3b4_2", "session_id": x.get("session_id"), "gateway_budget": {"calls": int(s.get("llm_gateway_calls", 0)), "tokens": int(s.get("llm_gateway_tokens", 0))}, "messages": deepcopy(x["messages"]), "turns": deepcopy(x["turns"]), "state": x["memory"].to_dict(), "answer_context": deepcopy(x.get("answer_context") or {}), "budget": deepcopy(x["budget"]), "telemetry": snapshot(x["telemetry"]), "cache_metrics": deepcopy(x["cache_metrics"]), "errors": deepcopy(x["errors"]), "retrieval_enabled": True, "documented_answer_enabled": True, "procedural_answer_enabled": True, "production_changed": False}
+    return {"format": "agent_core_v2_clean_phase3b4_3", "session_id": x.get("session_id"), "gateway_budget": {"calls": int(s.get("llm_gateway_calls", 0)), "tokens": int(s.get("llm_gateway_tokens", 0))}, "messages": deepcopy(x["messages"]), "turns": deepcopy(x["turns"]), "state": x["memory"].to_dict(), "answer_context": deepcopy(x.get("answer_context") or {}), "budget": deepcopy(x["budget"]), "telemetry": snapshot(x["telemetry"]), "cache_metrics": deepcopy(x["cache_metrics"]), "errors": deepcopy(x["errors"]), "retrieval_enabled": True, "documented_answer_enabled": True, "procedural_answer_enabled": True, "production_changed": False}
