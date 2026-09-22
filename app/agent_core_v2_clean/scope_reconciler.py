@@ -26,6 +26,11 @@ def _tokens(value):
     return {x for x in _TOKEN_RE.findall(_norm(value)) if len(x) > 2 and x not in _GENERIC}
 
 
+
+def _message_is_referential(message):
+    raw=set(_TOKEN_RE.findall(_norm(message)))
+    return bool(raw & {"su","sus","esa","ese","eso","esta","este","esto","anterior","siguiente","their","its","that","this","previous","next"})
+
 def _semantic_continuation(understanding, memory):
     """Detect a focused follow-up within the same operational subject.
 
@@ -76,6 +81,9 @@ def reconcile_turn(understanding, memory, message):
         and understanding.domain_relevance == "in_scope"
     )
     semantic_followup, semantic_ratio = _semantic_continuation(understanding, memory)
+    if _message_is_referential(message) and getattr(memory, "active_topic", None) and understanding.topic_relation != "new_topic":
+        semantic_followup = True
+        semantic_ratio = max(semantic_ratio, 0.2)
     completed_goal_followup = (
         semantic_followup
         and understanding.intent in _CONTINUATION_INTENTS

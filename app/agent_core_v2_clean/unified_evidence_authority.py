@@ -97,13 +97,21 @@ def apply_unified_evidence_verdict(retrieval, message, understanding):
     if best and wanted:
         target_terms = wanted - _OPERATION
         available = _tokens(best.get("title")) | _tokens(best.get("text"))
-        target_ok = not target_terms or bool(target_terms & available)
+        requested_short={x for x in wanted if x in _SHORT}
+        mandatory_short_ok=not requested_short or requested_short.issubset(available)
+        target_ok = (not target_terms or len(target_terms & available)/max(1,len(target_terms)) >= 0.5) and mandatory_short_ok
+        request_norm=_norm(message)
+        conceptual_definition=bool(re.search(r"\b(que es|what is|define|definir)\b",request_norm))
+        body_norm=_norm(" ".join((str(best.get("title") or ""),str(best.get("text") or ""))))
+        definition_supported=not conceptual_definition or bool(re.search(r"\b(es un|es una|is a|is an|aplicacion|application|solucion|solution|herramienta|tool)\b",body_norm))
+        unrequested_subservice=conceptual_definition and "cloud services" in _norm(best.get("title")) and "cloud services" not in request_norm
         direct_title = best_fit["title_hit_count"] >= 2
         direct_content = best_fit["covered_count"] >= 2 and best_fit["coverage"] >= 0.4
         semantic_support = best_fit["semantic_score"] >= 0.15
         # Two independent lexical anchors plus target compatibility are enough for
         # exact operational documents even when OCR lowers the semantic score.
-        accepted = target_ok and (direct_title or (direct_content and semantic_support))
+        semantic_rejected=bool((out.get("semantic_fit") or {}).get("low_fit")) and float((out.get("semantic_fit") or {}).get("combined_quality",0) or 0) < 0.12
+        accepted = target_ok and definition_supported and not unrequested_subservice and not semantic_rejected and (direct_title or (direct_content and semantic_support))
         if accepted:
             identity = _identity(best)
             selected = [item for fit, item in scored if _identity(item) == identity][:8]
