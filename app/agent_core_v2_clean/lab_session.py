@@ -126,34 +126,76 @@ def _conceptual(result, message, secrets_obj, s, budget, store):
             store["documented_answer_cache"][key] = {"answer": deepcopy(payload), "diagnostic": deepcopy(diagnostic)}
     return result, composer.last_provider_result
 
+def _provider_text_candidate(trace):
+    if isinstance(trace, list):
+        for item in reversed(trace):
+            candidate = _provider_text_candidate(item)
+            if candidate:
+                return candidate
+        return None
+    if not isinstance(trace, dict):
+        return None
+    attempts = trace.get("attempts") or []
+    selected = int(trace.get("selected_attempt") or 0)
+    if attempts and selected and selected <= len(attempts):
+        candidate = _provider_text_candidate(attempts[selected - 1])
+        if candidate:
+            return candidate
+    if trace.get("ok") is True and str(trace.get("finish_reason") or "").casefold() == "stop":
+        text = str(trace.get("text") or "").strip()
+        if text:
+            return {"text": text, "provider": trace.get("provider"), "model": trace.get("model"), "usage": deepcopy(trace.get("usage") or {}), "finish_reason": "stop"}
+    for item in reversed(attempts):
+        candidate = _provider_text_candidate(item)
+        if candidate:
+            return candidate
+    return None
+
+def _publish_authorized_enumeration(result, trace):
+    retrieval = result.get("retrieval") or {}
+    verdict = retrieval.get("evidence_verdict") or {}
+    if not verdict.get("accepted"):
+        return False
+    candidate = _provider_text_candidate(trace)
+    if not candidate:
+        return False
+    text = candidate["text"]
+    valid_ids = {str(x.get("id")) for x in (retrieval.get("generation_evidence") or [])}
+    cited = set(__import__("re").findall(r"\[(R\d+)\]", text))
+    if not cited or not cited.issubset(valid_ids):
+        return False
+    result["answer"] = {"text": text, "mode": "procedural_documented_answer", "knowledge_used": False, "provider": candidate.get("provider"), "model": candidate.get("model"), "usage": candidate.get("usage") or {}, "finish_reason": "stop", "documented_evidence_used": True, "internal_knowledge_used": False, "knowledge_mode": "documented_only"}
+    result.setdefault("functional_events", []).append({"type": "terminal_answer_arbitration", "winner": "authorized_enumeration_generation", "suppressed": "deterministic_fallback", "reason": "provider_answer_complete_and_citations_valid"})
+    return True
+
 def _answers(result, message, secrets_obj, s, budget, store):
     if (result.get("decision") or {}).get("action") not in {"defer_to_retrieval", "diagnose_with_retrieval"}:
         skipped = {"skipped": True, "reason": "decision_does_not_authorize_retrieval"}
         return result, skipped, skipped
     # Conceptual requests are handled by controlled synthesis before the
     # documented-only composer can publish a tangential negative answer.
-    verdict = ((result.get("retrieval") or {}).get("evidence_verdict") or {})
-    if must_preempt_documented_answer(result.get("understanding") or {}) and not verdict.get("accepted"):
+    if must_preempt_documented_answer(result.get("understanding") or {}):
         result, procedural_trace = maybe_generate_procedural(
             result, message, _gateway(secrets_obj, s), budget, store,
             str(getattr(load_gateway_config(secrets_obj), "model", "") or ""),
         )
-        conceptual_trace = {"skipped": True,"reason": "conceptual_without_authorized_evidence"}
+        conceptual_trace = {
+            "skipped": True,
+            "reason": "conceptual_preempted_by_controlled_synthesis",
+        }
         return result, conceptual_trace, procedural_trace
     result, conceptual_trace = _conceptual(result, message, secrets_obj, s, budget, store)
     intent = str((result.get("understanding") or {}).get("intent") or "").casefold()
-    goal_text = " ".join((str(message or ""), str((result.get("understanding") or {}).get("current_goal") or ""))).casefold()
-    enumeration = any(term in goal_text for term in ("métodos", "metodos", "opciones", "alternativas", "listar", "enumera"))
-    if enumeration and verdict.get("accepted") and str((result.get("answer") or {}).get("mode") or "") in {"documented_answer", "documented_answer_partial"}:
-        result.setdefault("functional_events", []).append({"type":"terminal_answer_arbitration","winner":"documented_enumeration","suppressed":"procedural_composer","reason":"authorized_enumeration_answer"})
-        return result, conceptual_trace, {"skipped": True, "reason": "documented_enumeration_is_terminal"}
     answer_mode = str((result.get("answer") or {}).get("mode") or "")
-    documented_terminal = intent == "requirements" and answer_mode in {"documented_answer", "documented_answer_partial"}
+    documented_terminal = intent in {"conceptual", "requirements"} and answer_mode in {"documented_answer", "documented_answer_partial"}
     if documented_terminal:
-        result.setdefault("functional_events", []).append({"type":"terminal_answer_arbitration","winner":"documented_requirements","suppressed":"procedural_composer","reason":"single_sufficient_answer"})
-        procedural_trace = {"skipped": True, "reason": "documented_requirements_is_terminal"}
+        winner = "documented_requirements" if intent == "requirements" else "documented_conceptual"
+        result.setdefault("functional_events", []).append({"type":"terminal_answer_arbitration","winner":winner,"suppressed":"procedural_composer","reason":"single_sufficient_answer"})
+        procedural_trace = {"skipped": True, "reason": "documented_answer_is_terminal"}
         return result, conceptual_trace, procedural_trace
     result, procedural_trace = maybe_generate_procedural(result, message, _gateway(secrets_obj, s), budget, store, str(getattr(load_gateway_config(secrets_obj), "model", "") or ""))
+    if enumeration:
+        _publish_authorized_enumeration(result, procedural_trace)
     return result, conceptual_trace, procedural_trace
 
 def _trace_list(value):
@@ -263,4 +305,4 @@ def process_message(message, secrets_obj, s):
 
 def export_session(s):
     x = get_store(s)
-    return {"format": "agent_core_v2_clean_phase3b3", "session_id": x.get("session_id"), "gateway_budget": {"calls": int(s.get("llm_gateway_calls", 0)), "tokens": int(s.get("llm_gateway_tokens", 0))}, "messages": deepcopy(x["messages"]), "turns": deepcopy(x["turns"]), "state": x["memory"].to_dict(), "answer_context": deepcopy(x.get("answer_context") or {}), "budget": deepcopy(x["budget"]), "telemetry": snapshot(x["telemetry"]), "cache_metrics": deepcopy(x["cache_metrics"]), "errors": deepcopy(x["errors"]), "retrieval_enabled": True, "documented_answer_enabled": True, "procedural_answer_enabled": True, "production_changed": False}
+    return {"format": "agent_core_v2_clean_phase3b3_3", "session_id": x.get("session_id"), "gateway_budget": {"calls": int(s.get("llm_gateway_calls", 0)), "tokens": int(s.get("llm_gateway_tokens", 0))}, "messages": deepcopy(x["messages"]), "turns": deepcopy(x["turns"]), "state": x["memory"].to_dict(), "answer_context": deepcopy(x.get("answer_context") or {}), "budget": deepcopy(x["budget"]), "telemetry": snapshot(x["telemetry"]), "cache_metrics": deepcopy(x["cache_metrics"]), "errors": deepcopy(x["errors"]), "retrieval_enabled": True, "documented_answer_enabled": True, "procedural_answer_enabled": True, "production_changed": False}
