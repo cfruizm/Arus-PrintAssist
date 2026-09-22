@@ -4,9 +4,9 @@ from dataclasses import dataclass,asdict
 @dataclass(frozen=True)
 class BudgetPolicy:
     mode:str="normal"
-    max_session_calls:int=28
-    max_session_tokens:int=21000
-    reserve_tokens:int=1400
+    max_session_calls:int=60
+    max_session_tokens:int=52000
+    reserve_tokens:int=2200
     understanding_max_tokens:int=350
     response_max_tokens:int=280
     @classmethod
@@ -14,7 +14,7 @@ class BudgetPolicy:
         value=str(mode or "normal").strip().casefold()
         if value=="economy":return cls("economy",12,7000,900,180,120)
         if value=="deterministic":return cls("deterministic",0,0,0,0,0)
-        return cls("normal",28,21000,1400,350,280)
+        return cls("normal",60,52000,2200,350,280)
     def to_dict(self):return asdict(self)
     def can_call(self,telemetry,estimated_tokens:int=0):
         if self.mode=="deterministic":return False,"deterministic_mode"

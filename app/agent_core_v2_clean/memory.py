@@ -10,7 +10,7 @@ def _record_user_facts(m,clean):
 def apply_understanding(m,u):
  if u.degraded:m.turn_number+=1;return
  answering=u.user_act=="answer_to_question" and bool(m.last_assistant_question)
- if not answering and u.topic_relation in {"new_topic","independent"} and u.domain_relevance=="in_scope" and m.active_topic and u.current_goal!=m.active_topic:
+ if not answering and u.topic_relation in {"new_topic","independent"} and not (m.support_case.status in {"diagnosing","reopened"} and u.intent in {"troubleshooting","procedural","requirements","verification"}) and u.domain_relevance=="in_scope" and m.active_topic and u.current_goal!=m.active_topic:
   m.topic_history.append({"topic":m.active_topic,"goal":m.pending_goal.summary,"case":m.support_case.__dict__.copy()});m.pending_goal=PendingGoal();m.support_case=type(m.support_case)();m.fact_records={}
  if u.domain_relevance=="in_scope":
   if not answering:
@@ -39,5 +39,7 @@ def apply_understanding(m,u):
     if m.support_case.attempts:m.support_case.attempts[-1]["result"]=v
     else:m.support_case.attempts.append({"action":"previous validation","result":v})
     m.support_case.status="diagnosing"
+  if u.intent=="troubleshooting" and u.goal_complete and any(str(x.get("type") or "") in {"attempt_result","resolution"} for x in case_updates):
+   m.support_case.status="resolved";m.support_case.resolution_status="resolved";m.pending_goal.known_details["resolution_status"]="resolved";m.pending_goal.status="complete"
  m.turn_number+=1
 def compact_context(m):return {"active_topic":m.active_topic,"pending_goal":m.pending_goal.__dict__,"confirmed_facts":list(m.fact_records.values()),"support_case":m.support_case.__dict__,"last_assistant_question":m.last_assistant_question,"summary":m.summary,"recent_topics":m.topic_history[-2:]}
