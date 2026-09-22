@@ -14,6 +14,7 @@ from .documented_answer import DocumentedAnswerComposer, answer_fingerprint, PRO
 from .documented_router import maybe_generate_procedural
 from .conceptual_route import must_preempt_documented_answer
 from .semantic_fit import apply_semantic_fit, capture_answer_context
+from .unified_evidence_authority import apply_unified_evidence_verdict
 from .response_reconciler import reconcile
 from .topic_boundary import infer_topic_boundary
 from .operational_coherence import normalize_generation_flags
@@ -87,7 +88,8 @@ def _attach_retrieval(result, message, store):
         retrieval["_answer_context"] = deepcopy(answer_context)
         retrieval["pre_retrieval_boundary"] = boundary.to_dict()
     except Exception as exc:
-        retrieval = {"enabled": True, "ok": False, "llm_called": False, "production_changed": False, "count": 0, "evidence": [], "errors": [{"type": type(exc).__name__, "message": str(exc)}]}
+        retrieval = {"enabled": True, "ok": False, "llm_called": False, "production_changed": False, "count": 0, "evidence": [], "generation_evidence": [], "errors": [{"stage": "attach_retrieval", "type": type(exc).__name__, "message": str(exc)}]}
+        result.setdefault("functional_events", []).append({"type": "retrieval_pipeline_failure", "severity": "critical", "stage": "attach_retrieval", "error_type": type(exc).__name__, "message": str(exc)})
     result["retrieval"] = retrieval
     result["answer"]["text"] = retrieval_summary(retrieval)
     result["answer"]["mode"] = "retrieval_diagnostic" if retrieval.get("ok") else "retrieval_error"
@@ -259,4 +261,4 @@ def process_message(message, secrets_obj, s):
 
 def export_session(s):
     x = get_store(s)
-    return {"format": "agent_core_v2_clean_phase3b3", "session_id": x.get("session_id"), "gateway_budget": {"calls": int(s.get("llm_gateway_calls", 0)), "tokens": int(s.get("llm_gateway_tokens", 0))}, "messages": deepcopy(x["messages"]), "turns": deepcopy(x["turns"]), "state": x["memory"].to_dict(), "answer_context": deepcopy(x.get("answer_context") or {}), "budget": deepcopy(x["budget"]), "telemetry": snapshot(x["telemetry"]), "cache_metrics": deepcopy(x["cache_metrics"]), "errors": deepcopy(x["errors"]), "retrieval_enabled": True, "documented_answer_enabled": True, "procedural_answer_enabled": True, "production_changed": False}
+    return {"format": "agent_core_v2_clean_phase3b3_1", "session_id": x.get("session_id"), "gateway_budget": {"calls": int(s.get("llm_gateway_calls", 0)), "tokens": int(s.get("llm_gateway_tokens", 0))}, "messages": deepcopy(x["messages"]), "turns": deepcopy(x["turns"]), "state": x["memory"].to_dict(), "answer_context": deepcopy(x.get("answer_context") or {}), "budget": deepcopy(x["budget"]), "telemetry": snapshot(x["telemetry"]), "cache_metrics": deepcopy(x["cache_metrics"]), "errors": deepcopy(x["errors"]), "retrieval_enabled": True, "documented_answer_enabled": True, "procedural_answer_enabled": True, "production_changed": False}
