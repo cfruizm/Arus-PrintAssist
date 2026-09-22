@@ -1,8 +1,15 @@
 from __future__ import annotations
 from copy import deepcopy
 
+def _json_value(value):
+ if isinstance(value,_Record):return {str(k):_json_value(v) for k,v in value.__dict__.items()}
+ if isinstance(value,dict):return {str(k):_json_value(v) for k,v in value.items()}
+ if isinstance(value,(list,tuple,set)):return [_json_value(v) for v in value]
+ if value is None or isinstance(value,(str,int,float,bool)):return value
+ return str(value)
+
 class _Record:
- def to_dict(self):return deepcopy(self.__dict__)
+ def to_dict(self):return _json_value(self)
 
 class PendingGoal(_Record):
  def __init__(self,summary="",intent="unknown",known_details=None,missing_detail=None,status="inactive"):
