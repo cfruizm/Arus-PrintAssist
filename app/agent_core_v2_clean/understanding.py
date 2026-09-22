@@ -10,10 +10,28 @@ class ConversationUnderstanding:
  def _parse(self,text):
   text=str(text or "").strip();a=text.find("{");b=text.rfind("}")
   if a<0 or b<a:raise ValueError("json_object_missing")
-  raw=json.loads(text[a:b+1]);missing=REQUIRED-set(raw)
+  raw=json.loads(text[a:b+1])
   if not isinstance(raw,dict) or not raw:raise ValueError("empty_object")
+  aliases={}
+  def alias(src,dst):
+   if dst not in raw and src in raw:raw[dst]=raw.get(src);aliases[src]=dst
+  alias("clarification_needed","needs_clarification");alias("clarification_question","clarification_target")
+  updates=raw.get("goal_updates")
+  if isinstance(updates,list):
+   facts=[str(x.get("fact") or x.get("value") or "").strip() for x in updates if isinstance(x,dict)]
+   facts=[x for x in facts if x]
+   raw["goal_updates"]={"topic":facts[0]} if facts else {}
+   if facts and not raw.get("current_goal"):raw["current_goal"]=facts[0]
+   aliases["goal_updates:list"]="goal_updates:dict"
+  probe=" ".join((str(raw.get("current_goal") or ""),str(raw.get("goal_updates") or ""))).casefold()
+  raw.setdefault("user_act","new_request");raw.setdefault("intent","conceptual" if any(x in probe for x in ("document","analiz","informacion") ) else "procedural")
+  raw.setdefault("topic_relation","new_topic");raw.setdefault("domain_relevance","in_scope");raw.setdefault("current_goal",probe.strip() or "Atender la solicitud actual")
+  raw.setdefault("goal_complete",False);raw.setdefault("goal_updates",{});raw.setdefault("case_updates",[]);raw.setdefault("needs_clarification",False);raw.setdefault("clarification_target",None)
+  raw.setdefault("should_retrieve",True);raw.setdefault("confidence",0.75);raw.setdefault("reasoning_summary","provider_payload_normalized")
+  missing=REQUIRED-set(raw)
   if missing:raise ValueError("missing_fields:"+",".join(sorted(missing)))
-  raw["goal_updates"],removed=normalize_goal_updates(raw.get("goal_updates"));self.normalization={"removed_goal_update_keys":removed};return TurnUnderstanding(**raw)
+  for legacy in aliases:raw.pop(legacy.split(":",1)[0],None)
+  raw["goal_updates"],removed=normalize_goal_updates(raw.get("goal_updates"));self.normalization={"removed_goal_update_keys":removed,"schema_aliases":aliases};return TurnUnderstanding(**raw)
  def interpret(self,message,memory):
   from app.llm_gateway.models import LLMRequest
   r=self.gateway.complete(LLMRequest([{"role":"system","content":SYSTEM},{"role":"user","content":json.dumps({"message":message,"context":compact_context(memory)},ensure_ascii=False,separators=(",",":"))}],"agent_core_v2_clean_understanding",self.max_tokens,0.,UNDERSTANDING_SCHEMA));self.last_provider_result=r.to_dict();self.contract_valid=False;self.validation_error=None;self.normalization={"removed_goal_update_keys":[]}

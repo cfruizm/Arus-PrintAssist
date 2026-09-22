@@ -103,7 +103,9 @@ def _direct_current_evidence(items, understanding):
             " ".join(map(str, fit.get("matched_terms") or [])),
         ))
         covered = anchors.intersection(_tokens(body))
-        anchor_complete = bool(anchors) and covered == anchors
+        title_covered = anchors.intersection(_tokens(str(item.get("title") or "")))
+        entity_title_match = len(title_covered) >= min(2, len(anchors)) if anchors else False
+        anchor_complete = bool(anchors) and (covered == anchors or entity_title_match)
         intent_affinity = fit.get("intent_affinity")
         intent_aligned = intent_affinity is None or float(intent_affinity) >= 0.0
         explicit_claim = _has_conceptual_claim(body, anchors)
@@ -118,6 +120,8 @@ def _direct_current_evidence(items, understanding):
             "required_anchors": sorted(anchors),
             "covered_anchors": sorted(covered),
             "anchor_complete": anchor_complete,
+            "title_covered_anchors": sorted(title_covered),
+            "entity_title_match": entity_title_match,
             "intent_affinity": intent_affinity,
             "intent_aligned": intent_aligned,
             "explicit_conceptual_claim": explicit_claim,

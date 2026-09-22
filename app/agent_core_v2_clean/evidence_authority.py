@@ -19,7 +19,8 @@ class EvidenceDecision:
 def _terms(value):
     text = unicodedata.normalize("NFKD", str(value or "")).encode("ascii", "ignore").decode().casefold()
     stop = {"explicar","procedimiento","como","para","una","uno","impresora","impresion","usuario","realizar","the","how","for","printer","user"}
-    return {x for x in re.findall(r"[a-z0-9]+", text) if len(x) > 3 and x not in stop}
+    short_identifiers={"pin","ews","usb","smb"}
+    return {x for x in re.findall(r"[a-z0-9]+", text) if (len(x) > 3 or x in short_identifiers) and x not in stop}
 
 def _target_fit(retrieval, selected):
     fields = ((retrieval.get("query") or {}).get("fields") or {})
@@ -44,6 +45,7 @@ def canonical_evidence_decision(retrieval: dict, intent: str) -> EvidenceDecisio
     intent_fit = float(signals.get('intent', sf.get('intent_alignment', 0.0)) or 0.0)
     coverage = float(signals.get('coverage', sf.get('coverage', 0.0)) or 0.0)
     target_fit = _target_fit(retrieval, selected)
+    retrieval["evidence_authority_diagnostics"]={"selected_count":len(selected),"selected_ids":selected_ids,"target_fit":round(target_fit,4),"product_match":product,"object_match":obj,"operation_match":operation,"intent_match":intent_fit,"coverage":coverage,"direct_title_candidates":[str(x.get("id")) for x in selected if _terms(((retrieval.get("query") or {}).get("fields") or {}).get("current_message")) & _terms(x.get("title"))]}
     # Backward-compatible fallbacks. A product match alone never authorizes generation.
     if not any((product, obj, operation, intent_fit, coverage)):
         combined = float(sf.get('combined_quality', 0.0) or 0.0)
