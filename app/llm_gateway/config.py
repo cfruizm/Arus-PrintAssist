@@ -19,6 +19,13 @@ def load_gateway_config(secrets)->dict:
         },
     }
 
-def model_for(config,provider,purpose):
-    key="orchestrator_model" if purpose=="semantic_orchestrator" else "answer_model"
+def model_for(config, provider, purpose=None, model_role=None):
+    """Select a model by explicit role, preserving legacy purpose behavior."""
+    role = str(model_role or "").strip().casefold()
+    if role == "orchestrator":
+        key = "orchestrator_model"
+    elif role == "answer":
+        key = "answer_model"
+    else:
+        key = "orchestrator_model" if purpose == "semantic_orchestrator" else "answer_model"
     return config["providers"][provider][key]

@@ -45,19 +45,30 @@ class GroqProvider(BaseProvider):
     def __init__(self,api_key:str,base_url:str=CHAT_URL,structured_mode:str="best_effort"):
         if not api_key:raise LLMGatewayError("missing_api_key","Falta GROQ_API_KEY.")
         self.api_key=str(api_key).strip();self.base_url=base_url;self.structured_mode=structured_mode
-    def _response_format(self,request,model):
-        if not request.response_schema:return None,"text"
-        if model.startswith("openai/gpt-oss-") and self.structured_mode!="strict":
-            return {"type":"json_object"},"json_object"
-        return {"type":"json_schema","json_schema":{"name":"structured_response","strict":self.structured_mode=="strict","schema":request.response_schema}},"json_schema"
+    def _response_format(self, request, model):
+        mode = str(getattr(request, "response_format_mode", "auto") or "auto").casefold()
+        if mode == "text":
+            return None, "text"
+        if not request.response_schema:
+            return None, "text"
+        if mode == "json_object":
+            return {"type": "json_object"}, "json_object"
+        if mode == "schema":
+            return {"type": "json_schema", "json_schema": {"name": "structured_response", "strict": self.structured_mode == "strict", "schema": request.response_schema}}, "json_schema"
+        if model.startswith("openai/gpt-oss-") and self.structured_mode != "strict":
+            return {"type": "json_object"}, "json_object"
+        return {"type": "json_schema", "json_schema": {"name": "structured_response", "strict": self.structured_mode == "strict", "schema": request.response_schema}}, "json_schema"
     def complete(self,request,model):
         body={"model":model,"messages":request.messages,"max_completion_tokens":max(32,min(4096,int(request.max_tokens))),"temperature":max(0.0,min(2.0,float(request.temperature))),"stream":False}
         response_format,format_mode=self._response_format(request,model)
-        if response_format:body["response_format"]=response_format
-        # Do not send reasoning_effort here. Groq documents low/medium/high for
-        # GPT-OSS; omitting the parameter uses the provider default and avoids
-        # the invalid value previously sent as "none".
+        if response_format: body["response_format"] = response_format
+        effort = str(getattr(request, "reasoning_effort", "") or "").casefold()
+        if model.startswith("openai/gpt-oss-") and effort in {"low", "medium", "high"}:
+            body["reasoning_effort"] = effort
         started=time.perf_counter();status,data,headers=_request_json(self.base_url,self.api_key,"POST",body,45);latency=round((time.perf_counter()-started)*1000,3)
-        if status!=200:return _provider_error(status,data,model,format_mode,latency,headers)
+        if status!=200:
+            failed = _provider_error(status,data,model,format_mode,latency,headers)
+            failed.purpose = request.purpose
+            return failed
         choice=(data.get("choices") or [{}])[0];message=choice.get("message") or {};usage=data.get("usage") or {}
-        return LLMResult(True,str(message.get("content") or ""),"groq",model,request.purpose,latency,{"prompt_tokens":int(usage.get("prompt_tokens") or 0),"completion_tokens":int(usage.get("completion_tokens") or 0),"total_tokens":int(usage.get("total_tokens") or 0)},choice.get("finish_reason"),metadata={"structured_mode":self.structured_mode,"response_format_mode":format_mode,"reasoning_effort":"provider_default","rate_limit_remaining_requests":headers.get("x-ratelimit-remaining-requests"),"rate_limit_remaining_tokens":headers.get("x-ratelimit-remaining-tokens"),"request_id":headers.get("x-request-id")})
+        return LLMResult(True,str(message.get("content") or ""),"groq",model,request.purpose,latency,{"prompt_tokens":int(usage.get("prompt_tokens") or 0),"completion_tokens":int(usage.get("completion_tokens") or 0),"total_tokens":int(usage.get("total_tokens") or 0)},choice.get("finish_reason"),metadata={"structured_mode":self.structured_mode,"response_format_mode":format_mode,"reasoning_effort": effort or "provider_default","rate_limit_remaining_requests":headers.get("x-ratelimit-remaining-requests"),"rate_limit_remaining_tokens":headers.get("x-ratelimit-remaining-tokens"),"request_id":headers.get("x-request-id")})

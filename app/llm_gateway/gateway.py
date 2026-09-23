@@ -52,13 +52,13 @@ class LLMGateway:
         if used:ledger.append({"time":now,"tokens":used,"purpose":result.purpose})
         self.session["llm_gateway_output_ledger"]=ledger
     def complete(self,request):
-        self._budget();request=self._reserve_output(request);primary=self.config["provider"];primary_model=model_for(self.config,primary,request.purpose)
+        self._budget();request=self._reserve_output(request);primary=self.config["provider"];primary_model=model_for(self.config,primary,request.purpose,getattr(request,"model_role",None))
         try:
             result=self._provider(primary).complete(request,primary_model);self._record(result);self._record_output(result);return result
         except LLMGatewayError as exc:
             if not (exc.recoverable and self.config["fallback_enabled"] and self.config["fallback_provider"]!=primary):
                 result=self._error_result(primary,primary_model,request.purpose,exc);self._record(result);return result
-            fallback=self.config["fallback_provider"];fallback_model=model_for(self.config,fallback,request.purpose)
+            fallback=self.config["fallback_provider"];fallback_model=model_for(self.config,fallback,request.purpose,getattr(request,"model_role",None))
             try:
                 result=self._provider(fallback).complete(request,fallback_model);result.fallback_used=True;result.fallback_provider=fallback;self._record(result);return result
             except LLMGatewayError as second:
