@@ -3,7 +3,7 @@ from .contracts import UNDERSTANDING_SCHEMA
 from .models import TurnUnderstanding
 from .memory import compact_context, normalize_goal_updates
 
-SYSTEM = """Semantic understanding for an enterprise printing-support assistant. Interpret only the current user turn and use memory only to resolve omitted references. Return one complete JSON object. Questions about the assistant itself, its abilities, scope or limitations are request_capabilities with intent capabilities, independent topic relation and should_retrieve false. Greetings, thanks, acknowledgements, confirmations and farewells are lateral social turns with independent topic relation and should_retrieve false; they preserve but do not execute, complete, replace or reopen the active technical goal. A follow-up may inherit the active goal only when the current turn refers to it. Technical requests require a non-empty current_goal. Conceptual means definition or purpose; procedural means how to perform an operation; requirements means prerequisites or compatibility; troubleshooting means failure, diagnosis or inability to complete an operation. current_goal may be a string or an object with summary, intent, known_details, missing_detail and status. conversation_act may be a string, list, composite label or object. Do not turn social or capability turns into technical intake merely because the assistant supports printing. Do not write markdown or commentary. Keep reasoning_summary under 20 words."""
+SYSTEM = """Semantic understanding for an enterprise printing-support assistant. Interpret only the current user turn and use memory only to resolve omitted references. Return one small complete JSON object containing only the requested understanding fields. Never answer the user, never include a response, content, explanation, procedure or suggested solution. Questions about the assistant itself, its abilities, scope or limitations are request_capabilities with intent capabilities, independent topic relation and should_retrieve false. Greetings, thanks, acknowledgements, confirmations and farewells are lateral social turns with independent topic relation and should_retrieve false; they preserve but do not execute, complete, replace or reopen the active technical goal. A follow-up may inherit the active goal only when the current turn refers to it. Technical requests require a non-empty current_goal. Conceptual means definition or purpose; procedural means how to perform an operation; requirements means prerequisites or compatibility; troubleshooting means failure, diagnosis or inability to complete an operation. current_goal may be a string or an object with summary, intent, known_details, missing_detail and status. conversation_act may be a string, list, composite label or object. Do not turn social or capability turns into technical intake merely because the assistant supports printing. Do not write markdown or commentary. Keep reasoning_summary under 20 words."""
 
 REQUIRED = {"user_act", "intent", "topic_relation", "domain_relevance", "current_goal", "goal_complete", "goal_updates", "case_updates", "needs_clarification", "clarification_target", "should_retrieve", "confidence", "reasoning_summary"}
 ALIASES = {"clarification_needed": "needs_clarification", "clarification_question": "clarification_target"}
@@ -95,9 +95,20 @@ class ConversationUnderstanding:
     def _parse(self, text):
         value = str(text or "").strip()
         start, end = value.find("{"), value.rfind("}")
-        if start < 0 or end < start:
+        if start < 0:
             raise ValueError("json_object_missing")
-        raw = json.loads(value[start:end + 1])
+        candidate = value[start:end + 1] if end >= start else value[start:]
+        try:
+            raw = json.loads(candidate)
+        except json.JSONDecodeError:
+            # A best-effort provider can append a forbidden answer payload and hit
+            # the token limit. If the semantic prefix is complete, discard only
+            # that top-level payload and recover the understanding contract.
+            marker = re.search(r',\s*"(?:response|answer|content)"\s*:', candidate)
+            if not marker:
+                raise
+            prefix = candidate[:marker.start()].rstrip()
+            raw = json.loads(prefix + "}")
         if not isinstance(raw, dict) or not raw:
             raise ValueError("empty_object")
 
@@ -149,6 +160,8 @@ class ConversationUnderstanding:
         raw["user_act"] = act
         raw["intent"] = _canonical_intent(raw.get("intent"), act, goal_intent)
         raw["goal_updates"] = updates
+        if raw["intent"] not in {"unknown", "social", "capabilities", "meta", "cancel", "escalation"} and raw.get("current_goal"):
+            raw.setdefault("domain_relevance", "in_scope")
         raw.setdefault("topic_relation", "independent" if act in {"social", "request_capabilities"} else "new_topic")
         raw.setdefault("domain_relevance", "in_scope" if act in {"social", "request_capabilities"} else "uncertain")
         raw.setdefault("current_goal", "")
