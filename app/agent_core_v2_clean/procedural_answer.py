@@ -37,7 +37,7 @@ class ProceduralAnswerComposer:
   if not (exp.get("ok") and exp.get("same_document_only") and exp.get("ordered") and evidence):return AgentResponse("La evidencia operacional todavía no es suficiente o consistente para redactar una orientación segura.","procedural_evidence_guard",False)
   from app.llm_gateway.models import LLMRequest
   payload={"question":message,"goal":understanding.get("current_goal"),"document":exp.get("seed_document"),"pages":exp.get("pages"),"evidence":evidence}
-  r=self.gateway.complete(LLMRequest([{"role":"system","content":SYSTEM},{"role":"user","content":json.dumps(payload,ensure_ascii=False,separators=(",",":"))}],"agent_core_v2_clean_procedural_answer",self.max_tokens,0.,None,model_role="answer",response_format_mode="text",reasoning_effort="low"));self.last_provider_result=r.to_dict()
+  r=self.gateway.complete(LLMRequest([{"role":"system","content":SYSTEM},{"role":"user","content":json.dumps(payload,ensure_ascii=False,separators=(",",":"))}],"agent_core_v2_clean_procedural_answer",max(self.max_tokens,520 if understanding.get("intent") in {"procedural","requirements"} else 320),0.,None,model_role="answer",response_format_mode="text",reasoning_effort="low"));self.last_provider_result=r.to_dict()
   if not r.ok:return AgentResponse("Encontré evidencia operacional, pero no pude redactar la respuesta en este turno.","procedural_provider_degraded",False)
   text=str(r.text or "").strip()
   fields=(retrieval.get("query") or {}).get("fields") or {}

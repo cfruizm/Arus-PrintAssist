@@ -7,8 +7,8 @@ class BudgetPolicy:
     max_session_calls:int=60
     max_session_tokens:int=52000
     reserve_tokens:int=2200
-    understanding_max_tokens:int=350
-    response_max_tokens:int=280
+    understanding_max_tokens:int=220
+    response_max_tokens:int=320
     @classmethod
     def for_mode(cls,mode:str):
         value=str(mode or "normal").strip().casefold()
@@ -23,3 +23,6 @@ class BudgetPolicy:
         usable=max(0,self.max_session_tokens-self.reserve_tokens)
         if tokens+estimate>usable:return False,"session_token_budget_would_exceed_reserve"
         return True,None
+
+
+

@@ -28,7 +28,7 @@ class DocumentedAnswerComposer:
   if not evidence:return AgentResponse("La recuperación no contiene evidencia suficiente para responder de forma documentada.","documented_insufficient",False)
   from app.llm_gateway.models import LLMRequest
   payload={"question":message,"intent":understanding.get("intent"),"goal":understanding.get("current_goal"),"evidence":evidence}
-  limit=680 if understanding.get("intent")=="requirements" else self.max_tokens
+  limit=620 if understanding.get("intent")=="requirements" else 240 if understanding.get("intent")=="conceptual" else self.max_tokens
   r=self.gateway.complete(LLMRequest([{"role":"system","content":SYSTEM},{"role":"user","content":json.dumps(payload,ensure_ascii=False,separators=(",",":"))}],"agent_core_v2_clean_documented_answer",limit,0.,None, model_role="answer", response_format_mode="text", reasoning_effort="low"));self.last_provider_result=r.to_dict()
   if not r.ok:return AgentResponse("Encontré documentación, pero no pude redactar la respuesta en este turno. Las fuentes recuperadas se conservaron.","documented_provider_degraded",False)
   text=str(r.text or "").strip();valid,cited=validate_citations(text,[str(x["id"]) for x in evidence]);truncated=str(r.finish_reason or "").casefold() in {"length","max_tokens"};pages={str(x.get("page") or "") for x in evidence if x.get("page")};coverage=understanding.get("intent")!="requirements" or len(pages)<2 or len(cited)>=2;valid=bool(valid and coverage)
@@ -38,3 +38,6 @@ class DocumentedAnswerComposer:
   sources=readable_sources(retrieval,cited)
   if sources:text+="\n\n**Fuentes documentales**\n"+"\n".join(f"- {x}" for x in sources)
   return AgentResponse(text,"documented_answer_partial" if truncated else "documented_answer",True,r.provider,r.model,r.usage,r.finish_reason)
+
+
+

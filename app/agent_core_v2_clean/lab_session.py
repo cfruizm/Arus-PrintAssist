@@ -265,8 +265,7 @@ def process_message(message, secrets_obj, s):
         base = result.get("provider_trace") or {}
         contract = (result.get("understanding_contract") or {}).get("valid")
         understanding_traces = _trace_list(base.get("understanding"))
-        for index, trace in enumerate(understanding_traces):
-            add_result(store["telemetry"], trace, contract if index == len(understanding_traces) - 1 else None)
+        for index, trace in enumerate(understanding_traces): add_result(store["telemetry"], trace, contract if index == len(understanding_traces)-1 else None)
         add_result(store["telemetry"], base.get("response"))
         result, conceptual, procedural = _answers(result, message, secrets_obj, s, budget, store)
         traces = _apply_answer_traces(result, conceptual, procedural, store)
@@ -294,7 +293,7 @@ def process_message(message, secrets_obj, s):
 
 def export_session(s):
     x = get_store(s)
-    return {"format": "agent_core_v2_clean_phase3b4_10", "session_id": x.get("session_id"), "gateway_budget": {"calls": int(s.get("llm_gateway_calls", 0)), "tokens": int(s.get("llm_gateway_tokens", 0))}, "messages": deepcopy(x["messages"]), "turns": deepcopy(x["turns"]), "state": x["memory"].to_dict(), "answer_context": deepcopy(x.get("answer_context") or {}), "budget": deepcopy(x["budget"]), "telemetry": snapshot(x["telemetry"]), "cache_metrics": deepcopy(x["cache_metrics"]), "errors": deepcopy(x["errors"]), "retrieval_enabled": True, "documented_answer_enabled": True, "procedural_answer_enabled": True, "production_changed": False}
+    return {"format": "agent_core_v2_clean_phase3b4_11", "session_id": x.get("session_id"), "gateway_budget": {"calls": int(s.get("llm_gateway_calls", 0)), "tokens": int(s.get("llm_gateway_tokens", 0))}, "messages": deepcopy(x["messages"]), "turns": deepcopy(x["turns"]), "state": x["memory"].to_dict(), "answer_context": deepcopy(x.get("answer_context") or {}), "budget": deepcopy(x["budget"]), "telemetry": snapshot(x["telemetry"]), "cache_metrics": deepcopy(x["cache_metrics"]), "errors": deepcopy(x["errors"]), "retrieval_enabled": True, "documented_answer_enabled": True, "procedural_answer_enabled": True, "production_changed": False}
 
 
 
