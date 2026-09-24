@@ -46,7 +46,7 @@ def _canonical_act(value):
     labels = set(_labels(value))
     if labels & {"request_capabilities", "capabilities", "capability", "capability_question", "assistant_capabilities", "meta"}:
         return "request_capabilities"
-    if labels & {"acknowledgement", "acknowledgment", "social", "greeting", "farewell", "thanks", "thank", "confirmation", "courtesy"}:
+    if labels & {"acknowledgement", "acknowledgment", "social", "social_conversation", "greeting", "farewell", "thanks", "thank", "confirmation", "courtesy"}:
         return "social"
     if labels & {"answer_to_question", "answer"}:
         return "answer_to_question"
@@ -82,7 +82,7 @@ def _canonical_intent(value, act, goal_intent=None):
 class ConversationUnderstanding:
     def __init__(self, gateway, max_tokens=300):
         self.gateway = gateway
-        self.max_tokens = max(300, min(650, int(max_tokens)))
+        self.max_tokens = max(160, min(650, int(max_tokens)))
         self.last_provider_result = {}
         self.contract_valid = False
         self.validation_error = None
@@ -122,6 +122,11 @@ class ConversationUnderstanding:
                 aliases[source] = target
 
         conversation_act = raw.get("conversation_act", raw.get("user_act"))
+        provider_labels = set(_labels(conversation_act))
+        if not raw.get("intent"):
+            if provider_labels & {"conceptual", "definition", "define", "explanation"}: raw["intent"] = "conceptual"
+            elif provider_labels & {"procedural", "procedure", "how_to", "instructions", "billing_distribution"}: raw["intent"] = "procedural"
+            elif provider_labels & {"requirements", "prerequisites", "compatibility"}: raw["intent"] = "requirements"
         act = _canonical_act(conversation_act)
         if "conversation_act" in raw:
             aliases["conversation_act"] = "user_act"

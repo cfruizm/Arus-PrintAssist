@@ -229,6 +229,36 @@ def _finalize_answer_context(result, store):
 
 def process_message(message, secrets_obj, s):
     store = get_store(s)
+    # Refresh policy defaults for existing Streamlit sessions after an incremental deployment.
+    # Usage telemetry is preserved; only stale policy values are migrated.
+    current_budget = dict(store.get("budget") or {})
+    expected_budget = BudgetPolicy.for_mode(str(current_budget.get("mode") or "normal")).to_dict()
+    if current_budget != expected_budget:
+        store["budget"] = expected_budget
+    # Refresh policy defaults for existing Streamlit sessions after an incremental deployment.
+    # Usage telemetry is preserved; only stale policy values are migrated.
+    current_budget = dict(store.get("budget") or {})
+    expected_budget = BudgetPolicy.for_mode(str(current_budget.get("mode") or "normal")).to_dict()
+    if current_budget != expected_budget:
+        store["budget"] = expected_budget
+    # Refresh policy defaults for existing Streamlit sessions after an incremental deployment.
+    # Usage telemetry is preserved; only stale policy values are migrated.
+    current_budget = dict(store.get("budget") or {})
+    expected_budget = BudgetPolicy.for_mode(str(current_budget.get("mode") or "normal")).to_dict()
+    if current_budget != expected_budget:
+        store["budget"] = expected_budget
+    # Refresh policy defaults for existing Streamlit sessions after an incremental deployment.
+    # Usage telemetry is preserved; only stale policy values are migrated.
+    current_budget = dict(store.get("budget") or {})
+    expected_budget = BudgetPolicy.for_mode(str(current_budget.get("mode") or "normal")).to_dict()
+    if current_budget != expected_budget:
+        store["budget"] = expected_budget
+    # Refresh policy defaults for existing Streamlit sessions after an incremental deployment.
+    # Usage telemetry is preserved; only stale policy values are migrated.
+    current_budget = dict(store.get("budget") or {})
+    expected_budget = BudgetPolicy.for_mode(str(current_budget.get("mode") or "normal")).to_dict()
+    if current_budget != expected_budget:
+        store["budget"] = expected_budget
     budget = BudgetPolicy(**store["budget"])
     memory_before = deepcopy(store["memory"])
     before = deepcopy(store["memory"].to_dict())
@@ -293,7 +323,7 @@ def process_message(message, secrets_obj, s):
 
 def export_session(s):
     x = get_store(s)
-    return {"format": "agent_core_v2_clean_phase3b4_11", "session_id": x.get("session_id"), "gateway_budget": {"calls": int(s.get("llm_gateway_calls", 0)), "tokens": int(s.get("llm_gateway_tokens", 0))}, "messages": deepcopy(x["messages"]), "turns": deepcopy(x["turns"]), "state": x["memory"].to_dict(), "answer_context": deepcopy(x.get("answer_context") or {}), "budget": deepcopy(x["budget"]), "telemetry": snapshot(x["telemetry"]), "cache_metrics": deepcopy(x["cache_metrics"]), "errors": deepcopy(x["errors"]), "retrieval_enabled": True, "documented_answer_enabled": True, "procedural_answer_enabled": True, "production_changed": False}
+    return {"format": "agent_core_v2_clean_phase3b4_12", "session_id": x.get("session_id"), "gateway_budget": {"calls": int(s.get("llm_gateway_calls", 0)), "tokens": int(s.get("llm_gateway_tokens", 0))}, "messages": deepcopy(x["messages"]), "turns": deepcopy(x["turns"]), "state": x["memory"].to_dict(), "answer_context": deepcopy(x.get("answer_context") or {}), "budget": deepcopy(x["budget"]), "telemetry": snapshot(x["telemetry"]), "cache_metrics": deepcopy(x["cache_metrics"]), "errors": deepcopy(x["errors"]), "retrieval_enabled": True, "documented_answer_enabled": True, "procedural_answer_enabled": True, "production_changed": False}
 
 
 

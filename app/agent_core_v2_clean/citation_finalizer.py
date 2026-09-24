@@ -2,7 +2,7 @@ from __future__ import annotations
 from dataclasses import dataclass, asdict
 import re
 
-_CITE = re.compile(r"\[(R\d+)\]")
+_CITE = re.compile(r"(?:\[|【)(R\d+)(?:\]|】)")
 _SOURCE_SECTION = re.compile(r"(?is)\n*\*\*Fuentes documentales\*\*\s*\n.*\Z")
 _SOURCE_LINE = re.compile(r"(?m)^\s*-\s*\[(R\d+)\].*$")
 
@@ -120,3 +120,6 @@ def enforce_answer_contract(payload, canonical_plan):
     elif result["documented_evidence_used"]:
         result["knowledge_mode"] = "documented_only"
     return result, audit.to_dict()
+
+
+

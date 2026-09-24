@@ -37,7 +37,11 @@ def apply_unified_evidence_verdict(retrieval,message,understanding):
  out=deepcopy(retrieval or {});candidates=_dedup(out.get("diagnostic_evidence") or out.get("generation_evidence") or out.get("evidence") or []);request_text=_request(message,understanding,out);wanted=_tokens(request_text);ordered=[_canon(x) for x in re.findall(r"[a-z0-9]+",_norm(request_text)) if _canon(x) in wanted-_OPERATION];subject_phrase=" ".join(dict.fromkeys(ordered));scored=[]
  for item in candidates:
   fit=_fit(item,wanted,subject_phrase);item["unified_evidence_fit"]={k:round(v,4) if isinstance(v,float) else v for k,v in fit.items()};scored.append((fit,item))
- intent=str((understanding or {}).get("intent") or "");scored.sort(key=lambda p:((p[0]["definition_match"] if intent=="conceptual" else p[0]["operation_match"]),p[0]["title_hit_count"],p[0]["covered_count"],p[0]["semantic_score"]),reverse=True)
+ intent=str((understanding or {}).get("intent") or ""); normalized_request=_norm(request_text);
+ if intent in {"", "unknown"}:
+  if re.search(r"\b(que es|qué es|what is|define|definir)\b", normalized_request): intent="conceptual"
+  elif re.search(r"\b(como|cómo|how|realiza|consultar|instalar|distribucion|distribución)\b", normalized_request): intent="procedural"
+ scored.sort(key=lambda p:((p[0]["definition_match"] if intent=="conceptual" else p[0]["operation_match"]),p[0]["title_hit_count"],p[0]["covered_count"],p[0]["semantic_score"]),reverse=True)
  selected=[];accepted=False;status="insufficient";mode="internal_only";reason="no_operationally_aligned_evidence";best_fit,best=scored[0] if scored else ({},None)
  if best and wanted:
   available=_tokens(best.get("title"))|_tokens(best.get("text"));targets=wanted-_OPERATION;requested_short={x for x in wanted if x in _SHORT};short_ok=not requested_short or requested_short.issubset(available);target_ratio=len(targets&available)/max(1,len(targets)) if targets else 1.0;title_direct=best_fit["title_hit_count"]>=2;content_direct=best_fit["covered_count"]>=2 and best_fit["coverage"]>=.32;semantic_support=best_fit["semantic_score"]>=.10
@@ -48,7 +52,7 @@ def apply_unified_evidence_verdict(retrieval,message,understanding):
    accepted=True;identity=_identity(best);limit=2 if intent=="conceptual" else 4 if intent in {"procedural","requirements"} else 5;selected=[i for f,i in scored if _identity(i)==identity and (intent=="conceptual" and f.get("definition_match") or intent!="conceptual" and f.get("operation_match"))][:limit];full=exact_document or best_fit["coverage"]>=.48 or len(selected)>=2;status="sufficient" if full else "partial_but_answerable";mode="documented" if full else "documented_partial";reason="direct_title_operation_match" if exact_document else "relevant_partial_documentation"
  for n,item in enumerate(selected,1):item["id"]=f"R{n}"
  verdict={"schema_version":4,"status":status,"mode":mode,"accepted":accepted,"reason":reason,"request_terms":sorted(wanted),"document_ids":list(dict.fromkeys(_identity(x) for x in selected)),"evidence_ids":[x["id"] for x in selected],"coverage":round(float(best_fit.get("coverage",0) if best else 0),4),"selected_evidence":deepcopy(selected),"rejected_count":max(0,len(candidates)-len(selected))}
- out["evidence_verdict"]=verdict;out["generation_evidence"]=deepcopy(selected);out["evidence"]=deepcopy(selected);sf=out.setdefault("semantic_fit",{});sf.update({"accepted_for_generation":accepted,"low_fit":not accepted,"generation_ids":verdict["evidence_ids"],"generation_count":len(selected),"selected_document":verdict["document_ids"][0] if verdict["document_ids"] else None,"decision_path":"unified_evidence_authority_v6_subject_granularity_token_control","canonical_status":status});return out
+ out["evidence_verdict"]=verdict;out["generation_evidence"]=deepcopy(selected);out["evidence"]=deepcopy(selected);sf=out.setdefault("semantic_fit",{});sf.update({"accepted_for_generation":accepted,"low_fit":not accepted,"generation_ids":verdict["evidence_ids"],"generation_count":len(selected),"selected_group_ids":verdict["evidence_ids"],"selected_document":verdict["document_ids"][0] if verdict["document_ids"] else None,"decision_path":"unified_evidence_authority_v7_subject_intent_sync","canonical_status":status});return out
 
 
 
