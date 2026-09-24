@@ -18,7 +18,7 @@ from .unified_evidence_authority import apply_unified_evidence_verdict
 from .response_reconciler import reconcile
 from .topic_boundary import infer_topic_boundary
 from .operational_coherence import normalize_generation_flags
-from .canonical_frame_shadow import build_shadow_frame, refresh_shadow_diagnostics, STORE_KEY as CANONICAL_FRAME_KEY
+from .canonical_frame_shadow import build_shadow_frame, enrich_shadow_frame, refresh_shadow_diagnostics, STORE_KEY as CANONICAL_FRAME_KEY, REGISTRY_KEY as CANONICAL_REGISTRY_KEY
 
 KEY = "agent_core_v2_clean_store"
 
@@ -67,6 +67,7 @@ def get_store(s):
         x.setdefault(k, {})
     x.setdefault("answer_context", {})
     x.setdefault(CANONICAL_FRAME_KEY, {})
+    x.setdefault(CANONICAL_REGISTRY_KEY, {})
     x.setdefault("cache_metrics", {})
     for k in ("hits", "calls_avoided", "tokens_avoided_estimate", "retrieval_hits", "documented_answer_hits", "procedural_answer_hits", "internal_knowledge_hits"):
         x["cache_metrics"].setdefault(k, 0)
@@ -148,6 +149,7 @@ def _attach_retrieval(result, message, store):
     except Exception as exc:
         retrieval = {"enabled": True, "ok": False, "llm_called": False, "production_changed": False, "count": 0, "evidence": [], "errors": [{"type": type(exc).__name__, "message": str(exc)}]}
     result["retrieval"] = retrieval
+    enrich_shadow_frame(store, result)
     refresh_shadow_diagnostics(result)
     result["answer"]["text"] = retrieval_summary(retrieval)
     result["answer"]["mode"] = "retrieval_diagnostic" if retrieval.get("ok") else "retrieval_error"
@@ -326,7 +328,7 @@ def process_message(message, secrets_obj, s):
 
 def export_session(s):
     x = get_store(s)
-    return {"format": "agent_core_v2_clean_phase3c1_canonical_frame_shadow", "session_id": x.get("session_id"), "gateway_budget": {"calls": int(s.get("llm_gateway_calls", 0)), "tokens": int(s.get("llm_gateway_tokens", 0))}, "messages": deepcopy(x["messages"]), "turns": deepcopy(x["turns"]), "state": x["memory"].to_dict(), "answer_context": deepcopy(x.get("answer_context") or {}), "canonical_conversation_frame": deepcopy(x.get(CANONICAL_FRAME_KEY) or {}), "canonical_shadow_enabled": True, "budget": deepcopy(x["budget"]), "telemetry": snapshot(x["telemetry"]), "cache_metrics": deepcopy(x["cache_metrics"]), "errors": deepcopy(x["errors"]), "retrieval_enabled": True, "documented_answer_enabled": True, "procedural_answer_enabled": True, "production_changed": False}
+    return {"format": "agent_core_v2_clean_phase3c1_1_frame_enrichment_topic_registry", "session_id": x.get("session_id"), "gateway_budget": {"calls": int(s.get("llm_gateway_calls", 0)), "tokens": int(s.get("llm_gateway_tokens", 0))}, "messages": deepcopy(x["messages"]), "turns": deepcopy(x["turns"]), "state": x["memory"].to_dict(), "answer_context": deepcopy(x.get("answer_context") or {}), "canonical_conversation_frame": deepcopy(x.get(CANONICAL_FRAME_KEY) or {}), "canonical_shadow_enabled": True, "canonical_topic_registry": deepcopy(x.get(CANONICAL_REGISTRY_KEY) or {}), "budget": deepcopy(x["budget"]), "telemetry": snapshot(x["telemetry"]), "cache_metrics": deepcopy(x["cache_metrics"]), "errors": deepcopy(x["errors"]), "retrieval_enabled": True, "documented_answer_enabled": True, "procedural_answer_enabled": True, "production_changed": False}
 
 
 
