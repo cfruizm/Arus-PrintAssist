@@ -188,7 +188,7 @@ def _conceptual(result, message, secrets_obj, s, budget, store):
     result.setdefault("generation_debug",{})["conceptual_call"]={"allowed":allowed,"block_reason":block_reason,"evidence_ids":verdict.get("evidence_ids") or []}
     if not allowed:return result,{"skipped":True,"reason":"conceptual_budget_block","block_reason":block_reason}
     intent = str(understanding.get("intent") or "").casefold()
-    composer = DocumentedAnswerComposer(_gateway(secrets_obj, s), 680 if intent in {"procedural","requirements"} else 360)
+    composer = DocumentedAnswerComposer(_gateway(secrets_obj, s), 680 if intent in {"procedural","requirements","troubleshooting"} else 420)
     answer = composer.compose(message, understanding, retrieval)
     payload = answer.to_dict()
     payload.update({"documented_evidence_used": answer.mode in {"documented_answer", "documented_answer_partial"}, "internal_knowledge_used": False, "knowledge_mode": "documented_only" if answer.mode in {"documented_answer", "documented_answer_partial"} else "none"})
@@ -292,6 +292,9 @@ def process_message(message, secrets_obj, s):
         result = reconcile(result, store["memory"])
         result = normalize_generation_flags(result)
         _finalize_answer_context(result, store)
+        # Commit the final documented context into the canonical topic registry.
+        enrich_shadow_frame(store, result)
+        refresh_shadow_diagnostics(result)
         result["session_metrics_after_turn"] = snapshot(store["telemetry"])
         text = result["answer"]["text"]
         store["cache_metrics"]["hits"] += 1
@@ -312,6 +315,9 @@ def process_message(message, secrets_obj, s):
             result["state_after"] = deepcopy(store["memory"].to_dict())
             result.setdefault("functional_events", []).append({"type": "degraded_understanding_memory_rollback", "reason": "provider_contract_invalid"})
         result = _attach_retrieval(result, message, store)
+        # Persist the subject resolved from authorized evidence before the next turn.
+        enrich_shadow_frame(store, result)
+        refresh_shadow_diagnostics(result)
         base = result.get("provider_trace") or {}
         contract = (result.get("understanding_contract") or {}).get("valid")
         add_result(store["telemetry"], base.get("understanding"), contract)
