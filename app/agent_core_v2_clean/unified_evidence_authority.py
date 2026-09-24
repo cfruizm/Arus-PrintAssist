@@ -76,10 +76,80 @@ def _fit(item, wanted):
         "title_hits": sorted(title_hits),
     }
 
+
+def _conceptual_selection(candidates, understanding):
+    """Authorize broad conceptual evidence by subject and claim quality, not title hits alone."""
+    u = understanding or {}
+    if str(u.get("intent") or "").casefold() != "conceptual":
+        return None
+    details = u.get("goal_updates") or {}
+    subject = u.get("canonical_subject") or details.get("subject") or ""
+    subject_terms = _tokens(subject)
+    if not subject_terms:
+        return None
+    ranked = []
+    for position, item in enumerate(candidates):
+        title = _norm(item.get("title"))
+        text = _norm(item.get("text"))
+        available = _tokens(" ".join((title, text)))
+        if not subject_terms.issubset(available):
+            continue
+        # A feature page must not define the whole product merely because its title contains it.
+        possessive_feature = bool(re.search(r"\b(?:'s|s)\s+[a-z0-9]+", title)) or " configure " in f" {title} "
+        definitional = bool(re.search(r"\b(?:is|are|es|son|consta de|consists of)\b", text)) and not possessive_feature
+        descriptive = any(marker in text for marker in (
+            "proporciona", "permite", "administra", "supervision", "gestion", "compatible",
+            "provides", "allows", "manages", "monitoring", "capabilities", "supports",
+        ))
+        family = str((item.get("metadata") or {}).get("document_family") or "").casefold()
+        overview = family in {"brochure", "overview", "requirements", "general_document"}
+        semantic = float((item.get("semantic_fit") or {}).get("score", 0.0) or 0.0)
+        if not (definitional or descriptive or overview):
+            continue
+        score = (0.45 if definitional else 0.0) + (0.30 if descriptive else 0.0) + (0.15 if overview else 0.0) + min(0.10, semantic)
+        if possessive_feature:
+            score -= 0.35
+        ranked.append((score, -position, deepcopy(item)))
+    ranked.sort(reverse=True, key=lambda row: (row[0], row[1]))
+    selected = [row[2] for row in ranked if row[0] >= 0.20][:8]
+    for index, item in enumerate(selected, 1):
+        item["id"] = f"R{index}"
+    if not selected:
+        return None
+    return {
+        "schema_version": 4,
+        "status": "sufficient",
+        "mode": "documented",
+        "accepted": True,
+        "reason": "conceptual_subject_claim_coverage",
+        "request_terms": sorted(_tokens(_request_text("", u, {}))),
+        "document_ids": list(dict.fromkeys(_identity(x) for x in selected)),
+        "evidence_ids": [x["id"] for x in selected],
+        "coverage": 1.0,
+        "selected_evidence": selected,
+        "rejected_count": max(0, len(candidates) - len(selected)),
+    }
+
 def apply_unified_evidence_verdict(retrieval, message, understanding):
     out = deepcopy(retrieval or {})
     candidates = _dedup(out.get("diagnostic_evidence") or out.get("generation_evidence") or out.get("evidence") or [])
     wanted = _tokens(_request_text(message, understanding, out))
+    conceptual = _conceptual_selection(candidates, understanding)
+    if conceptual:
+        selected = conceptual["selected_evidence"]
+        out["evidence_verdict"] = conceptual
+        out["generation_evidence"] = deepcopy(selected)
+        out["evidence"] = deepcopy(selected)
+        semantic_fit = out.setdefault("semantic_fit", {})
+        semantic_fit.update({
+            "accepted_for_generation": True,
+            "low_fit": False,
+            "generation_ids": conceptual["evidence_ids"],
+            "generation_count": len(selected),
+            "selected_document": conceptual["document_ids"][0] if conceptual["document_ids"] else None,
+            "decision_path": "unified_evidence_authority_v4_conceptual_claim_coverage",
+        })
+        return out
     scored = []
     for item in candidates:
         fit = _fit(item, wanted)
