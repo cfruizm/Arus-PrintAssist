@@ -20,5 +20,8 @@ def build_response_plan(message,u,retrieval,decision=None):
 def apply_plan(retrieval,plan):
  out=deepcopy(retrieval or {});out['response_plan']=plan.to_dict();mode=plan.response_plan['mode']
  if mode in {'documented','hybrid'}:out['generation_evidence']=deepcopy(plan.evidence_plan['selected_evidence']);out['evidence']=deepcopy(plan.evidence_plan['selected_evidence'])
- else:out['generation_evidence']=[];out['evidence']=[];out['_answer_context']={}
+ else:
+  # Keep trusted prior answer context for same-topic controlled synthesis.
+  # Only current generation evidence is withheld when the new retrieval is insufficient.
+  out['generation_evidence']=[];out['evidence']=[]
  return out
