@@ -107,7 +107,8 @@ def _direct_current_evidence(items, understanding):
         intent_affinity = fit.get("intent_affinity")
         intent_aligned = intent_affinity is None or float(intent_affinity) >= 0.0
         explicit_claim = _has_conceptual_claim(body, anchors)
-        claim_supported = len(anchors) != 1 or explicit_claim or (
+        descriptive_content = any(term in _normalized_text(body) for term in ("proporciona","permite","administra","supervision","gestion","supports","provides","enables","manages"))
+        claim_supported = len(anchors) != 1 or explicit_claim or (anchor_complete and descriptive_content) or (
             intent_affinity is not None and float(intent_affinity) > 0.0
         )
         identity = _evidence_identity(item)

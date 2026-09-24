@@ -2,7 +2,7 @@ from __future__ import annotations
 import hashlib,json,re,unicodedata
 from .models import AgentResponse
 PROMPT_VERSION="procedural_documented_v9_refinement_scope_contract"
-SYSTEM="""Eres un colega de soporte empresarial de impresión. Responde solo con la evidencia documental suministrada. Redacta una orientación operativa práctica, completa y proporcional al alcance de la pregunta en el idioma del usuario. Si el usuario pregunta por una decisión, opción, paso o dato específico dentro de un procedimiento ya tratado, responde directamente ese punto y no repitas el procedimiento completo. No afirmes que una validación fue ejecutada o verificada; formula las validaciones como acciones que el usuario debe realizar. Usa una o más secciones numeradas en Markdown con el formato **1. Título**. La evidencia puede describir pasos, requisitos, compatibilidad, comprobaciones, alternativas o límites. No inventes pasos ni completes vacíos con conocimiento interno. Conserva las relaciones lógicas de la evidencia: no conviertas alternativas en requisitos conjuntos, no sustituyas el método solicitado por otro parecido y no presentes una modalidad parcial como equivalente al objetivo. Si la evidencia describe opciones pero no el procedimiento exacto, indícalo. Cada párrafo o viñeta factual debe terminar con citas [R#]. Finaliza con **Validaciones finales** citada. No menciones el laboratorio."""
+SYSTEM="""Eres un colega de soporte empresarial de impresión. Responde solo con la evidencia documental suministrada. Redacta una orientación operativa práctica, completa y proporcional al alcance de la pregunta en el idioma del usuario. Si el usuario pregunta por una decisión, opción, paso o dato específico dentro de un procedimiento ya tratado, responde directamente ese punto y no repitas el procedimiento completo. No afirmes que una validación fue ejecutada o verificada; formula las validaciones como acciones que el usuario debe realizar. Usa una o más secciones numeradas en Markdown con el formato **1. Título**. La evidencia puede describir pasos, requisitos, compatibilidad, comprobaciones, alternativas o límites. No inventes pasos ni completes vacíos con conocimiento interno. Conserva las relaciones lógicas de la evidencia: no conviertas alternativas en requisitos conjuntos, no sustituyas el método solicitado por otro parecido y no presentes una modalidad parcial como equivalente al objetivo. Si la evidencia describe opciones pero no el procedimiento exacto, indícalo. Cada párrafo o viñeta factual debe terminar con citas [R#]. Finaliza con **Validaciones finales** citada. Antes de afirmar que una dimensión solicitada no está documentada, revisa todos los fragmentos suministrados, incluidos fragmentos de la misma página. Si algún fragmento contiene la dimensión solicitada y valores asociados, enumera esos valores y no publiques una afirmación de ausencia. No menciones el laboratorio."""
 BOILERPLATE=("aviso legal","legal notice","información restringida","restricted information","control de registros","records control","control de cambios","change control","tiempo de retención","retention period","disposición final","final disposition")
 OPERATIONAL_MARKERS=("validar","verificar","comprobar","confirmar","requisito","requiere","compatible","compatibilidad","admite","soporta","configurar","seleccionar","habilitar","instalar","conectar","sincronizar","importar","asignar","probar","actualizar","guardar","abrir","validate","verify","check","confirm","requirement","requires","required","compatible","compatibility","supports","supported","configure","configured","select","enable","enabled","install","connect","synchronize","sync","import","assign","test","update","authenticate","authentication","available","depends")
 def _clean(text):return " ".join(str(text or "").split())
@@ -30,6 +30,15 @@ def readable_sources(retrieval,cited):
  by={str(e.get("id")):e for e in retrieval.get("evidence") or []};return [f"[{rid}] {by[rid].get('title') or 'Fuente sin título'}, página {by[rid].get('page') or 'N/D'}" for rid in cited if rid in by]
 def fingerprint(message,understanding,retrieval,model=""):
  exp=retrieval.get("procedural_expansion") or {};payload={"q":" ".join(str(message).split()).casefold(),"goal":understanding.get("current_goal"),"evidence":[(e.get("id"),e.get("url") or e.get("source"),e.get("page")) for e in retrieval.get("evidence") or []],"pages":exp.get("pages"),"model":model,"prompt":PROMPT_VERSION};return hashlib.sha256(json.dumps(payload,sort_keys=True,ensure_ascii=False).encode()).hexdigest()[:24]
+
+def contradicted_absence_claim(text, question, evidence):
+ q=_norm(question);a=_norm(text)
+ absence=any(x in a for x in ("no especifica","no contiene","no detalla","no proporciona","no documenta","not specify","not contain"))
+ if not absence:return False
+ terms={x for x in re.findall(r"[a-z0-9]+",q) if len(x)>4 and x not in {"cuales","especificamente","requisitos","requirements"}}
+ body=_norm(" ".join(str(x.get("text") or "") for x in evidence))
+ return bool(terms and terms.intersection(set(re.findall(r"[a-z0-9]+",body))))
+
 class ProceduralAnswerComposer:
  def __init__(self,gateway,max_tokens=900):self.gateway=gateway;self.max_tokens=max(620,min(1100,int(max_tokens)));self.last_provider_result={};self.validation={}
  def compose(self,message,understanding,retrieval):
@@ -40,6 +49,7 @@ class ProceduralAnswerComposer:
   r=self.gateway.complete(LLMRequest([{"role":"system","content":SYSTEM},{"role":"user","content":json.dumps(payload,ensure_ascii=False,separators=(",",":"))}],"agent_core_v2_clean_procedural_answer",self.max_tokens,0.,None));self.last_provider_result=r.to_dict()
   if not r.ok:return AgentResponse("Encontré evidencia operacional, pero no pude redactar la respuesta en este turno.","procedural_provider_degraded",False)
   text=str(r.text or "").strip()
+  if contradicted_absence_claim(text,message,evidence):return AgentResponse("La síntesis generada contradijo la evidencia recuperada y no será publicada. Regenera la consulta para obtener una respuesta documentada consistente.","procedural_evidence_contradiction_guard",False,r.provider,r.model,r.usage,r.finish_reason)
   fields=(retrieval.get("query") or {}).get("fields") or {}
   details=fields.get("details") or {}
   relation=str(fields.get("topic_relation") or understanding.get("topic_relation") or "")
