@@ -18,6 +18,7 @@ from .unified_evidence_authority import apply_unified_evidence_verdict
 from .response_reconciler import reconcile
 from .topic_boundary import infer_topic_boundary
 from .operational_coherence import normalize_generation_flags
+from .canonical_frame_shadow import build_shadow_frame, refresh_shadow_diagnostics, STORE_KEY as CANONICAL_FRAME_KEY
 
 KEY = "agent_core_v2_clean_store"
 
@@ -51,7 +52,7 @@ def _context_key(message, memory):
     return "|".join((" ".join(_safe_text(message).split()).casefold(), _safe_text(memory.active_topic).strip().casefold(), _safe_text(memory.pending_goal.summary).strip().casefold()))
 
 def _artifact(result):
-    return {k: deepcopy(result.get(k)) for k in ("understanding", "understanding_contract", "goal_update_normalization", "decision", "answer", "retrieval", "documented_answer", "procedural_answer", "internal_knowledge", "procedural_recovery", "answer_context")}
+    return {k: deepcopy(result.get(k)) for k in ("understanding", "understanding_contract", "goal_update_normalization", "decision", "answer", "retrieval", "documented_answer", "procedural_answer", "internal_knowledge", "procedural_recovery", "answer_context", "canonical_conversation_frame", "canonical_divergences")}
 
 def _zero():
     return {"calls": 0, "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "provider_failed_calls": 0, "contract_failed_calls": 0, "functional_failed_calls": 0}
@@ -65,6 +66,7 @@ def get_store(s):
     for k in ("exact_turn_cache", "retrieval_cache", "documented_answer_cache", "procedural_answer_cache"):
         x.setdefault(k, {})
     x.setdefault("answer_context", {})
+    x.setdefault(CANONICAL_FRAME_KEY, {})
     x.setdefault("cache_metrics", {})
     for k in ("hits", "calls_avoided", "tokens_avoided_estimate", "retrieval_hits", "documented_answer_hits", "procedural_answer_hits", "internal_knowledge_hits"):
         x["cache_metrics"].setdefault(k, 0)
@@ -146,6 +148,7 @@ def _attach_retrieval(result, message, store):
     except Exception as exc:
         retrieval = {"enabled": True, "ok": False, "llm_called": False, "production_changed": False, "count": 0, "evidence": [], "errors": [{"type": type(exc).__name__, "message": str(exc)}]}
     result["retrieval"] = retrieval
+    refresh_shadow_diagnostics(result)
     result["answer"]["text"] = retrieval_summary(retrieval)
     result["answer"]["mode"] = "retrieval_diagnostic" if retrieval.get("ok") else "retrieval_error"
     return result
@@ -267,6 +270,7 @@ def process_message(message, secrets_obj, s):
     if cached:
         store["memory"].turn_number += 1
         result = {"input": original_message, "state_before": before, **deepcopy(cached["artifact"]), "state_after": deepcopy(store["memory"].to_dict()), "provider_trace": {"understanding": {"skipped": True, "reason": "exact_turn_cache"}, "response": {"skipped": True, "reason": "exact_turn_cache"}}, "execution": {**execution, "cache_hit": True}, "cache": {"hit": True, "type": "exact_turn"}, "production_changed": False}
+        build_shadow_frame(store, message, result)
         result, conceptual, procedural = _answers(result, message, secrets_obj, s, budget, store)
         traces = _apply_answer_traces(result, conceptual, procedural, store)
         result["turn_metrics"] = _combined_turn_metrics([], traces)
@@ -286,6 +290,7 @@ def process_message(message, secrets_obj, s):
     store["messages"].append({"role": "user", "content": message})
     try:
         result = build_agent(secrets_obj, s, budget).process(message, store["memory"])
+        build_shadow_frame(store, message, result)
         if (result.get("understanding") or {}).get("degraded"):
             store["memory"] = memory_before
             result["state_after"] = deepcopy(store["memory"].to_dict())
@@ -321,7 +326,7 @@ def process_message(message, secrets_obj, s):
 
 def export_session(s):
     x = get_store(s)
-    return {"format": "agent_core_v2_clean_phase3b4_16_continuity_validation_fix", "session_id": x.get("session_id"), "gateway_budget": {"calls": int(s.get("llm_gateway_calls", 0)), "tokens": int(s.get("llm_gateway_tokens", 0))}, "messages": deepcopy(x["messages"]), "turns": deepcopy(x["turns"]), "state": x["memory"].to_dict(), "answer_context": deepcopy(x.get("answer_context") or {}), "budget": deepcopy(x["budget"]), "telemetry": snapshot(x["telemetry"]), "cache_metrics": deepcopy(x["cache_metrics"]), "errors": deepcopy(x["errors"]), "retrieval_enabled": True, "documented_answer_enabled": True, "procedural_answer_enabled": True, "production_changed": False}
+    return {"format": "agent_core_v2_clean_phase3c1_canonical_frame_shadow", "session_id": x.get("session_id"), "gateway_budget": {"calls": int(s.get("llm_gateway_calls", 0)), "tokens": int(s.get("llm_gateway_tokens", 0))}, "messages": deepcopy(x["messages"]), "turns": deepcopy(x["turns"]), "state": x["memory"].to_dict(), "answer_context": deepcopy(x.get("answer_context") or {}), "canonical_conversation_frame": deepcopy(x.get(CANONICAL_FRAME_KEY) or {}), "canonical_shadow_enabled": True, "budget": deepcopy(x["budget"]), "telemetry": snapshot(x["telemetry"]), "cache_metrics": deepcopy(x["cache_metrics"]), "errors": deepcopy(x["errors"]), "retrieval_enabled": True, "documented_answer_enabled": True, "procedural_answer_enabled": True, "production_changed": False}
 
 
 
