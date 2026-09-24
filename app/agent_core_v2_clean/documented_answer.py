@@ -1,8 +1,8 @@
 from __future__ import annotations
 import hashlib,json,re
 from .models import AgentResponse
-PROMPT_VERSION="documented_v6_single_pass_requirements"
-SYSTEM="""Eres un colega de soporte empresarial de impresión. Responde únicamente con la evidencia documental suministrada. Usa el idioma del usuario. Sé útil, directo y natural. No inventes menús, pasos, requisitos ni funciones. Cada afirmación factual debe terminar con una cita [R#]. Si la evidencia solo permite una respuesta parcial, indícalo claramente. Para una consulta conceptual, explica qué es, para qué sirve y sus funciones documentadas. Para requisitos, sintetiza de forma completa las categorías respaldadas por toda la evidencia disponible. Resume cada categoría en una o dos viñetas y evita enumerar autoridades, endpoints o valores secundarios salvo que el usuario los solicite. Prioriza cobertura completa y concisa sobre detalle exhaustivo. En comparaciones, no recomiendes una alternativa sin cobertura equivalente de todas las opciones. No menciones procesos internos del laboratorio."""
+PROMPT_VERSION="documented_v7_goal_proportionality"
+SYSTEM="""Eres un colega de soporte empresarial de impresión. Responde únicamente con la evidencia documental suministrada. Usa el idioma del usuario. Sé útil, directo y natural. No inventes menús, pasos, requisitos ni funciones. Cada afirmación factual debe terminar con una cita [R#]. Si la evidencia solo permite una respuesta parcial, indícalo claramente. Responde exactamente al objetivo solicitado y no amplíes hacia objetivos vecinos. Si el usuario pregunta qué es algo, entrega solo una definición suficiente; no agregues para qué sirve, funciones, requisitos, arquitectura ni recomendaciones salvo que sean indispensables para definirlo o que el usuario los solicite. Para requisitos, sintetiza de forma completa las categorías respaldadas por toda la evidencia disponible. Resume cada categoría en una o dos viñetas y evita enumerar autoridades, endpoints o valores secundarios salvo que el usuario los solicite. Prioriza cobertura completa y concisa sobre detalle exhaustivo. En comparaciones, no recomiendes una alternativa sin cobertura equivalente de todas las opciones. No menciones procesos internos del laboratorio."""
 def evidence_pack(retrieval,max_items=8,max_chars=6500):
  items=[];used=0;seen=set()
  for e in retrieval.get("evidence") or []:
@@ -16,7 +16,7 @@ def evidence_pack(retrieval,max_items=8,max_chars=6500):
   if len(items)>=max_items:break
  return items
 def validate_citations(text,ids):
- cited=set(re.findall(r"(?:\[|【)\s*(R\d+)\s*(?:\]|】)",text or ""));return bool(str(text or "").strip()) and bool(cited) and cited.issubset(set(ids)),sorted(cited)
+ cited=set(re.findall(r"\[(R\d+)\]",text or ""));return bool(str(text or "").strip()) and bool(cited) and cited.issubset(set(ids)),sorted(cited)
 def answer_fingerprint(message,understanding,retrieval,model=""):
  payload={"q":" ".join(str(message).split()).casefold(),"goal":understanding.get("current_goal"),"intent":understanding.get("intent"),"retrieval":(retrieval.get("query") or {}).get("fingerprint"),"evidence":[(e.get("id"),e.get("url") or e.get("source"),e.get("page")) for e in retrieval.get("evidence") or []],"model":model,"prompt":PROMPT_VERSION};return hashlib.sha256(json.dumps(payload,sort_keys=True,ensure_ascii=False).encode()).hexdigest()[:24]
 def readable_sources(retrieval,cited_ids):
@@ -31,16 +31,10 @@ class DocumentedAnswerComposer:
   limit=680 if understanding.get("intent")=="requirements" else self.max_tokens
   r=self.gateway.complete(LLMRequest([{"role":"system","content":SYSTEM},{"role":"user","content":json.dumps(payload,ensure_ascii=False,separators=(",",":"))}],"agent_core_v2_clean_documented_answer",limit,0.,None, model_role="answer", response_format_mode="text", reasoning_effort="low"));self.last_provider_result=r.to_dict()
   if not r.ok:return AgentResponse("Encontré documentación, pero no pude redactar la respuesta en este turno. Las fuentes recuperadas se conservaron.","documented_provider_degraded",False)
-  text=str(r.text or "").strip();authorized=[str(x["id"]) for x in evidence];valid,cited=validate_citations(text,authorized);citation_recovered=False
-  if text and not cited and len(authorized)==1:
-   text=text.rstrip()+" ["+authorized[0]+"]";valid,cited=validate_citations(text,authorized);citation_recovered=valid
-  truncated=str(r.finish_reason or "").casefold() in {"length","max_tokens"};pages={str(x.get("page") or "") for x in evidence if x.get("page")};coverage=understanding.get("intent")!="requirements" or len(pages)<2 or len(cited)>=2;valid=bool(valid and coverage)
-  self.validation={"citation_recovered":citation_recovered,"citations_valid":valid,"cited_ids":cited,"finish_reason":r.finish_reason,"truncated":truncated,"published_partial":bool(valid and truncated),"requirements_coverage_valid":coverage,"evidence_pages":sorted(pages)}
+  text=str(r.text or "").strip();valid,cited=validate_citations(text,[str(x["id"]) for x in evidence]);truncated=str(r.finish_reason or "").casefold() in {"length","max_tokens"};pages={str(x.get("page") or "") for x in evidence if x.get("page")};coverage=understanding.get("intent")!="requirements" or len(pages)<2 or len(cited)>=2;valid=bool(valid and coverage)
+  self.validation={"citations_valid":valid,"cited_ids":cited,"finish_reason":r.finish_reason,"truncated":truncated,"published_partial":bool(valid and truncated),"requirements_coverage_valid":coverage,"evidence_pages":sorted(pages)}
   if not valid:return AgentResponse("Encontré documentación, pero la respuesta generada no cubrió suficientemente la evidencia o no superó la validación de citas.","documented_citation_guard",False,r.provider,r.model,r.usage,r.finish_reason)
   if truncated:text+="\n\n> Respuesta parcial: el proveedor alcanzó el límite de salida. El contenido documentado disponible se conserva; puedes pedirme continuar."
   sources=readable_sources(retrieval,cited)
   if sources:text+="\n\n**Fuentes documentales**\n"+"\n".join(f"- {x}" for x in sources)
   return AgentResponse(text,"documented_answer_partial" if truncated else "documented_answer",True,r.provider,r.model,r.usage,r.finish_reason)
-
-
-

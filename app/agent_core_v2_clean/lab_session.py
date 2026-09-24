@@ -137,6 +137,14 @@ def _attach_retrieval(result, message, store):
         # Resolve the topic boundary before semantic fit. Understanding can label a
         # referential sub-question as new_topic even when it narrows the active goal.
         boundary = infer_topic_boundary(result.get("state_before") or {}, result.get("understanding") or {})
+        canonical_topic = (canonical_frame.get("topic") or {})
+        canonical_subject = (canonical_frame.get("subject") or {}).get("value")
+        canonical_intent = (canonical_frame.get("operation") or {}).get("intent")
+        if canonical_subject and canonical_topic.get("relation") in {"same_topic", "same_topic_refinement", "same_topic_candidate"}:
+            boundary = type(boundary)("same_topic_refinement", "canonical_subject_continuity", boundary.shared_ratio, boundary.changed_dimensions, boundary.introduced_dimensions, "primary")
+            result.setdefault("understanding", {})["topic_relation"] = "same_topic"
+            if str(result["understanding"].get("intent") or "").casefold() in {"", "unknown"} and canonical_intent not in {None, "", "unknown"}:
+                result["understanding"]["intent"] = canonical_intent
         result["topic_boundary"] = boundary.to_dict()
         raw.setdefault("query", {}).setdefault("fields", {})["topic_relation"] = boundary.relation
         raw["query"]["fields"]["previous_evidence_role"] = boundary.previous_evidence_role
@@ -329,6 +337,9 @@ def process_message(message, secrets_obj, s):
         result = reconcile(result, store["memory"])
         result = normalize_generation_flags(result)
         _finalize_answer_context(result, store)
+        # Commit the terminal answer and its evidence, not the temporary retrieval diagnostic.
+        enrich_shadow_frame(store, result)
+        refresh_shadow_diagnostics(result)
         result["session_metrics_after_turn"] = snapshot(store["telemetry"])
         result["execution"] = {**execution, "cache_hit": False}
         result["cache"] = {"hit": False}

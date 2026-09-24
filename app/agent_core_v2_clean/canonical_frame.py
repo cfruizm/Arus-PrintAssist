@@ -38,7 +38,10 @@ def build_frame(message,understanding,memory,answer_context=None,previous_frame=
  stable_intent=bool(previous.value and prior_intent not in {"","unknown"} and intent==prior_intent)
  if explicit.value:subject=explicit
  elif continuity and previous.value:subject=previous
- elif relation=="new_topic" and stable_intent:subject=previous;relation="same_topic_candidate";warnings.append("runtime_new_topic_without_new_subject")
+ elif relation=="new_topic" and previous.value:
+  # An operation or intent change does not by itself replace the conversational subject.
+  # Keep it as a candidate until explicit input or authorized evidence resolves another subject.
+  subject=previous;relation="same_topic_candidate";warnings.append("runtime_new_topic_without_new_subject")
  else:subject=CanonicalSubject()
  if continuity and not subject.value:warnings.append("follow_up_without_resolved_subject")
  prior_tid=_text(_map(_map(previous_frame).get("topic")).get("topic_id"));tid=prior_tid if relation in {"same_topic","same_topic_refinement","same_topic_candidate"} and prior_tid else stable_topic_id(subject.type,subject.canonical_id or subject.value)
@@ -57,8 +60,9 @@ def _authorized(retrieval):
  return _subject(*next(iter(uniq.values())),next(iter(uniq.values()))[1],"authorized_evidence",.95) if len(uniq)==1 else CanonicalSubject()
 def enrich_frame(payload,retrieval,answer=None):
  p=dict(payload or {});s=_map(p.get("subject"));a=_authorized(retrieval);w=list(p.get("warnings") or [])
- if not _text(s.get("value")) and a.value:
-  p["subject"]=asdict(a);t=_map(p.get("topic"));t["topic_id"]=t.get("topic_id") or stable_topic_id(a.type,a.canonical_id or a.value);p["topic"]=t
+ if a.value and (not _text(s.get("value")) or _text(s.get("canonical_id") or s.get("value")).casefold()!=_text(a.canonical_id or a.value).casefold()):
+  # Current authorized evidence can resolve or replace a carried candidate subject.
+  p["subject"]=asdict(a);t=_map(p.get("topic"));t["topic_id"]=stable_topic_id(a.type,a.canonical_id or a.value);p["topic"]=t
  elif not _text(s.get("value")) and _map(retrieval).get("evidence_verdict",{}).get("accepted"):w.append("accepted_evidence_without_unambiguous_subject")
  p["warnings"]=sorted(set(w));p["phase"]="post_retrieval";return p
 def validate_frame_payload(p):
