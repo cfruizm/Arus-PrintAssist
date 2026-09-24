@@ -33,17 +33,13 @@ class LLMGateway:
         metadata=dict(getattr(exc,"metadata",{}) or {});metadata.setdefault("attempted_model",model);metadata.setdefault("status_code",getattr(exc,"status_code",None))
         return LLMResult(False,provider=provider,model=model,purpose=purpose,error_code=exc.code,error_message=str(exc),fallback_used=fallback_used,fallback_provider=fallback_provider,metadata=metadata)
     def _reserve_output(self,request):
-        if self.session is None:return request
-        now=time.time();ledger=[x for x in list(self.session.get("llm_gateway_output_ledger",[]) or []) if now-float(x.get("time",0))<60]
-        used=sum(int(x.get("tokens",0)) for x in ledger)
-        # Observed organization limit is 1000 OTPM. Keep a safety margin for concurrency.
-        cap=int(self.session.get("groq_otpm_limit",1000));safe=max(200,int(cap*0.92));available=max(0,safe-used)
-        purpose=str(request.purpose or "")
-        floor=120 if "judge" in purpose else 180 if "current_turn" in purpose else 280
-        requested=int(request.max_tokens or floor);granted=min(requested,available)
-        if granted<floor:granted=min(requested,floor)
+        purpose=str(request.purpose or "").casefold();role=str(getattr(request,"model_role","") or "").casefold()
+        if "judge" in purpose: configured=int(self.config.get("evidence_judge_max_tokens",360))
+        elif role=="orchestrator" or "understanding" in purpose or "orchestrator" in purpose: configured=int(self.config.get("orchestrator_max_tokens",220))
+        else: configured=int(self.config.get("answer_max_tokens",900))
+        requested=max(1,int(request.max_tokens or configured));granted=min(requested,configured)
         request.max_tokens=granted
-        self.session["llm_gateway_output_ledger"]=ledger
+        setattr(request,"_token_debug",{"requested_max_tokens":requested,"configured_cap":configured,"effective_max_tokens":granted,"policy":"role_cap_v2_no_rolling_clamp"})
         return request
     def _record_output(self,result):
         if self.session is None:return
@@ -54,7 +50,7 @@ class LLMGateway:
     def complete(self,request):
         self._budget();request=self._reserve_output(request);primary=self.config["provider"];primary_model=model_for(self.config,primary,request.purpose,getattr(request,"model_role",None))
         try:
-            result=self._provider(primary).complete(request,primary_model);self._record(result);self._record_output(result);return result
+            result=self._provider(primary).complete(request,primary_model);result.metadata={**dict(result.metadata or {}),"token_budget_debug":getattr(request,"_token_debug",{})};self._record(result);self._record_output(result);return result
         except LLMGatewayError as exc:
             if not (exc.recoverable and self.config["fallback_enabled"] and self.config["fallback_provider"]!=primary):
                 result=self._error_result(primary,primary_model,request.purpose,exc);self._record(result);return result
@@ -63,3 +59,6 @@ class LLMGateway:
                 result=self._provider(fallback).complete(request,fallback_model);result.fallback_used=True;result.fallback_provider=fallback;self._record(result);return result
             except LLMGatewayError as second:
                 result=self._error_result(fallback,fallback_model,request.purpose,second,True,fallback);self._record(result);return result
+
+
+

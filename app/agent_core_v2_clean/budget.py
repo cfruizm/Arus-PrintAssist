@@ -8,13 +8,13 @@ class BudgetPolicy:
     max_session_tokens:int=52000
     reserve_tokens:int=2200
     understanding_max_tokens:int=220
-    response_max_tokens:int=320
+    response_max_tokens:int=900
     @classmethod
     def for_mode(cls,mode:str):
         value=str(mode or "normal").strip().casefold()
         if value=="economy":return cls("economy",12,7000,900,180,120)
         if value=="deterministic":return cls("deterministic",0,0,0,0,0)
-        return cls("normal",60,52000,2200,350,280)
+        return cls("normal",60,52000,2200,220,900)
     def to_dict(self):return asdict(self)
     def can_call(self,telemetry,estimated_tokens:int=0):
         if self.mode=="deterministic":return False,"deterministic_mode"

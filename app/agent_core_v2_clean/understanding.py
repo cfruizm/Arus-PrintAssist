@@ -3,7 +3,7 @@ from .contracts import UNDERSTANDING_SCHEMA
 from .models import TurnUnderstanding
 from .memory import compact_context, normalize_goal_updates
 
-SYSTEM = """Semantic understanding for an enterprise printing-support assistant. Interpret only the current user turn and use memory only to resolve omitted references. Return one small complete JSON object. Never answer the user and never include response, answer, content, procedures or solutions. Distinguish social conversation, capability questions, conceptual, procedural, requirements, troubleshooting, architecture, warranty, cancellation and escalation. Do not infer intent from the previous goal when the current message is independent. current_goal may be a string or an object with summary, intent, known_details, missing_detail and status. conversation_act may be a string, list, composite label or object. Do not write markdown or commentary. Keep reasoning_summary under 20 words."""
+SYSTEM = """Semantic understanding for an enterprise printing-support assistant. Interpret the current message using memory only to resolve references. Return one complete JSON object. Distinguish social conversation, capability questions, conceptual, procedural, requirements, troubleshooting, architecture, warranty, cancellation and escalation. Do not infer intent from the previous goal when the current message is independent. current_goal may be a string or an object with summary, intent, known_details, missing_detail and status. conversation_act may be a string, list, composite label or object. Do not write markdown or commentary. Keep reasoning_summary under 20 words."""
 
 REQUIRED = {"user_act", "intent", "topic_relation", "domain_relevance", "current_goal", "goal_complete", "goal_updates", "case_updates", "needs_clarification", "clarification_target", "should_retrieve", "confidence", "reasoning_summary"}
 ALIASES = {"clarification_needed": "needs_clarification", "clarification_question": "clarification_target"}
@@ -46,7 +46,7 @@ def _canonical_act(value):
     labels = set(_labels(value))
     if labels & {"request_capabilities", "capabilities", "capability", "capability_question", "assistant_capabilities", "meta"}:
         return "request_capabilities"
-    if labels & {"acknowledgement", "acknowledgment", "social", "social_conversation", "greeting", "farewell", "thanks", "thank", "confirmation", "courtesy"}:
+    if labels & {"acknowledgement", "acknowledgment", "social", "social_conversation", "greeting", "farewell", "thanks", "thank"}:
         return "social"
     if labels & {"answer_to_question", "answer"}:
         return "answer_to_question"
@@ -97,36 +97,22 @@ class ConversationUnderstanding:
         start, end = value.find("{"), value.rfind("}")
         if start < 0 or end < start:
             raise ValueError("json_object_missing")
-        candidate = value[start:end + 1]
-        try:
-            raw = json.loads(candidate)
-        except json.JSONDecodeError:
-            marker = re.search(r',\s*"(?:response|answer|content)"\s*:', candidate)
-            if not marker:
-                raise
-            raw = json.loads(candidate[:marker.start()].rstrip() + "}")
+        raw = json.loads(value[start:end + 1])
         if not isinstance(raw, dict) or not raw:
             raise ValueError("empty_object")
 
         aliases = {}
-        for container in ("understanding", "decision", "result", "output"):
-            nested = raw.get(container)
-            if isinstance(nested, dict):
-                raw = {**raw, **nested}; raw.pop(container, None); aliases[f"container:{container}"] = "root"
-        for source, target in {"act":"conversation_act","conversation_type":"conversation_act","request_type":"intent","goal":"current_goal","retrieve":"should_retrieve","requires_retrieval":"should_retrieve"}.items():
-            if target not in raw and source in raw:
-                raw[target] = raw[source]; aliases[source] = target
         for source, target in ALIASES.items():
             if target not in raw and source in raw:
                 raw[target] = raw[source]
                 aliases[source] = target
 
         conversation_act = raw.get("conversation_act", raw.get("user_act"))
-        provider_labels = set(_labels(conversation_act))
+        labels=set(_labels(conversation_act))
         if not raw.get("intent"):
-            if provider_labels & {"conceptual", "definition", "define", "explanation"}: raw["intent"] = "conceptual"
-            elif provider_labels & {"procedural", "procedure", "how_to", "instructions", "billing_distribution"}: raw["intent"] = "procedural"
-            elif provider_labels & {"requirements", "prerequisites", "compatibility"}: raw["intent"] = "requirements"
+            if labels & {"conceptual","definition","define"}:raw["intent"]="conceptual"
+            elif labels & {"procedural","procedure","how_to","instructions","billing_distribution"}:raw["intent"]="procedural"
+            elif labels & {"requirements","prerequisites","compatibility"}:raw["intent"]="requirements"
         act = _canonical_act(conversation_act)
         if "conversation_act" in raw:
             aliases["conversation_act"] = "user_act"
@@ -189,15 +175,6 @@ class ConversationUnderstanding:
 
     def _normalize(self, understanding, memory):
         corrections = []
-        lateral = understanding.user_act in {"social", "acknowledgement", "request_capabilities"} or understanding.intent in {"social", "capabilities", "meta"}
-        if lateral:
-            understanding.user_act = "request_capabilities" if understanding.user_act == "request_capabilities" or understanding.intent in {"capabilities", "meta"} else "social"
-            understanding.intent = "capabilities" if understanding.user_act == "request_capabilities" else "social"
-            understanding.topic_relation = "independent"; understanding.should_retrieve = False; understanding.needs_clarification = False; understanding.clarification_target = None; understanding.goal_complete = False; understanding.goal_updates = {}; understanding.case_updates = []; understanding.current_goal = ""
-            corrections.append("lateral_turn_contract_enforced")
-        elif not understanding.current_goal and understanding.topic_relation in {"same_topic", "return_to_previous"}:
-            inherited = str(getattr(getattr(memory, "pending_goal", None), "summary", "") or getattr(memory, "active_topic", "") or "").strip()
-            if inherited: understanding.current_goal = inherited; corrections.append("active_goal_summary_inherited")
         if understanding.user_act == "answer_to_question" and not memory.last_assistant_question:
             understanding.user_act = "follow_up" if memory.active_topic else "new_request"
             corrections.append("answer_without_pending_question_normalized")

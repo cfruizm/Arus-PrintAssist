@@ -151,16 +151,17 @@ def _conceptual(result, message, secrets_obj, s, budget, store):
         result["documented_answer"] = {**deepcopy(cached["diagnostic"]), "cache_hit": True}
         store["cache_metrics"]["documented_answer_hits"] += 1
         return result, {"skipped": True, "reason": "documented_answer_cache"}
-    allowed, _ = budget.can_call(store["telemetry"], estimated_tokens=1100)
-    if not allowed:
-        return result, None
+    allowed, block_reason = budget.can_call(store["telemetry"], estimated_tokens=1100)
+    result.setdefault("generation_debug",{})["conceptual_call"]={"allowed":allowed,"block_reason":block_reason,"evidence_ids":verdict.get("evidence_ids") or []}
+    if not allowed:return result,{"skipped":True,"reason":"conceptual_budget_block","block_reason":block_reason}
     intent = str(understanding.get("intent") or "").casefold()
-    composer = DocumentedAnswerComposer(_gateway(secrets_obj, s), 480 if intent in {"procedural","requirements"} else 300)
+    composer = DocumentedAnswerComposer(_gateway(secrets_obj, s), 680 if intent in {"procedural","requirements"} else 360)
     answer = composer.compose(message, understanding, retrieval)
     payload = answer.to_dict()
     payload.update({"documented_evidence_used": answer.mode in {"documented_answer", "documented_answer_partial"}, "internal_knowledge_used": False, "knowledge_mode": "documented_only" if answer.mode in {"documented_answer", "documented_answer_partial"} else "none"})
     result["answer"] = payload
     diagnostic = {"enabled": True, "cache_hit": False, "prompt_version": PROMPT_VERSION, "quality_budget_preserved": True, "semantic_fit": retrieval.get("semantic_fit")}
+    diagnostic["provider_debug"]={"ok":bool((composer.last_provider_result or {}).get("ok")),"finish_reason":(composer.last_provider_result or {}).get("finish_reason"),"usage":(composer.last_provider_result or {}).get("usage"),"token_budget_debug":((composer.last_provider_result or {}).get("metadata") or {}).get("token_budget_debug")}
     result["documented_answer"] = diagnostic
     if answer.mode in {"documented_answer", "documented_answer_partial"}:
         store["memory"].pending_goal.status = "complete" if answer.mode == "documented_answer" else "partially_answered"
@@ -229,42 +230,14 @@ def _finalize_answer_context(result, store):
 
 def process_message(message, secrets_obj, s):
     store = get_store(s)
-    # Refresh policy defaults for existing Streamlit sessions after an incremental deployment.
-    # Usage telemetry is preserved; only stale policy values are migrated.
-    current_budget = dict(store.get("budget") or {})
-    expected_budget = BudgetPolicy.for_mode(str(current_budget.get("mode") or "normal")).to_dict()
-    if current_budget != expected_budget:
-        store["budget"] = expected_budget
-    # Refresh policy defaults for existing Streamlit sessions after an incremental deployment.
-    # Usage telemetry is preserved; only stale policy values are migrated.
-    current_budget = dict(store.get("budget") or {})
-    expected_budget = BudgetPolicy.for_mode(str(current_budget.get("mode") or "normal")).to_dict()
-    if current_budget != expected_budget:
-        store["budget"] = expected_budget
-    # Refresh policy defaults for existing Streamlit sessions after an incremental deployment.
-    # Usage telemetry is preserved; only stale policy values are migrated.
-    current_budget = dict(store.get("budget") or {})
-    expected_budget = BudgetPolicy.for_mode(str(current_budget.get("mode") or "normal")).to_dict()
-    if current_budget != expected_budget:
-        store["budget"] = expected_budget
-    # Refresh policy defaults for existing Streamlit sessions after an incremental deployment.
-    # Usage telemetry is preserved; only stale policy values are migrated.
-    current_budget = dict(store.get("budget") or {})
-    expected_budget = BudgetPolicy.for_mode(str(current_budget.get("mode") or "normal")).to_dict()
-    if current_budget != expected_budget:
-        store["budget"] = expected_budget
-    # Refresh policy defaults for existing Streamlit sessions after an incremental deployment.
-    # Usage telemetry is preserved; only stale policy values are migrated.
-    current_budget = dict(store.get("budget") or {})
-    expected_budget = BudgetPolicy.for_mode(str(current_budget.get("mode") or "normal")).to_dict()
-    if current_budget != expected_budget:
-        store["budget"] = expected_budget
+    previous_budget=dict(store.get("budget") or {});expected_budget=BudgetPolicy.for_mode(str(previous_budget.get("mode") or "normal")).to_dict();budget_migrated=previous_budget!=expected_budget
+    if budget_migrated:store["budget"]=expected_budget
     budget = BudgetPolicy(**store["budget"])
     memory_before = deepcopy(store["memory"])
     before = deepcopy(store["memory"].to_dict())
     key = _context_key(message, store["memory"])
     cached = store["exact_turn_cache"].get(key)
-    execution = {"mode": budget.mode, "understanding_budget": budget.understanding_max_tokens, "response_budget": budget.response_max_tokens, "model_profile": _model_profile(secrets_obj)}
+    execution = {"mode": budget.mode, "understanding_budget": budget.understanding_max_tokens, "response_budget": budget.response_max_tokens, "budget_migrated":budget_migrated, "previous_budget":previous_budget if budget_migrated else None, "model_profile": _model_profile(secrets_obj)}
     if cached:
         store["memory"].turn_number += 1
         result = {"input": message, "state_before": before, **deepcopy(cached["artifact"]), "state_after": deepcopy(store["memory"].to_dict()), "provider_trace": {"understanding": {"skipped": True, "reason": "exact_turn_cache"}, "response": {"skipped": True, "reason": "exact_turn_cache"}}, "execution": {**execution, "cache_hit": True}, "cache": {"hit": True, "type": "exact_turn"}, "production_changed": False}
@@ -294,12 +267,11 @@ def process_message(message, secrets_obj, s):
         result = _attach_retrieval(result, message, store)
         base = result.get("provider_trace") or {}
         contract = (result.get("understanding_contract") or {}).get("valid")
-        understanding_traces = _trace_list(base.get("understanding"))
-        for index, trace in enumerate(understanding_traces): add_result(store["telemetry"], trace, contract if index == len(understanding_traces)-1 else None)
+        add_result(store["telemetry"], base.get("understanding"), contract)
         add_result(store["telemetry"], base.get("response"))
         result, conceptual, procedural = _answers(result, message, secrets_obj, s, budget, store)
         traces = _apply_answer_traces(result, conceptual, procedural, store)
-        base_traces = understanding_traces + [x for x in (base.get("response"),) if x and not x.get("skipped")]
+        base_traces = [x for x in (base.get("understanding"), base.get("response")) if x and not x.get("skipped")]
         result["turn_metrics"] = _combined_turn_metrics(base_traces, traces)
         result = reconcile(result, store["memory"])
         result = normalize_generation_flags(result)
@@ -323,7 +295,7 @@ def process_message(message, secrets_obj, s):
 
 def export_session(s):
     x = get_store(s)
-    return {"format": "agent_core_v2_clean_phase3b4_12", "session_id": x.get("session_id"), "gateway_budget": {"calls": int(s.get("llm_gateway_calls", 0)), "tokens": int(s.get("llm_gateway_tokens", 0))}, "messages": deepcopy(x["messages"]), "turns": deepcopy(x["turns"]), "state": x["memory"].to_dict(), "answer_context": deepcopy(x.get("answer_context") or {}), "budget": deepcopy(x["budget"]), "telemetry": snapshot(x["telemetry"]), "cache_metrics": deepcopy(x["cache_metrics"]), "errors": deepcopy(x["errors"]), "retrieval_enabled": True, "documented_answer_enabled": True, "procedural_answer_enabled": True, "production_changed": False}
+    return {"format": "agent_core_v2_clean_phase3b4_13_debug", "session_id": x.get("session_id"), "gateway_budget": {"calls": int(s.get("llm_gateway_calls", 0)), "tokens": int(s.get("llm_gateway_tokens", 0))}, "messages": deepcopy(x["messages"]), "turns": deepcopy(x["turns"]), "state": x["memory"].to_dict(), "answer_context": deepcopy(x.get("answer_context") or {}), "budget": deepcopy(x["budget"]), "telemetry": snapshot(x["telemetry"]), "cache_metrics": deepcopy(x["cache_metrics"]), "errors": deepcopy(x["errors"]), "retrieval_enabled": True, "documented_answer_enabled": True, "procedural_answer_enabled": True, "production_changed": False}
 
 
 

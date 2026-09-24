@@ -43,14 +43,19 @@ def maybe_generate_procedural(result,message,gateway,budget,store,model=''):
   base=assess_procedural_evidence(r,intent).to_dict();base=scoped_assessment_override(r,base);result['evidence_decision']=base.get('canonical_decision')
  else:return result,None
  result,plan=plan_turn(result,message);assessment=assessment_from_plan(plan,base);result['evidence_sufficiency']=assessment;mode=plan.response_plan['mode']
+ guard=(result.get("retrieval") or {}).get("procedural_scope_guard") or {}
+ if guard.get("restricted_to_example"):
+  result["answer"]={"text":"Encontré resultados de un producto específico que no fue indicado en la consulta. Para evitar darte un procedimiento equivocado, dime en qué producto o plataforma necesitas consultar el PIN.","mode":"clarification","knowledge_used":False,"documented_evidence_used":False,"internal_knowledge_used":False,"knowledge_mode":"none"}
+  result.setdefault("generation_debug",{})["scope_clarification"]={"reason":"unrequested_product_only","rejected_document_count":guard.get("unrequested_product_evidence_count",0),"internal_knowledge_blocked":True}
+  return result,{"skipped":True,"reason":"scope_clarification_before_internal_knowledge"}
  if mode!='documented':return _internal(result,message,gateway,budget,store,model,assessment)
  r=result.get('retrieval') or {};key=procedural_fingerprint(message,u,r,model);cached=_get_cache(store,'procedural_answer_cache',key)
  if cached:result['answer']=deepcopy(cached['answer']);result['procedural_answer']={**deepcopy(cached['diagnostic']),'cache_hit':True};return result,{'skipped':True,'reason':'procedural_answer_cache'}
  allowed,reason=budget.can_call(store['telemetry'],estimated_tokens=2700)
  if not allowed:return result,{'skipped':True,'reason':'procedural_budget_block','block_reason':reason}
  c=ProceduralAnswerComposer(gateway,900);a=c.compose(message,u,r);attempts=[c.last_provider_result]
- if should_compact_retry(c.last_provider_result):compact=compact_retrieval_for_retry(r);a=c.compose(message+'\n\n'+compact_documented_instruction(),u,compact);attempts.append(c.last_provider_result);result['procedural_recovery']={'attempted':True,'mode':'ordered_full_stage_compaction','selection':compact.get('procedural_recovery_selection')}
- valid=a.mode=='procedural_documented_answer' and not should_compact_retry(c.last_provider_result);payload=a.to_dict();payload['text']=normalize_citation_groups(payload.get('text',''));payload.update({'documented_evidence_used':valid,'internal_knowledge_used':False,'knowledge_mode':'documented_only' if valid else 'none'});payload,audit=enforce_answer_contract(payload,result.get('canonical_response_plan'));result['answer']=payload;diag={'enabled':True,'cache_hit':False,'prompt_version':PROCEDURAL_PROMPT_VERSION,'assessment':assessment,'validation':deepcopy(c.validation),'retry_used':len(attempts)>1,'citation_audit':audit};result['procedural_answer']=diag
+ if should_compact_retry(c.last_provider_result) and str((c.last_provider_result or {}).get("finish_reason") or "").casefold() not in {"length","max_tokens"}:compact=compact_retrieval_for_retry(r);a=c.compose(message+'\n\n'+compact_documented_instruction(),u,compact);attempts.append(c.last_provider_result);result['procedural_recovery']={'attempted':True,'mode':'ordered_full_stage_compaction','selection':compact.get('procedural_recovery_selection')}
+ valid=a.mode=='procedural_documented_answer' and not should_compact_retry(c.last_provider_result);payload=a.to_dict();payload['text']=normalize_citation_groups(payload.get('text',''));payload.update({'documented_evidence_used':valid,'internal_knowledge_used':False,'knowledge_mode':'documented_only' if valid else 'none'});payload,audit=enforce_answer_contract(payload,result.get('canonical_response_plan'));result['answer']=payload;diag={'enabled':True,'cache_hit':False,'prompt_version':PROCEDURAL_PROMPT_VERSION,'assessment':assessment,'validation':deepcopy(c.validation),'retry_used':len(attempts)>1,'requested_max_tokens':c.max_tokens,'attempt_debug':[{'ok':bool((x or {}).get('ok')),'finish_reason':(x or {}).get('finish_reason'),'usage':(x or {}).get('usage'),'token_budget_debug':((x or {}).get('metadata') or {}).get('token_budget_debug')} for x in attempts],'citation_audit':audit};result['procedural_answer']=diag
  if valid:store['memory'].pending_goal.status='complete';result['state_after']=deepcopy(store['memory'].to_dict());store.setdefault('procedural_answer_cache',{})[key]={'answer':deepcopy(payload),'diagnostic':deepcopy(diag)};return result,attempts if len(attempts)>1 else attempts[0]
  # When evidence is sufficient, a provider failure must not be mislabeled as insufficient documentation.
  last=attempts[-1] if attempts else {}
@@ -62,3 +67,6 @@ def maybe_generate_procedural(result,message,gateway,budget,store,model=''):
   store.setdefault('procedural_answer_cache',{})[key]={'answer':deepcopy(fallback),'diagnostic':deepcopy(result['procedural_answer'])}
   return result,attempts if len(attempts)>1 else last
  return _internal(result,message,gateway,budget,store,model,assessment)
+
+
+
