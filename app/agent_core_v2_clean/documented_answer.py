@@ -16,7 +16,7 @@ def evidence_pack(retrieval,max_items=8,max_chars=6500):
   if len(items)>=max_items:break
  return items
 def validate_citations(text,ids):
- cited=set(re.findall(r"(?:\[|【)(R\d+)(?:\]|】)",text or ""));return bool(str(text or "").strip()) and bool(cited) and cited.issubset(set(ids)),sorted(cited)
+ cited=set(re.findall(r"(?:\[|【)\s*(R\d+)\s*(?:\]|】)",text or ""));return bool(str(text or "").strip()) and bool(cited) and cited.issubset(set(ids)),sorted(cited)
 def answer_fingerprint(message,understanding,retrieval,model=""):
  payload={"q":" ".join(str(message).split()).casefold(),"goal":understanding.get("current_goal"),"intent":understanding.get("intent"),"retrieval":(retrieval.get("query") or {}).get("fingerprint"),"evidence":[(e.get("id"),e.get("url") or e.get("source"),e.get("page")) for e in retrieval.get("evidence") or []],"model":model,"prompt":PROMPT_VERSION};return hashlib.sha256(json.dumps(payload,sort_keys=True,ensure_ascii=False).encode()).hexdigest()[:24]
 def readable_sources(retrieval,cited_ids):

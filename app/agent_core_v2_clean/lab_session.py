@@ -122,6 +122,21 @@ def _attach_retrieval(result, message, store):
         raw.setdefault("query", {}).setdefault("fields", {})["topic_relation"] = boundary.relation
         raw["query"]["fields"]["previous_evidence_role"] = boundary.previous_evidence_role
         answer_context = store.get("answer_context") or {}
+        bridge_debug={"attempted":False}
+        raw_quality=float(((raw.get("selection") or {}).get("quality") or 0.0))
+        current_intent=str((result.get("understanding") or {}).get("intent") or "").casefold()
+        prior_goal=str(answer_context.get("goal") or "").strip()
+        prior_mode=str(answer_context.get("answer_mode") or "")
+        if raw_quality < 0.35 and prior_goal and current_intent in {"conceptual","requirements"} and prior_mode in {"documented_answer","documented_answer_partial"}:
+            bridge_query=builder.current_only((prior_goal+" "+message).strip(),u)
+            bridge_query.fields["current_message"]=message;bridge_query.fields["context_mode"]="previous_answer_bridge";bridge_query.fields["user_act"]="follow_up";bridge_query.fields["topic_relation"]="same_topic_refinement";bridge_query.fields["previous_evidence_role"]="primary"
+            bridge_raw=ReadOnlyRetrieval(k=6).search(bridge_query,bridge_query)
+            bridge_quality=float(((bridge_raw.get("selection") or {}).get("quality") or 0.0))
+            bridge_debug={"attempted":True,"prior_goal":prior_goal,"base_quality":raw_quality,"bridge_quality":bridge_quality,"selected":bridge_quality>raw_quality}
+            if bridge_quality>raw_quality:
+                raw=bridge_raw;boundary=type(boundary)("same_topic_refinement","low_quality_contextual_bridge",boundary.shared_ratio,boundary.changed_dimensions,boundary.introduced_dimensions,"primary")
+                result["topic_boundary"]=boundary.to_dict();result["understanding"]["topic_relation"]="same_topic";result["understanding"]["user_act"]="follow_up"
+        result.setdefault("generation_debug",{})["contextual_bridge"]=bridge_debug
         if boundary.relation in {"new_topic", "same_topic_changed_scope"}:
             answer_context = {}
         retrieval = apply_semantic_fit(raw, answer_context)
@@ -306,7 +321,7 @@ def process_message(message, secrets_obj, s):
 
 def export_session(s):
     x = get_store(s)
-    return {"format": "agent_core_v2_clean_phase3b4_15_answer_scope_fix", "session_id": x.get("session_id"), "gateway_budget": {"calls": int(s.get("llm_gateway_calls", 0)), "tokens": int(s.get("llm_gateway_tokens", 0))}, "messages": deepcopy(x["messages"]), "turns": deepcopy(x["turns"]), "state": x["memory"].to_dict(), "answer_context": deepcopy(x.get("answer_context") or {}), "budget": deepcopy(x["budget"]), "telemetry": snapshot(x["telemetry"]), "cache_metrics": deepcopy(x["cache_metrics"]), "errors": deepcopy(x["errors"]), "retrieval_enabled": True, "documented_answer_enabled": True, "procedural_answer_enabled": True, "production_changed": False}
+    return {"format": "agent_core_v2_clean_phase3b4_16_continuity_validation_fix", "session_id": x.get("session_id"), "gateway_budget": {"calls": int(s.get("llm_gateway_calls", 0)), "tokens": int(s.get("llm_gateway_tokens", 0))}, "messages": deepcopy(x["messages"]), "turns": deepcopy(x["turns"]), "state": x["memory"].to_dict(), "answer_context": deepcopy(x.get("answer_context") or {}), "budget": deepcopy(x["budget"]), "telemetry": snapshot(x["telemetry"]), "cache_metrics": deepcopy(x["cache_metrics"]), "errors": deepcopy(x["errors"]), "retrieval_enabled": True, "documented_answer_enabled": True, "procedural_answer_enabled": True, "production_changed": False}
 
 
 

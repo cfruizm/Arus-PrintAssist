@@ -3,7 +3,7 @@ from .contracts import UNDERSTANDING_SCHEMA
 from .models import TurnUnderstanding
 from .memory import compact_context, normalize_goal_updates
 
-SYSTEM = """Semantic understanding for an enterprise printing-support assistant. Interpret the current message using memory only to resolve references. Return one complete JSON object. Distinguish social conversation, capability questions, conceptual, procedural, requirements, troubleshooting, architecture, warranty, cancellation and escalation. Do not infer intent from the previous goal when the current message is independent. current_goal may be a string or an object with summary, intent, known_details, missing_detail and status. conversation_act may be a string, list, composite label or object. Do not write markdown or commentary. Keep reasoning_summary under 20 words."""
+SYSTEM = """Semantic understanding for an enterprise printing-support assistant. Interpret the current message using memory to resolve references. If the current message omits its subject but asks a property, purpose, environment, detail or continuation of the active goal, classify it as follow_up with topic_relation same_topic and retain the active subject. Distinguish an actual greeting from an independent general-knowledge question outside printing support. For out-of-scope questions set domain_relevance out_of_scope, not social. Return one complete JSON object. Distinguish social conversation, capability questions, conceptual, procedural, requirements, troubleshooting, architecture, warranty, cancellation and escalation. Do not infer intent from the previous goal when the current message is independent. current_goal may be a string or an object with summary, intent, known_details, missing_detail and status. conversation_act may be a string, list, composite label or object. Do not write markdown or commentary. Keep reasoning_summary under 20 words."""
 
 REQUIRED = {"user_act", "intent", "topic_relation", "domain_relevance", "current_goal", "goal_complete", "goal_updates", "case_updates", "needs_clarification", "clarification_target", "should_retrieve", "confidence", "reasoning_summary"}
 ALIASES = {"clarification_needed": "needs_clarification", "clarification_question": "clarification_target", "classification": "conversation_act", "category": "conversation_act"}
@@ -82,6 +82,8 @@ def _canonical_intent(value, act, goal_intent=None, semantic_label=None):
         "diagnostic": "troubleshooting", "incident": "troubleshooting", "prerequisites": "requirements",
     }
     candidate = intent_aliases.get(candidate, candidate)
+    if candidate not in {"conceptual", "procedural", "troubleshooting", "requirements", "architecture", "warranty", "social", "cancel", "escalation", "unknown", "capabilities", "meta"}:
+        candidate = "unknown"
     if candidate == "unknown":
         if labels & {"conceptual", "definition", "informational", "information", "explanation"}: candidate = "conceptual"
         elif labels & {"procedural", "procedure", "how_to", "instructions", "billing_distribution"}: candidate = "procedural"
@@ -193,6 +195,12 @@ class ConversationUnderstanding:
 
     def _normalize(self, understanding, memory):
         corrections = []
+        reasoning=str(understanding.reasoning_summary or "").casefold()
+        if any(x in reasoning for x in ("unrelated to printing", "outside printing", "out of scope", "general knowledge about", "not related to printing")):
+            understanding.user_act="independent_question";understanding.intent="unknown";understanding.topic_relation="new_topic";understanding.domain_relevance="out_of_scope";understanding.should_retrieve=False
+            corrections.append("semantic_out_of_scope_repaired_after_parse")
+        elif understanding.intent in {"conceptual","procedural","troubleshooting","requirements","architecture","warranty"} and understanding.domain_relevance in {"uncertain","unknown",""}:
+            understanding.domain_relevance="in_scope";corrections.append("supported_intent_marked_in_scope")
         if understanding.user_act == "answer_to_question" and not memory.last_assistant_question:
             understanding.user_act = "follow_up" if memory.active_topic else "new_request"
             corrections.append("answer_without_pending_question_normalized")
