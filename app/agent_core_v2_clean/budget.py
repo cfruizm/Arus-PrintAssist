@@ -7,14 +7,14 @@ class BudgetPolicy:
     max_session_calls:int=60
     max_session_tokens:int=52000
     reserve_tokens:int=2200
-    understanding_max_tokens:int=220
-    response_max_tokens:int=900
+    understanding_max_tokens:int=350
+    response_max_tokens:int=280
     @classmethod
     def for_mode(cls,mode:str):
         value=str(mode or "normal").strip().casefold()
         if value=="economy":return cls("economy",12,7000,900,180,120)
         if value=="deterministic":return cls("deterministic",0,0,0,0,0)
-        return cls("normal",60,52000,2200,220,900)
+        return cls("normal",60,52000,2200,350,280)
     def to_dict(self):return asdict(self)
     def can_call(self,telemetry,estimated_tokens:int=0):
         if self.mode=="deterministic":return False,"deterministic_mode"
@@ -23,6 +23,3 @@ class BudgetPolicy:
         usable=max(0,self.max_session_tokens-self.reserve_tokens)
         if tokens+estimate>usable:return False,"session_token_budget_would_exceed_reserve"
         return True,None
-
-
-

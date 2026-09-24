@@ -22,14 +22,6 @@ def _norm(value):
     return unicodedata.normalize("NFKD", str(value or "")).encode("ascii", "ignore").decode().casefold()
 
 
-def _safe_text(value):
-    if value is None:return ""
-    if isinstance(value,str):return value
-    if isinstance(value,(int,float,bool)):return str(value)
-    if isinstance(value,dict):return " ".join(_safe_text(v) for v in value.values() if _safe_text(v))
-    if isinstance(value,(list,tuple,set)):return " ".join(_safe_text(v) for v in value if _safe_text(v))
-    return str(value)
-
 def _tokens(value):
     return {x for x in _TOKEN_RE.findall(_norm(value)) if len(x) > 2 and x not in _GENERIC}
 
@@ -42,22 +34,22 @@ def _semantic_continuation(understanding, memory):
     refinement when the underlying object/operation family remains shared.
     """
     previous = " ".join(
-        _safe_text(x) for x in [
+        x for x in [
             getattr(memory, "active_topic", None),
             getattr(getattr(memory, "pending_goal", None), "summary", None),
-            (getattr(getattr(memory, "pending_goal", None), "known_details", {}) or {}).get("subject"),
-            (getattr(getattr(memory, "pending_goal", None), "known_details", {}) or {}).get("operation"),
-        ] if _safe_text(x)
+            str((getattr(getattr(memory, "pending_goal", None), "known_details", {}) or {}).get("subject") or ""),
+            str((getattr(getattr(memory, "pending_goal", None), "known_details", {}) or {}).get("operation") or ""),
+        ] if x
     )
     current_details = dict(getattr(understanding, "goal_updates", {}) or {})
     current = " ".join(
-        _safe_text(x) for x in [
+        x for x in [
             getattr(understanding, "current_goal", None),
-            current_details.get("subject"),
-            current_details.get("operation"),
-            current_details.get("method"),
-            current_details.get("focus"),
-        ] if _safe_text(x)
+            str(current_details.get("subject") or ""),
+            str(current_details.get("operation") or ""),
+            str(current_details.get("method") or ""),
+            str(current_details.get("focus") or ""),
+        ] if x
     )
     old = _tokens(previous)
     new = _tokens(current)

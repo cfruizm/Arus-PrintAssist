@@ -23,14 +23,6 @@ class TopicBoundary:
 def _norm(value):
     return unicodedata.normalize("NFKD", str(value or "")).encode("ascii", "ignore").decode().casefold()
 
-def _safe_text(value):
-    if value is None:return ""
-    if isinstance(value,str):return value
-    if isinstance(value,(int,float,bool)):return str(value)
-    if isinstance(value,dict):return " ".join(_safe_text(v) for v in value.values() if _safe_text(v))
-    if isinstance(value,(list,tuple,set)):return " ".join(_safe_text(v) for v in value if _safe_text(v))
-    return str(value)
-
 def _tokens(value):
     return {x.casefold() for x in _TOKEN_RE.findall(_norm(value)) if len(x) > 2}
 
@@ -60,8 +52,8 @@ def infer_topic_boundary(previous_state: dict, understanding: dict) -> TopicBoun
     now = (understanding or {}).get("goal_updates") or {}
     old_goal = ((previous_state or {}).get("pending_goal") or {}).get("summary") or ""
     new_goal = (understanding or {}).get("current_goal") or ""
-    old = _tokens(old_goal) | _tokens(" ".join(_safe_text(before.get(k, "")) for k in STRUCTURAL))
-    new = _tokens(new_goal) | _tokens(" ".join(_safe_text(now.get(k, "")) for k in STRUCTURAL))
+    old = _tokens(old_goal) | _tokens(" ".join(str(before.get(k, "")) for k in STRUCTURAL))
+    new = _tokens(new_goal) | _tokens(" ".join(str(now.get(k, "")) for k in STRUCTURAL))
     shared = len(old & new) / max(1, len(old | new))
     changed = sorted(k for k in STRUCTURAL if before.get(k) and now.get(k) and _norm(before[k]) != _norm(now[k]))
     introduced = sorted(k for k in MATERIAL_SCOPE if not before.get(k) and now.get(k))

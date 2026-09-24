@@ -6,10 +6,8 @@ class NaturalResponseComposer:
  def __init__(self,gateway,max_tokens=220):self.gateway=gateway;self.max_tokens=max(120,min(300,int(max_tokens)));self.last_provider_result={}
  def compose(self,message,m,u,d):
   intent=str(u.intent or "").casefold();act=str(u.user_act or "").casefold()
-  if intent in {"meta","capabilities"} or act=="request_capabilities":return AgentResponse("Puedo explicar conceptos y productos de impresión, consultar procedimientos y requisitos respaldados por la documentación, orientar diagnósticos, comparar alternativas y preparar información para escalamiento. Cuando la documentación no sea suficiente, separo claramente la orientación general.","capabilities")
-  if intent=="social" or act in {"social","acknowledgement"}:
-   if act=="acknowledgement":return AgentResponse("Con gusto. Si necesitas revisar otro caso de impresión, aquí estoy.","social")
-   return AgentResponse("Hola. ¿Qué necesitas revisar sobre el servicio de impresión?","social")
+  if intent=="social" or act=="social":return AgentResponse("Hola. ¿Qué necesitas revisar sobre el servicio de impresión?","social")
+  if intent in {"meta","capabilities"} or act=="request_capabilities":return AgentResponse("Puedo explicar conceptos, consultar documentación, orientar procedimientos, apoyar diagnóstico de fallas y preparar información para escalamiento dentro del servicio de impresión.","capabilities")
   if d.action=="redirect_scope":return AgentResponse("Ese tema está fuera de mi alcance de soporte de impresión. Si quieres, continuamos con el caso técnico.","out_of_scope")
   if d.action=="cancel":m.pending_goal.status="inactive";return AgentResponse("Listo, cancelé el flujo actual. ¿Qué necesitas revisar ahora?","cancelled")
   if d.action=="degraded_continue":return AgentResponse("No pude interpretar este turno de forma confiable. Conservé el estado anterior sin aplicar cambios.","provider_degraded")

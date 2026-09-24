@@ -8,8 +8,6 @@ def _add(xs,v):
 def _record_user_facts(m,clean):
  for k,v in clean.items():m.fact_records[str(k)]={"key":str(k),"value":str(v),"origin":"user","status":"confirmed","turn":m.turn_number+1}
 def apply_understanding(m,u):
- lateral=u.user_act in {"social","acknowledgement","request_capabilities"} or u.intent in {"social","capabilities","meta"}
- if lateral:m.turn_number+=1;return
  if u.degraded and not u.should_retrieve:m.turn_number+=1;return
  answering=u.user_act=="answer_to_question" and bool(m.last_assistant_question)
  if not answering and u.topic_relation in {"new_topic","independent"} and not (m.support_case.status in {"diagnosing","reopened"} and u.intent in {"troubleshooting","procedural","requirements","verification"}) and u.domain_relevance=="in_scope" and m.active_topic and u.current_goal!=m.active_topic:
@@ -43,6 +41,3 @@ def apply_understanding(m,u):
     m.support_case.status="diagnosing"
  m.turn_number+=1
 def compact_context(m):return {"active_topic":m.active_topic,"pending_goal":m.pending_goal.__dict__,"confirmed_facts":list(m.fact_records.values()),"support_case":m.support_case.__dict__,"last_assistant_question":m.last_assistant_question,"summary":m.summary,"recent_topics":m.topic_history[-2:]}
-
-
-
