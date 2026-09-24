@@ -103,11 +103,15 @@ def build_agent(secrets_obj, s, budget):
     return CleanConversationalAgent(ConversationUnderstanding(g, budget.understanding_max_tokens), ConversationPolicy(), NaturalResponseComposer(g, budget.response_max_tokens))
 
 def _authorize_canonical_retrieval(result):
-    understanding=result.get("understanding") or {};decision=result.get("decision") or {}
-    if understanding.get("should_retrieve") and decision.get("action")=="diagnose":
-        decision["action"]="diagnose_with_retrieval";decision["reason"]="canonical_technical_retrieval_authorized"
-        result.setdefault("functional_events",[]).append({"type":"canonical_retrieval_authorization","severity":"info","previous_action":"diagnose"})
+    u=result.get("understanding") or {};d=result.get("decision") or {}
+    if u.get("should_retrieve") and d.get("action")=="diagnose":
+        d["action"]="diagnose_with_retrieval";d["reason"]="canonical_technical_retrieval_authorized";result.setdefault("functional_events",[]).append({"type":"canonical_retrieval_authorization","severity":"info","previous_action":"diagnose"})
     return result
+
+def _canonical_answer_context(store,result):
+    frame=result.get(CANONICAL_FRAME_KEY) or {};topic=frame.get("topic") or {};tid=str(topic.get("topic_id") or "");rel=str(topic.get("relation") or "")
+    record=(store.get(CANONICAL_REGISTRY_KEY) or {}).get(tid) or {};ctx=record.get("documented_context") or {}
+    return deepcopy(ctx) if tid and rel in {"same_topic","same_topic_refinement","same_topic_candidate"} and ctx else deepcopy(store.get("answer_context") or {})
 def _attach_retrieval(result, message, store):
     if (result.get("decision") or {}).get("action") not in {"defer_to_retrieval", "diagnose_with_retrieval"}:
         return result
@@ -119,7 +123,8 @@ def _attach_retrieval(result, message, store):
         canonical_frame = result.get(CANONICAL_FRAME_KEY) or store.get(CANONICAL_FRAME_KEY) or {}
         query = apply_canonical_query(query, canonical_frame)
         current = apply_canonical_query(current, canonical_frame)
-        result["canonical_query_authority"] = {"enabled": True, "subject": (canonical_frame.get("subject") or {}).get("value"), "topic_id": (canonical_frame.get("topic") or {}).get("topic_id")}
+        answer_context = _canonical_answer_context(store, result)
+        result["canonical_query_authority"] = {"enabled": True, "subject": (canonical_frame.get("subject") or {}).get("value"), "topic_id": (canonical_frame.get("topic") or {}).get("topic_id"), "documented_context_restored": bool(answer_context.get("cited_evidence"))}
         cached = store["retrieval_cache"].get(query.fingerprint)
         if cached:
             raw = deepcopy(cached)
@@ -135,7 +140,6 @@ def _attach_retrieval(result, message, store):
         result["topic_boundary"] = boundary.to_dict()
         raw.setdefault("query", {}).setdefault("fields", {})["topic_relation"] = boundary.relation
         raw["query"]["fields"]["previous_evidence_role"] = boundary.previous_evidence_role
-        answer_context = store.get("answer_context") or {}
         bridge_debug={"attempted":False}
         raw_quality=float(((raw.get("selection") or {}).get("quality") or 0.0))
         current_intent=str((result.get("understanding") or {}).get("intent") or "").casefold()
@@ -151,7 +155,7 @@ def _attach_retrieval(result, message, store):
                 raw=bridge_raw;boundary=type(boundary)("same_topic_refinement","low_quality_contextual_bridge",boundary.shared_ratio,boundary.changed_dimensions,boundary.introduced_dimensions,"primary")
                 result["topic_boundary"]=boundary.to_dict();result["understanding"]["topic_relation"]="same_topic";result["understanding"]["user_act"]="follow_up"
         result.setdefault("generation_debug",{})["contextual_bridge"]=bridge_debug
-        if boundary.relation in {"new_topic", "same_topic_changed_scope"}:
+        if boundary.relation in {"new_topic", "same_topic_changed_scope"} and not bool(result.get("canonical_query_authority",{}).get("documented_context_restored")):
             answer_context = {}
         retrieval = apply_semantic_fit(raw, answer_context)
         retrieval = apply_unified_evidence_verdict(retrieval, message, result.get("understanding") or {})
@@ -160,8 +164,6 @@ def _attach_retrieval(result, message, store):
     except Exception as exc:
         retrieval = {"enabled": True, "ok": False, "llm_called": False, "production_changed": False, "count": 0, "evidence": [], "errors": [{"type": type(exc).__name__, "message": str(exc)}]}
     result["retrieval"] = retrieval
-    enrich_shadow_frame(store, result)
-    refresh_shadow_diagnostics(result)
     result["answer"]["text"] = retrieval_summary(retrieval)
     result["answer"]["mode"] = "retrieval_diagnostic" if retrieval.get("ok") else "retrieval_error"
     return result
@@ -340,7 +342,7 @@ def process_message(message, secrets_obj, s):
 
 def export_session(s):
     x = get_store(s)
-    return {"format": "agent_core_v2_clean_phase3c2_canonical_query_authority", "session_id": x.get("session_id"), "gateway_budget": {"calls": int(s.get("llm_gateway_calls", 0)), "tokens": int(s.get("llm_gateway_tokens", 0))}, "messages": deepcopy(x["messages"]), "turns": deepcopy(x["turns"]), "state": x["memory"].to_dict(), "answer_context": deepcopy(x.get("answer_context") or {}), "canonical_conversation_frame": deepcopy(x.get(CANONICAL_FRAME_KEY) or {}), "canonical_shadow_enabled": True, "canonical_topic_registry": deepcopy(x.get(CANONICAL_REGISTRY_KEY) or {}), "budget": deepcopy(x["budget"]), "telemetry": snapshot(x["telemetry"]), "cache_metrics": deepcopy(x["cache_metrics"]), "errors": deepcopy(x["errors"]), "retrieval_enabled": True, "documented_answer_enabled": True, "procedural_answer_enabled": True, "production_changed": True}
+    return {"format": "agent_core_v2_clean_phase3c2_1_topic_evidence_continuity", "session_id": x.get("session_id"), "gateway_budget": {"calls": int(s.get("llm_gateway_calls", 0)), "tokens": int(s.get("llm_gateway_tokens", 0))}, "messages": deepcopy(x["messages"]), "turns": deepcopy(x["turns"]), "state": x["memory"].to_dict(), "answer_context": deepcopy(x.get("answer_context") or {}), "canonical_conversation_frame": deepcopy(x.get(CANONICAL_FRAME_KEY) or {}), "canonical_shadow_enabled": True, "canonical_topic_registry": deepcopy(x.get(CANONICAL_REGISTRY_KEY) or {}), "budget": deepcopy(x["budget"]), "telemetry": snapshot(x["telemetry"]), "cache_metrics": deepcopy(x["cache_metrics"]), "errors": deepcopy(x["errors"]), "retrieval_enabled": True, "documented_answer_enabled": True, "procedural_answer_enabled": True, "production_changed": False}
 
 
 
