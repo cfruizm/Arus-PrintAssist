@@ -6,7 +6,7 @@ from .memory import compact_context, normalize_goal_updates
 SYSTEM = """Semantic understanding for an enterprise printing-support assistant. Interpret the current message using memory only to resolve references. Return one complete JSON object. Distinguish social conversation, capability questions, conceptual, procedural, requirements, troubleshooting, architecture, warranty, cancellation and escalation. Do not infer intent from the previous goal when the current message is independent. current_goal may be a string or an object with summary, intent, known_details, missing_detail and status. conversation_act may be a string, list, composite label or object. Do not write markdown or commentary. Keep reasoning_summary under 20 words."""
 
 REQUIRED = {"user_act", "intent", "topic_relation", "domain_relevance", "current_goal", "goal_complete", "goal_updates", "case_updates", "needs_clarification", "clarification_target", "should_retrieve", "confidence", "reasoning_summary"}
-ALIASES = {"clarification_needed": "needs_clarification", "clarification_question": "clarification_target"}
+ALIASES = {"clarification_needed": "needs_clarification", "clarification_question": "clarification_target", "classification": "conversation_act", "category": "conversation_act"}
 
 
 def _text(value):
@@ -69,13 +69,25 @@ def _canonical_act(value):
     return "new_request"
 
 
-def _canonical_intent(value, act, goal_intent=None):
+def _canonical_intent(value, act, goal_intent=None, semantic_label=None):
     candidate = str(value or goal_intent or "unknown").strip().casefold()
-    allowed = {"conceptual", "procedural", "troubleshooting", "requirements", "architecture", "warranty", "social", "cancel", "escalation", "unknown", "capabilities", "meta"}
-    if act == "request_capabilities":
+    labels = set(_labels(semantic_label)) | set(_labels(candidate))
+    if act == "request_capabilities" or labels & {"capability", "capabilities", "capability_question", "assistant_capabilities"}:
         return "capabilities"
-    if act == "social":
+    if act == "social" or labels & {"social", "social_conversation", "greeting", "farewell", "thanks"}:
         return "social"
+    intent_aliases = {
+        "informational": "conceptual", "information": "conceptual", "definition": "conceptual", "explanation": "conceptual",
+        "how_to": "procedural", "procedure": "procedural", "instructions": "procedural",
+        "diagnostic": "troubleshooting", "incident": "troubleshooting", "prerequisites": "requirements",
+    }
+    candidate = intent_aliases.get(candidate, candidate)
+    if candidate == "unknown":
+        if labels & {"conceptual", "definition", "informational", "information", "explanation"}: candidate = "conceptual"
+        elif labels & {"procedural", "procedure", "how_to", "instructions", "billing_distribution"}: candidate = "procedural"
+        elif labels & {"requirements", "prerequisites", "compatibility"}: candidate = "requirements"
+        elif labels & {"troubleshooting", "diagnostic", "incident", "failure"}: candidate = "troubleshooting"
+    allowed = {"conceptual", "procedural", "troubleshooting", "requirements", "architecture", "warranty", "social", "cancel", "escalation", "unknown", "capabilities", "meta"}
     return candidate if candidate in allowed else "unknown"
 
 
@@ -107,7 +119,8 @@ class ConversationUnderstanding:
                 raw[target] = raw[source]
                 aliases[source] = target
 
-        conversation_act = raw.get("conversation_act", raw.get("user_act"))
+        semantic_label = raw.get("conversation_act", raw.get("user_act", raw.get("classification", raw.get("category"))))
+        conversation_act = semantic_label
         labels=set(_labels(conversation_act))
         if not raw.get("intent"):
             if labels & {"conceptual","definition","define"}:raw["intent"]="conceptual"
@@ -144,7 +157,7 @@ class ConversationUnderstanding:
         updates = {**goal_details, **updates}
 
         raw["user_act"] = act
-        raw["intent"] = _canonical_intent(raw.get("intent"), act, goal_intent)
+        raw["intent"] = _canonical_intent(raw.get("intent"), act, goal_intent, semantic_label)
         raw["goal_updates"] = updates
         raw.setdefault("topic_relation", "independent" if act in {"social", "request_capabilities"} else "new_topic")
         raw.setdefault("domain_relevance", "in_scope" if act in {"social", "request_capabilities"} else "uncertain")

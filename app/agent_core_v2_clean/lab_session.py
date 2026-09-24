@@ -228,7 +228,17 @@ def _finalize_answer_context(result, store):
         store["memory"].last_assistant_question = context.get("closing_question") or None
         result["state_after"] = deepcopy(store["memory"].to_dict())
 
+
+def _semantic_message(message):
+    lines=[str(x).strip() for x in str(message or "").splitlines() if str(x).strip()]
+    if len(lines)>1:
+        ui_artifacts={"mostrar más líneas","mostrar mas lineas","show more lines"}
+        lines=[line for index,line in enumerate(lines) if index==0 or line.casefold() not in ui_artifacts]
+    return "\n".join(lines).strip()
+
 def process_message(message, secrets_obj, s):
+    original_message=str(message or "")
+    message=_semantic_message(original_message)
     store = get_store(s)
     previous_budget=dict(store.get("budget") or {});expected_budget=BudgetPolicy.for_mode(str(previous_budget.get("mode") or "normal")).to_dict();budget_migrated=previous_budget!=expected_budget
     if budget_migrated:store["budget"]=expected_budget
@@ -240,7 +250,7 @@ def process_message(message, secrets_obj, s):
     execution = {"mode": budget.mode, "understanding_budget": budget.understanding_max_tokens, "response_budget": budget.response_max_tokens, "budget_migrated":budget_migrated, "previous_budget":previous_budget if budget_migrated else None, "model_profile": _model_profile(secrets_obj)}
     if cached:
         store["memory"].turn_number += 1
-        result = {"input": message, "state_before": before, **deepcopy(cached["artifact"]), "state_after": deepcopy(store["memory"].to_dict()), "provider_trace": {"understanding": {"skipped": True, "reason": "exact_turn_cache"}, "response": {"skipped": True, "reason": "exact_turn_cache"}}, "execution": {**execution, "cache_hit": True}, "cache": {"hit": True, "type": "exact_turn"}, "production_changed": False}
+        result = {"input": original_message, "state_before": before, **deepcopy(cached["artifact"]), "state_after": deepcopy(store["memory"].to_dict()), "provider_trace": {"understanding": {"skipped": True, "reason": "exact_turn_cache"}, "response": {"skipped": True, "reason": "exact_turn_cache"}}, "execution": {**execution, "cache_hit": True}, "cache": {"hit": True, "type": "exact_turn"}, "production_changed": False}
         result, conceptual, procedural = _answers(result, message, secrets_obj, s, budget, store)
         traces = _apply_answer_traces(result, conceptual, procedural, store)
         result["turn_metrics"] = _combined_turn_metrics([], traces)
@@ -288,14 +298,14 @@ def process_message(message, secrets_obj, s):
         store["memory"] = memory_before
         store["errors"].append({"turn": store["memory"].turn_number + 1, "message": message, "error_type": type(exc).__name__, "error": str(exc)})
         text = "No pude procesar este turno. El error quedó registrado."
-        result = {"input": message, "error": {"type": type(exc).__name__, "message": str(exc)}, "execution": execution, "production_changed": False}
+        result = {"input": original_message, "error": {"type": type(exc).__name__, "message": str(exc)}, "execution": execution, "production_changed": False}
     store["messages"].append({"role": "assistant", "content": text})
     store["turns"].append(result)
     return result
 
 def export_session(s):
     x = get_store(s)
-    return {"format": "agent_core_v2_clean_phase3b4_13_debug", "session_id": x.get("session_id"), "gateway_budget": {"calls": int(s.get("llm_gateway_calls", 0)), "tokens": int(s.get("llm_gateway_tokens", 0))}, "messages": deepcopy(x["messages"]), "turns": deepcopy(x["turns"]), "state": x["memory"].to_dict(), "answer_context": deepcopy(x.get("answer_context") or {}), "budget": deepcopy(x["budget"]), "telemetry": snapshot(x["telemetry"]), "cache_metrics": deepcopy(x["cache_metrics"]), "errors": deepcopy(x["errors"]), "retrieval_enabled": True, "documented_answer_enabled": True, "procedural_answer_enabled": True, "production_changed": False}
+    return {"format": "agent_core_v2_clean_phase3b4_14_understanding_hotfix", "session_id": x.get("session_id"), "gateway_budget": {"calls": int(s.get("llm_gateway_calls", 0)), "tokens": int(s.get("llm_gateway_tokens", 0))}, "messages": deepcopy(x["messages"]), "turns": deepcopy(x["turns"]), "state": x["memory"].to_dict(), "answer_context": deepcopy(x.get("answer_context") or {}), "budget": deepcopy(x["budget"]), "telemetry": snapshot(x["telemetry"]), "cache_metrics": deepcopy(x["cache_metrics"]), "errors": deepcopy(x["errors"]), "retrieval_enabled": True, "documented_answer_enabled": True, "procedural_answer_enabled": True, "production_changed": False}
 
 
 
