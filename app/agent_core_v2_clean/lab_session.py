@@ -18,7 +18,6 @@ from .unified_evidence_authority import apply_unified_evidence_verdict
 from .response_reconciler import reconcile
 from .topic_boundary import infer_topic_boundary
 from .operational_coherence import normalize_generation_flags
-from .semantic_trace_shadow import attach_semantic_trace, TRACE_VERSION
 
 KEY = "agent_core_v2_clean_store"
 
@@ -224,7 +223,7 @@ def process_message(message, secrets_obj, s):
     execution = {"mode": budget.mode, "understanding_budget": budget.understanding_max_tokens, "response_budget": budget.response_max_tokens}
     if cached:
         store["memory"].turn_number += 1
-        result = {"input": message, "state_before": before, **deepcopy(cached["artifact"]), "state_after": deepcopy(store["memory"].to_dict()), "provider_trace": {"understanding": {"skipped": True, "reason": "exact_turn_cache"}, "response": {"skipped": True, "reason": "exact_turn_cache"}}, "execution": {**execution, "cache_hit": True}, "cache": {"hit": True, "type": "exact_turn"}, "semantic_trace_shadow": {"enabled": True, "version": TRACE_VERSION, "authority": False}, "production_changed": False}
+        result = {"input": message, "state_before": before, **deepcopy(cached["artifact"]), "state_after": deepcopy(store["memory"].to_dict()), "provider_trace": {"understanding": {"skipped": True, "reason": "exact_turn_cache"}, "response": {"skipped": True, "reason": "exact_turn_cache"}}, "execution": {**execution, "cache_hit": True}, "cache": {"hit": True, "type": "exact_turn"}, "production_changed": False}
         result, conceptual, procedural = _answers(result, message, secrets_obj, s, budget, store)
         traces = _apply_answer_traces(result, conceptual, procedural, store)
         result["turn_metrics"] = _combined_turn_metrics([], traces)
@@ -273,12 +272,10 @@ def process_message(message, secrets_obj, s):
         store["errors"].append({"turn": store["memory"].turn_number + 1, "message": message, "error_type": type(exc).__name__, "error": str(exc)})
         text = "No pude procesar este turno. El error quedó registrado."
         result = {"input": message, "error": {"type": type(exc).__name__, "message": str(exc)}, "execution": execution, "production_changed": False}
-    previous_turn = store["turns"][-1] if store["turns"] else None
-    result = attach_semantic_trace(result, previous_turn)
     store["messages"].append({"role": "assistant", "content": text})
     store["turns"].append(result)
     return result
 
 def export_session(s):
     x = get_store(s)
-    return {"format": "agent_core_v2_clean_phase3b4_1_reconnected_shadow1", "session_id": x.get("session_id"), "gateway_budget": {"calls": int(s.get("llm_gateway_calls", 0)), "tokens": int(s.get("llm_gateway_tokens", 0))}, "messages": deepcopy(x["messages"]), "turns": deepcopy(x["turns"]), "state": x["memory"].to_dict(), "answer_context": deepcopy(x.get("answer_context") or {}), "budget": deepcopy(x["budget"]), "telemetry": snapshot(x["telemetry"]), "cache_metrics": deepcopy(x["cache_metrics"]), "errors": deepcopy(x["errors"]), "retrieval_enabled": True, "documented_answer_enabled": True, "procedural_answer_enabled": True, "production_changed": False}
+    return {"format": "agent_core_v2_clean_phase3b4_1_entity_frame1", "session_id": x.get("session_id"), "gateway_budget": {"calls": int(s.get("llm_gateway_calls", 0)), "tokens": int(s.get("llm_gateway_tokens", 0))}, "messages": deepcopy(x["messages"]), "turns": deepcopy(x["turns"]), "state": x["memory"].to_dict(), "answer_context": deepcopy(x.get("answer_context") or {}), "budget": deepcopy(x["budget"]), "telemetry": snapshot(x["telemetry"]), "cache_metrics": deepcopy(x["cache_metrics"]), "errors": deepcopy(x["errors"]), "retrieval_enabled": True, "documented_answer_enabled": True, "procedural_answer_enabled": True, "production_changed": False}

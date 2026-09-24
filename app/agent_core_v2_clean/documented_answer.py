@@ -24,7 +24,7 @@ def readable_sources(retrieval,cited_ids):
 class DocumentedAnswerComposer:
  def __init__(self,gateway,max_tokens=260):self.gateway=gateway;self.max_tokens=max(260,min(720,int(max_tokens)));self.last_provider_result={};self.validation={}
  def compose(self,message,understanding,retrieval):
-  evidence=evidence_pack(retrieval)
+  req=understanding.get("intent")=="requirements";evidence=evidence_pack(retrieval,16 if req else 8,14000 if req else 6500)
   if not evidence:return AgentResponse("La recuperación no contiene evidencia suficiente para responder de forma documentada.","documented_insufficient",False)
   from app.llm_gateway.models import LLMRequest
   payload={"question":message,"intent":understanding.get("intent"),"goal":understanding.get("current_goal"),"evidence":evidence}
