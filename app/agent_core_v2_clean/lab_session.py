@@ -19,6 +19,7 @@ from .response_reconciler import reconcile
 from .topic_boundary import infer_topic_boundary
 from .operational_coherence import normalize_generation_flags
 from .canonical_frame_shadow import build_shadow_frame, enrich_shadow_frame, refresh_shadow_diagnostics, STORE_KEY as CANONICAL_FRAME_KEY, REGISTRY_KEY as CANONICAL_REGISTRY_KEY
+from .canonical_query import apply_canonical_query
 
 KEY = "agent_core_v2_clean_store"
 
@@ -52,7 +53,7 @@ def _context_key(message, memory):
     return "|".join((" ".join(_safe_text(message).split()).casefold(), _safe_text(memory.active_topic).strip().casefold(), _safe_text(memory.pending_goal.summary).strip().casefold()))
 
 def _artifact(result):
-    return {k: deepcopy(result.get(k)) for k in ("understanding", "understanding_contract", "goal_update_normalization", "decision", "answer", "retrieval", "documented_answer", "procedural_answer", "internal_knowledge", "procedural_recovery", "answer_context", "canonical_conversation_frame", "canonical_divergences")}
+    return {k: deepcopy(result.get(k)) for k in ("understanding", "understanding_contract", "goal_update_normalization", "decision", "answer", "retrieval", "documented_answer", "procedural_answer", "internal_knowledge", "procedural_recovery", "answer_context", "canonical_conversation_frame", "canonical_divergences", "canonical_query_authority")}
 
 def _zero():
     return {"calls": 0, "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "provider_failed_calls": 0, "contract_failed_calls": 0, "functional_failed_calls": 0}
@@ -101,6 +102,12 @@ def build_agent(secrets_obj, s, budget):
     g = _gateway(secrets_obj, s)
     return CleanConversationalAgent(ConversationUnderstanding(g, budget.understanding_max_tokens), ConversationPolicy(), NaturalResponseComposer(g, budget.response_max_tokens))
 
+def _authorize_canonical_retrieval(result):
+    understanding=result.get("understanding") or {};decision=result.get("decision") or {}
+    if understanding.get("should_retrieve") and decision.get("action")=="diagnose":
+        decision["action"]="diagnose_with_retrieval";decision["reason"]="canonical_technical_retrieval_authorized"
+        result.setdefault("functional_events",[]).append({"type":"canonical_retrieval_authorization","severity":"info","previous_action":"diagnose"})
+    return result
 def _attach_retrieval(result, message, store):
     if (result.get("decision") or {}).get("action") not in {"defer_to_retrieval", "diagnose_with_retrieval"}:
         return result
@@ -109,6 +116,10 @@ def _attach_retrieval(result, message, store):
         builder = RetrievalQueryBuilder()
         query = builder.build(message, store["memory"], u)
         current = builder.current_only(message, u)
+        canonical_frame = result.get(CANONICAL_FRAME_KEY) or store.get(CANONICAL_FRAME_KEY) or {}
+        query = apply_canonical_query(query, canonical_frame)
+        current = apply_canonical_query(current, canonical_frame)
+        result["canonical_query_authority"] = {"enabled": True, "subject": (canonical_frame.get("subject") or {}).get("value"), "topic_id": (canonical_frame.get("topic") or {}).get("topic_id")}
         cached = store["retrieval_cache"].get(query.fingerprint)
         if cached:
             raw = deepcopy(cached)
@@ -292,6 +303,7 @@ def process_message(message, secrets_obj, s):
     store["messages"].append({"role": "user", "content": message})
     try:
         result = build_agent(secrets_obj, s, budget).process(message, store["memory"])
+        result = _authorize_canonical_retrieval(result)
         build_shadow_frame(store, message, result)
         if (result.get("understanding") or {}).get("degraded"):
             store["memory"] = memory_before
@@ -328,7 +340,7 @@ def process_message(message, secrets_obj, s):
 
 def export_session(s):
     x = get_store(s)
-    return {"format": "agent_core_v2_clean_phase3c1_1_frame_enrichment_topic_registry", "session_id": x.get("session_id"), "gateway_budget": {"calls": int(s.get("llm_gateway_calls", 0)), "tokens": int(s.get("llm_gateway_tokens", 0))}, "messages": deepcopy(x["messages"]), "turns": deepcopy(x["turns"]), "state": x["memory"].to_dict(), "answer_context": deepcopy(x.get("answer_context") or {}), "canonical_conversation_frame": deepcopy(x.get(CANONICAL_FRAME_KEY) or {}), "canonical_shadow_enabled": True, "canonical_topic_registry": deepcopy(x.get(CANONICAL_REGISTRY_KEY) or {}), "budget": deepcopy(x["budget"]), "telemetry": snapshot(x["telemetry"]), "cache_metrics": deepcopy(x["cache_metrics"]), "errors": deepcopy(x["errors"]), "retrieval_enabled": True, "documented_answer_enabled": True, "procedural_answer_enabled": True, "production_changed": False}
+    return {"format": "agent_core_v2_clean_phase3c2_canonical_query_authority", "session_id": x.get("session_id"), "gateway_budget": {"calls": int(s.get("llm_gateway_calls", 0)), "tokens": int(s.get("llm_gateway_tokens", 0))}, "messages": deepcopy(x["messages"]), "turns": deepcopy(x["turns"]), "state": x["memory"].to_dict(), "answer_context": deepcopy(x.get("answer_context") or {}), "canonical_conversation_frame": deepcopy(x.get(CANONICAL_FRAME_KEY) or {}), "canonical_shadow_enabled": True, "canonical_topic_registry": deepcopy(x.get(CANONICAL_REGISTRY_KEY) or {}), "budget": deepcopy(x["budget"]), "telemetry": snapshot(x["telemetry"]), "cache_metrics": deepcopy(x["cache_metrics"]), "errors": deepcopy(x["errors"]), "retrieval_enabled": True, "documented_answer_enabled": True, "procedural_answer_enabled": True, "production_changed": True}
 
 
 

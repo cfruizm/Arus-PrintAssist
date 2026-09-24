@@ -93,7 +93,9 @@ def build_frame(message,understanding,memory,answer_context=None,previous_frame=
     if relation not in VALID_RELATIONS:warnings.append("noncanonical_topic_relation");relation="same_topic" if continuity else "new_topic"
     previous_topic=_text(_mapping(_mapping(previous_frame).get("topic")).get("topic_id"))
     topic_id=previous_topic if relation in {"same_topic","same_topic_refinement","same_topic_candidate"} and previous_topic else stable_topic_id(subject.type,subject.canonical_id or subject.value)
-    operation=_first(u.get("current_goal"),message);intent=_text(u.get("intent")) or _text(pending.get("intent")) or "unknown"
+    operation=_first(u.get("current_goal"),message)
+    runtime_intent=_text(u.get("intent"));pending_intent=_text(pending.get("intent"));prior_intent=_text(_mapping(_mapping(previous_frame).get("operation")).get("intent"))
+    intent=runtime_intent if runtime_intent and runtime_intent!="unknown" else pending_intent if pending_intent and pending_intent!="unknown" else prior_intent if prior_intent and prior_intent!="unknown" else "unknown"
     case=_mapping(m.get("support_case"))
     if bool(u.get("should_retrieve")) and intent=="unknown":warnings.append("technical_intent_unresolved")
     if bool(u.get("should_retrieve")) and not subject.value:warnings.append("retrieval_without_subject")
