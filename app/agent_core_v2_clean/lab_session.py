@@ -176,9 +176,10 @@ def _answers(result, message, secrets_obj, s, budget, store):
     retrieval=result.get("retrieval") or {};verdict=retrieval.get("evidence_verdict") or {}
     if verdict.get("accepted") and retrieval.get("generation_evidence"):
         result,trace=_conceptual(result,message,secrets_obj,s,budget,store)
-        if str((result.get("answer") or {}).get("mode") or "") in {"documented_answer","documented_answer_partial"}:
-            result.setdefault("functional_events",[]).append({"type":"terminal_answer_arbitration","winner":"single_documented_composer","suppressed":"procedural_composer","reason":"authorized_evidence_single_generation"})
-            return result,trace,{"skipped":True,"reason":"authorized_documented_answer_is_terminal"}
+        provider_ok=bool((trace or {}).get("ok")) if isinstance(trace,dict) else False
+        if str((result.get("answer") or {}).get("mode") or "") in {"documented_answer","documented_answer_partial"} or provider_ok:
+            result.setdefault("functional_events",[]).append({"type":"terminal_answer_arbitration","winner":"single_documented_composer","suppressed":"procedural_composer","reason":"documented_provider_completed" if provider_ok else "authorized_evidence_single_generation"})
+            return result,trace,{"skipped":True,"reason":"documented_composer_is_terminal"}
     result,trace=maybe_generate_procedural(result,message,_gateway(secrets_obj,s),budget,store,_model_profile(secrets_obj).get("answer_model", ""))
     return result,{"skipped":True,"reason":"no_terminal_documented_answer"},trace
 
@@ -305,7 +306,7 @@ def process_message(message, secrets_obj, s):
 
 def export_session(s):
     x = get_store(s)
-    return {"format": "agent_core_v2_clean_phase3b4_14_understanding_hotfix", "session_id": x.get("session_id"), "gateway_budget": {"calls": int(s.get("llm_gateway_calls", 0)), "tokens": int(s.get("llm_gateway_tokens", 0))}, "messages": deepcopy(x["messages"]), "turns": deepcopy(x["turns"]), "state": x["memory"].to_dict(), "answer_context": deepcopy(x.get("answer_context") or {}), "budget": deepcopy(x["budget"]), "telemetry": snapshot(x["telemetry"]), "cache_metrics": deepcopy(x["cache_metrics"]), "errors": deepcopy(x["errors"]), "retrieval_enabled": True, "documented_answer_enabled": True, "procedural_answer_enabled": True, "production_changed": False}
+    return {"format": "agent_core_v2_clean_phase3b4_15_answer_scope_fix", "session_id": x.get("session_id"), "gateway_budget": {"calls": int(s.get("llm_gateway_calls", 0)), "tokens": int(s.get("llm_gateway_tokens", 0))}, "messages": deepcopy(x["messages"]), "turns": deepcopy(x["turns"]), "state": x["memory"].to_dict(), "answer_context": deepcopy(x.get("answer_context") or {}), "budget": deepcopy(x["budget"]), "telemetry": snapshot(x["telemetry"]), "cache_metrics": deepcopy(x["cache_metrics"]), "errors": deepcopy(x["errors"]), "retrieval_enabled": True, "documented_answer_enabled": True, "procedural_answer_enabled": True, "production_changed": False}
 
 
 

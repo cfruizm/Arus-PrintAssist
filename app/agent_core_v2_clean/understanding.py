@@ -159,6 +159,11 @@ class ConversationUnderstanding:
         raw["user_act"] = act
         raw["intent"] = _canonical_intent(raw.get("intent"), act, goal_intent, semantic_label)
         raw["goal_updates"] = updates
+        reasoning=str(raw.get("reasoning_summary") or "").casefold()
+        out_of_scope_signal=any(x in reasoning for x in ("unrelated to printing", "outside printing", "out of scope", "general knowledge about", "not related to printing"))
+        if act=="social" and out_of_scope_signal:
+            act="independent_question";raw["user_act"]=act;raw["intent"]="unknown";raw["domain_relevance"]="out_of_scope";raw["should_retrieve"]=False
+            self.normalization.setdefault("structural_corrections",[]).append("social_label_repaired_to_out_of_scope")
         raw.setdefault("topic_relation", "independent" if act in {"social", "request_capabilities"} else "new_topic")
         raw.setdefault("domain_relevance", "in_scope" if act in {"social", "request_capabilities"} else "uncertain")
         raw.setdefault("current_goal", "")
@@ -221,6 +226,7 @@ class ConversationUnderstanding:
         if first.ok:
             try:
                 parsed = self._parse(first.text)
+                if parsed.intent not in {"social","capabilities","meta","cancel"} and not str(parsed.current_goal or "").strip(): parsed.current_goal=" ".join(str(message or "").split())
                 self.contract_valid = True
                 return self._normalize(parsed, memory)
             except Exception as exc:
@@ -234,6 +240,7 @@ class ConversationUnderstanding:
         if retry.ok:
             try:
                 parsed = self._parse(retry.text)
+                if parsed.intent not in {"social","capabilities","meta","cancel"} and not str(parsed.current_goal or "").strip(): parsed.current_goal=" ".join(str(message or "").split())
                 self.contract_valid = True
                 self.normalization["repair_succeeded"] = True
                 return self._normalize(parsed, memory)
