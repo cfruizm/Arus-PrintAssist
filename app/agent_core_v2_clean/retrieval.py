@@ -65,7 +65,7 @@ def _expand_procedure(query,evidence,k=8):
   key=(_identity(x),_page(x),hashlib.sha256(str(x.get("text") or "").casefold().encode()).hexdigest()[:12])
   if key not in seen:seen.add(key);merged.append(x)
  same=[x for x in merged if _identity(x)==source];same.sort(key=_page)
- selected=same[:8] if same else evidence
+ selected=same[:k] if same else evidence[:k]
  for i,x in enumerate(selected,1):x["id"]=f"R{i}"
  pages=[x.get("page") for x in selected if x.get("page")]
  return selected,{"enabled":True,"attempted":True,"ok":bool(raw.get("ok")),"llm_called":False,"adapter":raw.get("adapter"),"seed_document":source,"seed_page":seed.get("page"),"pages":pages,"count":len(selected),"ordered":True,"same_document_only":all(_identity(x)==source for x in selected),"errors":raw.get("errors") or [],"generation_enabled":False}
@@ -89,7 +89,8 @@ class ReadOnlyRetrieval:
     for item in matched:
      key=(_identity(item),item.get("page"),str(item.get("text") or "")[:240])
      if key not in seen:seen.add(key);seed.append(item)
-    evidence,expansion=_expand_procedure(variants[0],seed,18)
+    expansion_query=". ".join(dict.fromkeys(x for x in [str(fields.get("current_message") or ""),str(fields.get("goal") or ""),str(subject or "")] if x))
+    evidence,expansion=_expand_procedure(expansion_query,seed,24)
     groups={}
     for x in evidence:
      identity=_identity(x);g=groups.setdefault(identity,{"identity":identity,"title":x["title"],"pages":[],"chunks":0});g["chunks"]+=1

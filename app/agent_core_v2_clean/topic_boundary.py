@@ -6,7 +6,7 @@ import unicodedata
 _TOKEN_RE = re.compile(r"[\wáéíóúüñ]+", re.I)
 STRUCTURAL = {"operation", "subject", "platform", "product", "component", "device", "scope"}
 _OPERATION_GENERIC = {"explicar", "procedimiento", "realizar", "consultar", "actualizar", "configurar", "impresora", "impresion", "usuario", "como", "para", "del", "una", "the", "how", "printer", "user"}
-MATERIAL_SCOPE = {"platform", "product", "component", "device", "scope"}
+MATERIAL_SCOPE = {"subject", "platform", "product", "component", "device", "scope"}
 _REFERENTIAL_ACTS = {"request_elaboration", "answer", "confirmation", "correction", "continue"}
 _REFINEMENT_MARKERS = {"paso", "parte", "opcion", "campo", "despues", "antes", "siguiente", "donde", "cual", "cuando", "como", "porque", "eso", "esa", "ese", "esto", "esta", "that", "this", "it", "step", "option", "field", "next", "after", "before", "where", "which"}
 
@@ -70,6 +70,8 @@ def infer_topic_boundary(previous_state: dict, understanding: dict) -> TopicBoun
     if material_operation:
         changed = sorted(set(changed) | {"operation"})
         return TopicBoundary("new_topic", "material_operation_changed", round(shared, 3), changed, introduced, "none")
+    if "subject" in changed and old_subject and new_subject and old_subject != new_subject:
+        return TopicBoundary("same_topic_changed_scope", "explicit_subject_changed", round(shared, 3), changed, introduced, "comparison_only")
     if _is_refinement(previous_state, understanding, old, new, changed, introduced):
         return TopicBoundary("same_topic_refinement", "referential_or_contained_goal_refinement", round(shared, 3), changed, introduced, "primary")
     explicit_new = (understanding or {}).get("topic_relation") == "new_topic"
