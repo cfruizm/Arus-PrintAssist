@@ -35,20 +35,6 @@ def _internal(result,message,gateway,budget,store,model,assessment):
  return result,c.last_provider_result
 def maybe_generate_procedural(result,message,gateway,budget,store,model=''):
  result=_boundary(result,store);result=enrich_understanding(result)
- u=result.get('understanding') or {}
- if u.get('domain_relevance')=='out_of_scope':
-  text=(
-   'Esta consulta está fuera del alcance de este asistente, que está especializado en soporte y operación de servicios de impresión. '
-   'No utilizaré la documentación técnica ni conocimiento general para responderla. '
-   'Puedo ayudarte con una consulta relacionada con impresión o indicarte qué información técnica necesitas recopilar.'
-  )
-  result['answer']={'text':text,'mode':'scope_boundary','knowledge_used':False,'documented_evidence_used':False,'internal_knowledge_used':False,'knowledge_mode':'none'}
-  result['retrieval']={'enabled':False,'skipped_reason':'out_of_scope_boundary'}
-  result['internal_knowledge']={'enabled':False,'skipped_reason':'out_of_scope_boundary'}
-  result.setdefault('functional_events',[]).append({'type':'scope_boundary','reason':'out_of_scope','internal_knowledge_suppressed':True})
-  store['memory'].pending_goal.status='complete'
-  result['state_after']=deepcopy(store['memory'].to_dict())
-  return result,{'skipped':True,'reason':'out_of_scope_boundary'}
  if (result.get('decision') or {}).get('action') not in {'defer_to_retrieval','diagnose_with_retrieval'}:return result,{'skipped':True,'reason':'decision_does_not_authorize_retrieval'}
  u=result.get('understanding') or {};intent=u.get('intent');r=result.get('retrieval') or {}
  if intent=='conceptual':b=result.get('topic_boundary') or {'relation':u.get('topic_relation'),'changed_dimensions':[]};r=prepare_conceptual_retrieval(r,b,u);result['retrieval']=r;base=conceptual_assessment(r);result['evidence_decision']=base['canonical_decision']
