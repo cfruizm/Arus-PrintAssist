@@ -184,7 +184,7 @@ def apply_unified_evidence_verdict(retrieval, message, understanding):
         if procedural and best_fit["title_hit_count"]==0:content_authorized=best_fit["covered_count"]>=3 and best_fit["coverage"]>=0.6 and best_fit["semantic_score"]>=0.40
         # Two independent lexical anchors plus target compatibility are enough for
         # exact operational documents even when OCR lowers the semantic score.
-        exact_support=exact_document and len(candidates)>=2
+        exact_support=exact_document and len(candidates)>=2 and target_ok
         accepted = target_ok and (direct_title or content_authorized or exact_support)
         if accepted:
             identity = _identity(best)
