@@ -172,9 +172,8 @@ def prepare_conceptual_retrieval(retrieval: dict, boundary, understanding: dict 
     previous_context = clean.get("_answer_context") or {}
     current_anchors = _concept_anchors(understanding)
     previous_anchors = _tokens(previous_context.get("goal"))
-    # Goal wording changes (definition -> capabilities -> purpose) are refinements,
-    # not subject changes. Only the canonical topic boundary may declare a subject shift.
-    inferred_subject_shift = False
+    inferred_subject_shift = bool(previous_anchors and current_anchors and current_anchors != previous_anchors)
+    subject_shift = subject_shift or inferred_subject_shift
     if new_topic:
         clean["_answer_context"] = {}
         context_role = "none"
