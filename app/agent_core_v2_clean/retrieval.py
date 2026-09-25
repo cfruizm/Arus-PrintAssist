@@ -80,7 +80,7 @@ class ReadOnlyRetrieval:
   if identifiers and variants:
    attempts=[];matched=[];raw_last={}
    for variant in variants:
-    raw=self.retrieve_fn(variant,max(self.k,12)) or {};raw_last=raw;rows=self._normalize(raw);hits=exact_matches(rows,identifiers);attempts.append({"mode":"exact_document_identifier","query_text":variant,"count":len(rows),"exact_match_count":len(hits)})
+    raw=self.retrieve_fn(variant,max(self.k,12)) or {};raw_last=raw;rows=self._normalize(raw);hits=exact_matches(rows,identifiers);attempts.append({"mode":"exact_document_identifier","query_text":variant,"count":len(rows),"exact_match_count":len(hits),"titles":[x.get("title") for x in rows[:5]],"sources":[x.get("source") for x in rows[:5]]})
     matched.extend(hits)
     if hits:break
    if matched:
@@ -95,6 +95,7 @@ class ReadOnlyRetrieval:
      identity=_identity(x);g=groups.setdefault(identity,{"identity":identity,"title":x["title"],"pages":[],"chunks":0});g["chunks"]+=1
      if x["page"] and x["page"] not in g["pages"]:g["pages"].append(x["page"])
     return {"enabled":True,"llm_called":False,"production_changed":False,"query":built.to_dict(),"ok":True,"adapter":raw_last.get("adapter"),"count":len(evidence),"evidence":evidence,"document_groups":list(groups.values()),"errors":[],"diagnostic_only":True,"selection":{"chosen_mode":"exact_document_identifier","quality":1.0,"attempts":attempts,"context_contamination_avoided":True,"exact_identifier_match":True,"matched_identifiers":identifiers},"procedural_expansion":expansion,"exact_document_match":{"matched":True,"identifiers":identifiers,"source":_identity(evidence[0]) if evidence else None}}
+   return {"enabled":True,"llm_called":False,"production_changed":False,"query":built.to_dict(),"ok":bool(raw_last.get("ok")),"adapter":raw_last.get("adapter"),"count":0,"evidence":[],"document_groups":[],"errors":raw_last.get("errors") or [],"diagnostic_only":True,"selection":{"chosen_mode":"exact_document_identifier","quality":0.0,"attempts":attempts,"context_contamination_avoided":True,"exact_identifier_match":False,"matched_identifiers":identifiers},"procedural_expansion":{"enabled":False,"reason":"exact_document_not_found","attempted":False},"exact_document_match":{"matched":False,"identifiers":identifiers,"source":None}}
   preferred_attempt=None
   if current_only is not None and preferred_sources:
    try:

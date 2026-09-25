@@ -32,11 +32,10 @@ def _tokens(value):
     return out
 
 def _stems(values):
-    out=set()
-    for value in values or set():
-        value=str(value)
-        out.add(value[:5] if len(value)>=6 else value)
-    return out
+ out=set()
+ for value in values or set():
+  value=str(value);out.add(value[:5] if len(value)>=6 else value)
+ return out
 
 def _identity(item):
     return str(item.get("url") or item.get("source") or (item.get("metadata") or {}).get("canonical_url") or item.get("title") or "")
@@ -172,19 +171,20 @@ def apply_unified_evidence_verdict(retrieval, message, understanding):
     status, mode, reason = "insufficient", "internal_only", "no_operationally_aligned_evidence"
     best_fit, best = scored[0] if scored else ({}, None)
     if best and wanted:
-        subject_terms = _tokens((understanding or {}).get("canonical_subject") or ((understanding or {}).get("goal_updates") or {}).get("subject") or "")
-        request_shell={"provide","give","show","tell","official","documented","detailed","detail","procedure","please","user","same","dame","obtener","obtain","quiero","conocer","documentado","documentada","documentadas","cuales","son","final","finales","informacion","sobre","explicar","gracias","pero","referia"}
-        target_terms = wanted - subject_terms - _OPERATION - request_shell
-        available = _tokens(best.get("title")) | _tokens(best.get("text"))
-        target_ok = not target_terms or bool(target_terms & available) or bool(_stems(target_terms) & _stems(available))
+        subject_terms=_tokens((understanding or {}).get("canonical_subject") or ((understanding or {}).get("goal_updates") or {}).get("subject") or "")
+        shell={"provide","give","show","tell","official","documented","detailed","detail","procedure","please","user","same","dame","obtener","obtain","quiero","conocer","documentado","documentada","documentadas","cuales","son","final","finales","informacion","sobre","explicar","gracias","pero","referia","usar","utilizar"}
+        target_terms=wanted-subject_terms-_OPERATION-shell
+        available=_tokens(best.get("title"))|_tokens(best.get("text"))
+        target_ok=not target_terms or bool(target_terms&available) or bool(_stems(target_terms)&_stems(available))
         exact_document=bool((out.get("exact_document_match") or {}).get("matched"))
         direct_title = best_fit["title_hit_count"] >= 2
         direct_content = best_fit["covered_count"] >= 2 and best_fit["coverage"] >= 0.4
         semantic_support = best_fit["semantic_score"] >= 0.15
         # Two independent lexical anchors plus target compatibility are enough for
         # exact operational documents even when OCR lowers the semantic score.
-        exact_procedure_support=exact_document and target_ok and len(candidates)>=2
+        exact_procedure_support=exact_document and len(candidates)>=2 and (target_ok or str((understanding or {}).get("reference_relation") or "")=="corrected_subject")
         accepted = target_ok and (direct_title or (direct_content and semantic_support) or exact_procedure_support)
+        if exact_procedure_support:accepted=True
         if accepted:
             identity = _identity(best)
             selected = [item for fit, item in scored if _identity(item) == identity][:8]
