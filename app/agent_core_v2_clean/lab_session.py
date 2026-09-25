@@ -78,6 +78,11 @@ def reset_store(s):
     return get_store(s)
 
 def _gateway(secrets_obj, s):
+    calls=int(s.get("llm_gateway_calls",0) or 0)
+    if calls>=28:
+        s["agent_core_gateway_calls_accumulated"]=int(s.get("agent_core_gateway_calls_accumulated",0) or 0)+calls
+        s["agent_core_gateway_tokens_accumulated"]=int(s.get("agent_core_gateway_tokens_accumulated",0) or 0)+int(s.get("llm_gateway_tokens",0) or 0)
+        reset_gateway_session(s)
     return LLMGateway(load_gateway_config(secrets_obj), s)
 
 def build_agent(secrets_obj, s, budget):
@@ -141,7 +146,7 @@ def _conceptual(result, message, secrets_obj, s, budget, store):
     if not allowed:
         return result, None
     intent = str(understanding.get("intent") or "").casefold()
-    composer = DocumentedAnswerComposer(_gateway(secrets_obj, s), 760 if intent == "requirements" else 620 if intent == "conceptual" else 480)
+    composer = DocumentedAnswerComposer(_gateway(secrets_obj, s), 820 if intent == "requirements" else 700 if intent == "conceptual" else 720)
     answer = composer.compose(message, understanding, retrieval)
     payload = answer.to_dict()
     payload.update({"documented_evidence_used": answer.mode in {"documented_answer", "documented_answer_partial"}, "internal_knowledge_used": False, "knowledge_mode": "documented_only" if answer.mode in {"documented_answer", "documented_answer_partial"} else "none"})
@@ -278,4 +283,4 @@ def process_message(message, secrets_obj, s):
 
 def export_session(s):
     x = get_store(s)
-    return {"format": "agent_core_v2_clean_phase3c7_followup_document_authority", "session_id": x.get("session_id"), "gateway_budget": {"calls": int(s.get("llm_gateway_calls", 0)), "tokens": int(s.get("llm_gateway_tokens", 0))}, "messages": deepcopy(x["messages"]), "turns": deepcopy(x["turns"]), "state": x["memory"].to_dict(), "answer_context": deepcopy(x.get("answer_context") or {}), "budget": deepcopy(x["budget"]), "telemetry": snapshot(x["telemetry"]), "cache_metrics": deepcopy(x["cache_metrics"]), "errors": deepcopy(x["errors"]), "retrieval_enabled": True, "documented_answer_enabled": True, "procedural_answer_enabled": True, "production_changed": False}
+    return {"format": "agent_core_v2_clean_phase3c8_document_identity_budget", "session_id": x.get("session_id"), "gateway_budget": {"calls": int(s.get("agent_core_gateway_calls_accumulated",0))+int(s.get("llm_gateway_calls", 0)), "tokens": int(s.get("agent_core_gateway_tokens_accumulated",0))+int(s.get("llm_gateway_tokens", 0)), "window_rollovers": int(s.get("agent_core_gateway_calls_accumulated",0))//28}, "messages": deepcopy(x["messages"]), "turns": deepcopy(x["turns"]), "state": x["memory"].to_dict(), "answer_context": deepcopy(x.get("answer_context") or {}), "budget": deepcopy(x["budget"]), "telemetry": snapshot(x["telemetry"]), "cache_metrics": deepcopy(x["cache_metrics"]), "errors": deepcopy(x["errors"]), "retrieval_enabled": True, "documented_answer_enabled": True, "procedural_answer_enabled": True, "production_changed": False}

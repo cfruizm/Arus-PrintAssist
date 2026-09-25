@@ -31,6 +31,13 @@ def _tokens(value):
             out.add(token)
     return out
 
+def _stems(values):
+    out=set()
+    for value in values or set():
+        value=str(value)
+        out.add(value[:5] if len(value)>=6 else value)
+    return out
+
 def _identity(item):
     return str(item.get("url") or item.get("source") or (item.get("metadata") or {}).get("canonical_url") or item.get("title") or "")
 
@@ -166,23 +173,18 @@ def apply_unified_evidence_verdict(retrieval, message, understanding):
     best_fit, best = scored[0] if scored else ({}, None)
     if best and wanted:
         subject_terms = _tokens((understanding or {}).get("canonical_subject") or ((understanding or {}).get("goal_updates") or {}).get("subject") or "")
-        request_shell = {"provide","give","show","tell","official","documented","detailed","detail","procedure","procedimiento","please","favor","user","usuario","same","mismo","dame","obtener","obtain","me","quiero","conocer","documentado","documentada","documentadas","cuales","cuáles","son","final","finales","informacion","información","sobre","explicar"}
-        operation_terms = wanted - subject_terms - _OPERATION - request_shell
+        request_shell={"provide","give","show","tell","official","documented","detailed","detail","procedure","please","user","same","dame","obtener","obtain","quiero","conocer","documentado","documentada","documentadas","cuales","son","final","finales","informacion","sobre","explicar","gracias","pero","referia"}
+        target_terms = wanted - subject_terms - _OPERATION - request_shell
         available = _tokens(best.get("title")) | _tokens(best.get("text"))
-        target_ok = not operation_terms or bool(operation_terms & available)
-        exact_document = bool((out.get("exact_document_match") or {}).get("matched"))
+        target_ok = not target_terms or bool(target_terms & available) or bool(_stems(target_terms) & _stems(available))
+        exact_document=bool((out.get("exact_document_match") or {}).get("matched"))
         direct_title = best_fit["title_hit_count"] >= 2
         direct_content = best_fit["covered_count"] >= 2 and best_fit["coverage"] >= 0.4
         semantic_support = best_fit["semantic_score"] >= 0.15
         # Two independent lexical anchors plus target compatibility are enough for
         # exact operational documents even when OCR lowers the semantic score.
-        fields = ((out.get("query") or {}).get("fields") or {})
-        case_text = " ".join(str(x or "") for x in [fields.get("goal"),fields.get("current_message"),fields.get("contextual_operation")," ".join(fields.get("symptoms") or [])," ".join(fields.get("observations") or [])])
-        case_terms=_tokens(case_text);broad={"print","printer","printing","impresion","impresora","device","dispositivo","user","usuario","support","soporte","procedure","procedimiento"};title_specific=_tokens(best.get("title"))-broad;active_case=bool(fields.get("symptoms") or fields.get("observations") or fields.get("affected_scope"));case_alignment=not active_case or not title_specific or bool(title_specific & case_terms)
-        exact_procedure_support = exact_document and bool(operation_terms & available or not operation_terms) and len(candidates)>=2
-        accepted = target_ok and case_alignment and (direct_title or (direct_content and semantic_support) or exact_procedure_support)
-        if not target_ok:reason="missing_requested_operation"
-        elif not case_alignment:reason="unconfirmed_mechanism_for_active_case"
+        exact_procedure_support=exact_document and target_ok and len(candidates)>=2
+        accepted = target_ok and (direct_title or (direct_content and semantic_support) or exact_procedure_support)
         if accepted:
             identity = _identity(best)
             selected = [item for fit, item in scored if _identity(item) == identity][:8]
@@ -203,8 +205,7 @@ def apply_unified_evidence_verdict(retrieval, message, understanding):
         "document_ids": list(dict.fromkeys(_identity(x) for x in selected)),
         "evidence_ids": [x["id"] for x in selected],
         "coverage": round(float(best_fit.get("coverage", 0) if best else 0), 4),
-        "requested_operation_terms": sorted(operation_terms) if best and wanted else [],
-        "active_case_alignment": bool(case_alignment) if best and wanted else True,
+        "requested_operation_terms": sorted(target_terms) if best and wanted else [],
         "exact_document_operation_support": bool(exact_procedure_support) if best and wanted else False,
         "selected_evidence": deepcopy(selected),
         "rejected_count": max(0, len(candidates) - len(selected)),

@@ -13,9 +13,9 @@ def document_identifiers(*values):
 def query_variants(message,goal,subject):
  ids=document_identifiers(message,goal,subject);out=[];title=" ".join(str(subject or goal or message or "").split())
  for i in ids:
-  for v in (i.replace(" ",""),"-".join(i.split()),"_".join(i.split()),i,title):
+  for v in (i.replace(" ",""),"-".join(i.split()),"_".join(i.split()),i,title," ".join(str(message or "").split())):
    if v and v.casefold() not in {x.casefold() for x in out}:out.append(v)
- return out[:8]
+ return out[:10]
 def exact_matches(items,ids):
  out=[]
  for x in items or []:

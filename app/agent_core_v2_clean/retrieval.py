@@ -22,8 +22,7 @@ class RetrievalQueryBuilder:
   details={str(k):_text(v) for k,v in memory.pending_goal.known_details.items() if _text(v).strip()}
   user_act=str(getattr(understanding,"user_act","") or "");topic_relation=str(getattr(understanding,"topic_relation","") or "")
   contextual_operation=str(message or "").strip() if user_act in {"follow_up","answer_to_question","reported_failure","attempt_result"} or topic_relation=="same_topic" else ""
-  intent=str(memory.pending_goal.intent or understanding.intent or "");same_subject=str(getattr(understanding,"canonical_subject","") or "").casefold()==str(getattr(memory,"active_subject","") or "").casefold();case_continuation=intent=="troubleshooting" or user_act in {"reported_failure","attempt_result","answer_to_question"} or (str(memory.support_case.status or "") in {"diagnosing","reopened"} and topic_relation=="same_topic" and same_subject)
-  fields={"goal":memory.pending_goal.summary or understanding.current_goal,"intent":intent,"details":details,"symptoms":list(memory.support_case.symptoms) if case_continuation else [],"observations":list(memory.support_case.observations[-3:]) if case_continuation else [],"affected_scope":memory.support_case.affected_scope if case_continuation else None,"current_message":message,"contextual_operation":contextual_operation or None,"user_act":user_act,"topic_relation":topic_relation,"case_context_included":case_continuation}
+  fields={"goal":memory.pending_goal.summary or understanding.current_goal,"intent":memory.pending_goal.intent or understanding.intent,"details":details,"symptoms":list(memory.support_case.symptoms),"observations":list(memory.support_case.observations[-3:]),"affected_scope":memory.support_case.affected_scope,"current_message":message,"contextual_operation":contextual_operation or None,"user_act":user_act,"topic_relation":topic_relation}
   parts=[str(message or "").strip(),_text(fields["goal"]).strip()]
   if contextual_operation and contextual_operation.casefold()!=_text(fields["goal"]).strip().casefold():parts.append(contextual_operation)
   parts += [f"{k}: {v}" for k,v in details.items()]+fields["symptoms"]+fields["observations"]
@@ -81,7 +80,7 @@ class ReadOnlyRetrieval:
   if identifiers and variants:
    attempts=[];matched=[];raw_last={}
    for variant in variants:
-    raw=self.retrieve_fn(variant,max(self.k,10)) or {};raw_last=raw;rows=self._normalize(raw);hits=exact_matches(rows,identifiers);attempts.append({"mode":"exact_document_identifier","query_text":variant,"count":len(rows),"exact_match_count":len(hits)})
+    raw=self.retrieve_fn(variant,max(self.k,12)) or {};raw_last=raw;rows=self._normalize(raw);hits=exact_matches(rows,identifiers);attempts.append({"mode":"exact_document_identifier","query_text":variant,"count":len(rows),"exact_match_count":len(hits)})
     matched.extend(hits)
     if hits:break
    if matched:

@@ -58,18 +58,11 @@ def infer_topic_boundary(previous_state: dict, understanding: dict) -> TopicBoun
     changed = sorted(k for k in STRUCTURAL if before.get(k) and now.get(k) and _norm(before[k]) != _norm(now[k]))
     introduced = sorted(k for k in MATERIAL_SCOPE if not before.get(k) and now.get(k))
     material_operation = _material_operation_change(before, now, old_goal, new_goal)
-    case = (previous_state or {}).get("support_case") or {}
-    active_case = str(case.get("status") or "").casefold() in {"diagnosing", "reopened"}
-    intent = str((understanding or {}).get("intent") or "").casefold()
-    act = str((understanding or {}).get("user_act") or "").casefold()
-    old_subject = _norm(before.get("subject") or (previous_state or {}).get("active_subject") or "")
-    new_subject = _norm(now.get("subject") or (understanding or {}).get("canonical_subject") or "")
-    same_subject = not new_subject or not old_subject or new_subject == old_subject
-    if active_case and same_subject and intent in {"procedural", "troubleshooting", "requirements"} and act in {"request_elaboration", "follow_up", "answer_to_question", "attempt_result", "reported_failure"}:
-        return TopicBoundary("same_topic_refinement", "active_case_procedural_expansion", round(shared, 3), changed, introduced, "eligible")
     if material_operation:
         changed = sorted(set(changed) | {"operation"})
         return TopicBoundary("new_topic", "material_operation_changed", round(shared, 3), changed, introduced, "none")
+    old_subject = _norm(before.get("subject") or (previous_state or {}).get("active_subject") or "")
+    new_subject = _norm(now.get("subject") or (understanding or {}).get("canonical_subject") or "")
     if "subject" in changed and old_subject and new_subject and old_subject != new_subject:
         return TopicBoundary("same_topic_changed_scope", "explicit_subject_changed", round(shared, 3), changed, introduced, "comparison_only")
     if _is_refinement(previous_state, understanding, old, new, changed, introduced):
