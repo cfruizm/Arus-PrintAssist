@@ -19,7 +19,9 @@ def reconcile_authority(previous_state,understanding,message):
  act=str(u.get("user_act") or "");declared=str(u.get("topic_relation") or "");intent=str(u.get("intent") or "")
  continuation=bool(old and ((declared=="same_topic" and (act!="new_request" or shared>=0.18)) or act in {"request_elaboration","answer_to_question","follow_up","attempt_result"} or (act not in {"new_request","topic_change","independent_question"} and _referential(message) and shared>0)))
  changed=bool(old and new and not continuation and shared<0.18 and len(new_t-old_t)>=2)
- if continuation:return AuthorityDecision("same_topic_refinement",False,u.get("domain_relevance")=="out_of_scope",round(shared,3),"primary","referential_or_declared_continuation")
+ if continuation:
+  inheritable=bool(str(u.get("user_act") or "") in {"follow_up","answer_to_question","request_elaboration","attempt_result"} and str(u.get("subject_origin") or "") in {"conversation_memory","previous_subject","inherited","current_subject"})
+  return AuthorityDecision("same_topic_refinement",False,u.get("domain_relevance")=="out_of_scope" and inheritable,round(shared,3),"primary","referential_or_declared_continuation")
  if changed or declared in {"new_topic","independent"}:return AuthorityDecision("new_topic",True,False,round(shared,3),"none","material_goal_change")
  return AuthorityDecision("same_topic",False,False,round(shared,3),"eligible","continuity_preserved")
 def apply_authority(understanding,decision):

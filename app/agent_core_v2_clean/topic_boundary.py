@@ -6,7 +6,7 @@ import unicodedata
 _TOKEN_RE = re.compile(r"[\wáéíóúüñ]+", re.I)
 STRUCTURAL = {"operation", "subject", "platform", "product", "component", "device", "scope"}
 _OPERATION_GENERIC = {"explicar", "procedimiento", "realizar", "consultar", "actualizar", "configurar", "impresora", "impresion", "usuario", "como", "para", "del", "una", "the", "how", "printer", "user"}
-MATERIAL_SCOPE = {"subject", "platform", "product", "component", "device", "scope"}
+MATERIAL_SCOPE = {"platform", "product", "component", "device", "scope"}
 _REFERENTIAL_ACTS = {"request_elaboration", "answer", "confirmation", "correction", "continue"}
 _REFINEMENT_MARKERS = {"paso", "parte", "opcion", "campo", "despues", "antes", "siguiente", "donde", "cual", "cuando", "como", "porque", "eso", "esa", "ese", "esto", "esta", "that", "this", "it", "step", "option", "field", "next", "after", "before", "where", "which"}
 

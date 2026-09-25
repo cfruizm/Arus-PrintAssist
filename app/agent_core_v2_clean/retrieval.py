@@ -76,17 +76,16 @@ class ReadOnlyRetrieval:
  def _normalize(self,raw):return _normalize_items(raw.get("evidence") or [])
  def search(self,built,current_only=None,preferred_sources=None):
   preferred_sources=[str(x) for x in (preferred_sources or []) if str(x).strip()]
-  fields=built.fields or {};details=fields.get("details") or {};resolution=resolve_document(fields.get("current_message"),fields.get("goal"),details.get("subject"),details.get("product"))
+  f=built.fields or {};d=f.get("details") or {};resolution=resolve_document(f.get("current_message"),f.get("goal"),d.get("subject"),d.get("product"))
   if resolution.get("enabled"):
    evidence=self._normalize({"evidence":retrieve_resolved_document(resolution,built.text,24)})
    if resolution.get("status")=="exact_match" and evidence:
-    evidence,expansion=_expand_procedure(built.text,evidence,24);groups={}
+    evidence,exp=_expand_procedure(built.text,evidence,24);groups={}
     for x in evidence:
      identity=_identity(x);g=groups.setdefault(identity,{"identity":identity,"title":x["title"],"pages":[],"chunks":0});g["chunks"]+=1
      if x["page"] and x["page"] not in g["pages"]:g["pages"].append(x["page"])
-    return {"enabled":True,"llm_called":False,"production_changed":False,"query":built.to_dict(),"ok":True,"adapter":"metadata_catalog+same_document","count":len(evidence),"evidence":evidence,"document_groups":list(groups.values()),"errors":[],"diagnostic_only":True,"selection":{"chosen_mode":"deterministic_document_resolver","quality":1.0,"context_contamination_avoided":True,"exact_identifier_match":True},"procedural_expansion":expansion,"document_resolution":resolution,"exact_document_match":{"matched":True,"identifiers":resolution.get("identifiers"),"source":resolution["matches"][0]["source"]}}
-   if resolution.get("status") in {"not_found","ambiguous"}:
-    return {"enabled":True,"llm_called":False,"production_changed":False,"query":built.to_dict(),"ok":True,"adapter":"metadata_catalog","count":0,"evidence":[],"document_groups":[],"errors":[],"diagnostic_only":True,"selection":{"chosen_mode":"deterministic_document_resolver","quality":0.0,"context_contamination_avoided":True,"exact_identifier_match":False},"procedural_expansion":{"enabled":False,"reason":"document_"+resolution.get("status")},"document_resolution":resolution,"exact_document_match":{"matched":False,"identifiers":resolution.get("identifiers"),"source":None}}
+    return {"enabled":True,"llm_called":False,"production_changed":False,"query":built.to_dict(),"ok":True,"adapter":"metadata_catalog+same_document","count":len(evidence),"evidence":evidence,"document_groups":list(groups.values()),"errors":[],"diagnostic_only":True,"selection":{"chosen_mode":"deterministic_document_resolver","quality":1.0,"context_contamination_avoided":True,"exact_identifier_match":True},"procedural_expansion":exp,"document_resolution":resolution,"exact_document_match":{"matched":True,"identifiers":resolution.get("identifiers"),"source":resolution["matches"][0]["source"]}}
+   return {"enabled":True,"llm_called":False,"production_changed":False,"query":built.to_dict(),"ok":True,"adapter":"metadata_catalog","count":0,"evidence":[],"document_groups":[],"errors":[],"diagnostic_only":True,"selection":{"chosen_mode":"deterministic_document_resolver","quality":0.0,"context_contamination_avoided":True,"exact_identifier_match":False},"procedural_expansion":{"enabled":False,"reason":"document_"+resolution.get("status")},"document_resolution":resolution,"exact_document_match":{"matched":False,"identifiers":resolution.get("identifiers"),"source":None}}
   preferred_attempt=None
   if current_only is not None and preferred_sources:
    try:
