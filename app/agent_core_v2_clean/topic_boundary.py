@@ -65,8 +65,7 @@ def infer_topic_boundary(previous_state: dict, understanding: dict) -> TopicBoun
     old_subject = _norm(before.get("subject") or (previous_state or {}).get("active_subject") or "")
     new_subject = _norm(now.get("subject") or (understanding or {}).get("canonical_subject") or "")
     same_subject = not new_subject or not old_subject or new_subject == old_subject
-    procedural_case_expansion = active_case and same_subject and intent in {"procedural", "troubleshooting", "requirements"} and act in {"request_elaboration", "follow_up", "answer_to_question", "attempt_result", "reported_failure"}
-    if procedural_case_expansion:
+    if active_case and same_subject and intent in {"procedural", "troubleshooting", "requirements"} and act in {"request_elaboration", "follow_up", "answer_to_question", "attempt_result", "reported_failure"}:
         return TopicBoundary("same_topic_refinement", "active_case_procedural_expansion", round(shared, 3), changed, introduced, "eligible")
     if material_operation:
         changed = sorted(set(changed) | {"operation"})

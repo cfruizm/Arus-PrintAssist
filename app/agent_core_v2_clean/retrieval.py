@@ -2,6 +2,7 @@ from __future__ import annotations
 from dataclasses import dataclass,asdict
 from typing import Callable,Any
 import hashlib,json,re,unicodedata
+from .exact_document_retrieval import document_identifiers,query_variants,exact_matches
 @dataclass
 class RetrievalQuery:
  text:str;fields:dict[str,Any];fingerprint:str
@@ -21,8 +22,7 @@ class RetrievalQueryBuilder:
   details={str(k):_text(v) for k,v in memory.pending_goal.known_details.items() if _text(v).strip()}
   user_act=str(getattr(understanding,"user_act","") or "");topic_relation=str(getattr(understanding,"topic_relation","") or "")
   contextual_operation=str(message or "").strip() if user_act in {"follow_up","answer_to_question","reported_failure","attempt_result"} or topic_relation=="same_topic" else ""
-  intent=str(memory.pending_goal.intent or understanding.intent or "")
-  case_continuation = intent=="troubleshooting" or user_act in {"reported_failure","attempt_result","answer_to_question"} or (str(memory.support_case.status or "") in {"diagnosing","reopened"} and topic_relation=="same_topic" and str(getattr(understanding,"canonical_subject","") or "").casefold()==str(getattr(memory,"active_subject","") or "").casefold())
+  intent=str(memory.pending_goal.intent or understanding.intent or "");same_subject=str(getattr(understanding,"canonical_subject","") or "").casefold()==str(getattr(memory,"active_subject","") or "").casefold();case_continuation=intent=="troubleshooting" or user_act in {"reported_failure","attempt_result","answer_to_question"} or (str(memory.support_case.status or "") in {"diagnosing","reopened"} and topic_relation=="same_topic" and same_subject)
   fields={"goal":memory.pending_goal.summary or understanding.current_goal,"intent":intent,"details":details,"symptoms":list(memory.support_case.symptoms) if case_continuation else [],"observations":list(memory.support_case.observations[-3:]) if case_continuation else [],"affected_scope":memory.support_case.affected_scope if case_continuation else None,"current_message":message,"contextual_operation":contextual_operation or None,"user_act":user_act,"topic_relation":topic_relation,"case_context_included":case_continuation}
   parts=[str(message or "").strip(),_text(fields["goal"]).strip()]
   if contextual_operation and contextual_operation.casefold()!=_text(fields["goal"]).strip().casefold():parts.append(contextual_operation)
@@ -33,12 +33,6 @@ class RetrievalQueryBuilder:
  def current_only(self,message,understanding):
   fields={"goal":understanding.current_goal,"intent":understanding.intent,"details":dict(understanding.goal_updates or {}),"symptoms":[],"observations":[],"affected_scope":None,"current_message":message,"context_mode":"current_turn_only","grounded_only":True}
   text=". ".join(dict.fromkeys(x for x in [str(understanding.current_goal or ""),str(message or "")]+[str(v) for v in fields["details"].values()] if x))[:900]
-  return RetrievalQuery(text,fields,hashlib.sha256(json.dumps(fields,sort_keys=True,ensure_ascii=False).encode()).hexdigest()[:20])
- def operation_subject_only(self,message,understanding):
-  details=dict(understanding.goal_updates or {})
-  subject=str(getattr(understanding,"canonical_subject",None) or details.get("subject") or details.get("product") or "")
-  fields={"goal":understanding.current_goal,"intent":understanding.intent,"details":{"subject":subject} if subject else {},"symptoms":[],"observations":[],"affected_scope":None,"current_message":message,"context_mode":"operation_subject_only","grounded_only":True}
-  text=". ".join(dict.fromkeys(x for x in [str(understanding.current_goal or ""),subject] if x))[:700]
   return RetrievalQuery(text,fields,hashlib.sha256(json.dumps(fields,sort_keys=True,ensure_ascii=False).encode()).hexdigest()[:20])
 def _tokens(text):
  text=unicodedata.normalize("NFKD",str(text or "")).encode("ascii","ignore").decode().casefold();stop={"como","para","que","con","del","las","los","una","uno","por","the","and","from","this","realizar","explicar"}
@@ -83,9 +77,24 @@ class ReadOnlyRetrieval:
  def _normalize(self,raw):return _normalize_items(raw.get("evidence") or [])
  def search(self,built,current_only=None,preferred_sources=None):
   preferred_sources=[str(x) for x in (preferred_sources or []) if str(x).strip()]
-  focused=None
-  if current_only is not None:
-   fields=dict(current_only.fields or {});subject=str((fields.get("details") or {}).get("subject") or (fields.get("details") or {}).get("product") or "");focused_fields={**fields,"details":{"subject":subject} if subject else {},"context_mode":"operation_subject_only"};focused_text=". ".join(dict.fromkeys(x for x in [str(fields.get("goal") or ""),subject] if x))[:700];focused=RetrievalQuery(focused_text,focused_fields,hashlib.sha256(json.dumps(focused_fields,sort_keys=True,ensure_ascii=False).encode()).hexdigest()[:20])
+  fields=built.fields or {};details=fields.get("details") or {};subject=details.get("subject") or details.get("product") or "";identifiers=document_identifiers(fields.get("current_message"),fields.get("goal"),subject);variants=query_variants(fields.get("current_message"),fields.get("goal"),subject)
+  if identifiers and variants:
+   attempts=[];matched=[];raw_last={}
+   for variant in variants:
+    raw=self.retrieve_fn(variant,max(self.k,10)) or {};raw_last=raw;rows=self._normalize(raw);hits=exact_matches(rows,identifiers);attempts.append({"mode":"exact_document_identifier","query_text":variant,"count":len(rows),"exact_match_count":len(hits)})
+    matched.extend(hits)
+    if hits:break
+   if matched:
+    seen=set();seed=[]
+    for item in matched:
+     key=(_identity(item),item.get("page"),str(item.get("text") or "")[:240])
+     if key not in seen:seen.add(key);seed.append(item)
+    evidence,expansion=_expand_procedure(variants[0],seed,18)
+    groups={}
+    for x in evidence:
+     identity=_identity(x);g=groups.setdefault(identity,{"identity":identity,"title":x["title"],"pages":[],"chunks":0});g["chunks"]+=1
+     if x["page"] and x["page"] not in g["pages"]:g["pages"].append(x["page"])
+    return {"enabled":True,"llm_called":False,"production_changed":False,"query":built.to_dict(),"ok":True,"adapter":raw_last.get("adapter"),"count":len(evidence),"evidence":evidence,"document_groups":list(groups.values()),"errors":[],"diagnostic_only":True,"selection":{"chosen_mode":"exact_document_identifier","quality":1.0,"attempts":attempts,"context_contamination_avoided":True,"exact_identifier_match":True,"matched_identifiers":identifiers},"procedural_expansion":expansion,"exact_document_match":{"matched":True,"identifiers":identifiers,"source":_identity(evidence[0]) if evidence else None}}
   preferred_attempt=None
   if current_only is not None and preferred_sources:
    try:
@@ -102,10 +111,7 @@ class ReadOnlyRetrieval:
   raw1=self.retrieve_fn(built.text,self.k) or {};e1=self._normalize(raw1);q1=_quality(built.fields.get("current_message"),e1);attempts=([preferred_attempt] if preferred_attempt else [])+[{"mode":"contextual","query":built.to_dict(),"quality":q1,"count":len(e1)}];chosen=(built,raw1,e1,"contextual",q1)
   if current_only is not None and q1<0.5:
    raw2=self.retrieve_fn(current_only.text,self.k) or {};e2=self._normalize(raw2);q2=_quality(current_only.fields.get("current_message"),e2);attempts.append({"mode":"current_turn_only","query":current_only.to_dict(),"quality":q2,"count":len(e2)})
-   if q2>chosen[4]:chosen=(current_only,raw2,e2,"current_turn_only",q2)
-   if focused is not None:
-    raw3=self.retrieve_fn(focused.text,max(self.k,10)) or {};e3=self._normalize(raw3);q3=_quality(current_only.fields.get("current_message"),e3);attempts.append({"mode":"operation_subject_only","query":focused.to_dict(),"quality":q3,"count":len(e3)})
-    if q3>chosen[4]:chosen=(focused,raw3,e3,"operation_subject_only",q3)
+   if q2>q1:chosen=(current_only,raw2,e2,"current_turn_only",q2)
   query,raw,evidence,mode,quality=chosen;expansion={"enabled":False,"reason":"intent_does_not_require_document_expansion","llm_called":False}
   if str(query.fields.get("intent") or "") in {"procedural","requirements"}:limit=18 if str(query.fields.get("intent") or "")=="requirements" else 8;evidence,expansion=_expand_procedure(query.text,evidence,limit)
   groups={}

@@ -177,16 +177,11 @@ def apply_unified_evidence_verdict(retrieval, message, understanding):
         # exact operational documents even when OCR lowers the semantic score.
         fields = ((out.get("query") or {}).get("fields") or {})
         case_text = " ".join(str(x or "") for x in [fields.get("goal"), fields.get("current_message"), fields.get("contextual_operation"), " ".join(fields.get("symptoms") or []), " ".join(fields.get("observations") or [])])
-        case_terms = _tokens(case_text)
-        broad_domain = {"print", "printer", "printing", "impresion", "impresora", "device", "dispositivo", "user", "usuario", "support", "soporte", "procedure", "procedimiento"}
-        title_specific = _tokens(best.get("title")) - broad_domain
-        active_case = bool(fields.get("symptoms") or fields.get("observations") or fields.get("affected_scope"))
-        case_alignment = not active_case or not title_specific or bool(title_specific & case_terms)
+        case_terms = _tokens(case_text);broad_domain={"print","printer","printing","impresion","impresora","device","dispositivo","user","usuario","support","soporte","procedure","procedimiento"}
+        title_specific=_tokens(best.get("title"))-broad_domain;active_case=bool(fields.get("symptoms") or fields.get("observations") or fields.get("affected_scope"));case_alignment=not active_case or not title_specific or bool(title_specific & case_terms)
         accepted = target_ok and case_alignment and (direct_title or (direct_content and semantic_support))
-        if not target_ok:
-            reason = "missing_requested_operation"
-        elif not case_alignment:
-            reason = "unconfirmed_mechanism_for_active_case"
+        if not target_ok:reason="missing_requested_operation"
+        elif not case_alignment:reason="unconfirmed_mechanism_for_active_case"
         if accepted:
             identity = _identity(best)
             selected = [item for fit, item in scored if _identity(item) == identity][:8]
@@ -209,7 +204,6 @@ def apply_unified_evidence_verdict(retrieval, message, understanding):
         "coverage": round(float(best_fit.get("coverage", 0) if best else 0), 4),
         "requested_operation_terms": sorted(operation_terms) if best and wanted else [],
         "active_case_alignment": bool(case_alignment) if best and wanted else True,
-        "unconfirmed_title_terms": sorted(title_specific - case_terms) if best and wanted and active_case else [],
         "selected_evidence": deepcopy(selected),
         "rejected_count": max(0, len(candidates) - len(selected)),
     }
