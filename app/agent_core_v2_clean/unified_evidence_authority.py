@@ -165,15 +165,19 @@ def apply_unified_evidence_verdict(retrieval, message, understanding):
     status, mode, reason = "insufficient", "internal_only", "no_operationally_aligned_evidence"
     best_fit, best = scored[0] if scored else ({}, None)
     if best and wanted:
-        target_terms = wanted - _OPERATION
+        subject_terms = _tokens((understanding or {}).get("canonical_subject") or ((understanding or {}).get("goal_updates") or {}).get("subject") or "")
+        request_generic = {"provide", "official", "detailed", "detail", "procedure", "procedimiento", "please", "favor", "user", "usuario", "same", "mismo"}
+        operation_terms = wanted - subject_terms - _OPERATION - request_generic
         available = _tokens(best.get("title")) | _tokens(best.get("text"))
-        target_ok = not target_terms or bool(target_terms & available)
+        target_ok = not operation_terms or bool(operation_terms & available)
         direct_title = best_fit["title_hit_count"] >= 2
         direct_content = best_fit["covered_count"] >= 2 and best_fit["coverage"] >= 0.4
         semantic_support = best_fit["semantic_score"] >= 0.15
         # Two independent lexical anchors plus target compatibility are enough for
         # exact operational documents even when OCR lowers the semantic score.
         accepted = target_ok and (direct_title or (direct_content and semantic_support))
+        if not target_ok:
+            reason = "missing_requested_operation"
         if accepted:
             identity = _identity(best)
             selected = [item for fit, item in scored if _identity(item) == identity][:8]
@@ -194,6 +198,7 @@ def apply_unified_evidence_verdict(retrieval, message, understanding):
         "document_ids": list(dict.fromkeys(_identity(x) for x in selected)),
         "evidence_ids": [x["id"] for x in selected],
         "coverage": round(float(best_fit.get("coverage", 0) if best else 0), 4),
+        "requested_operation_terms": sorted(operation_terms) if best and wanted else [],
         "selected_evidence": deepcopy(selected),
         "rejected_count": max(0, len(candidates) - len(selected)),
     }
