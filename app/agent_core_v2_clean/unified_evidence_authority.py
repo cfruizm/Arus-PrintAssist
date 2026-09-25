@@ -180,10 +180,14 @@ def apply_unified_evidence_verdict(retrieval, message, understanding):
         direct_title = best_fit["title_hit_count"] >= 2
         direct_content = best_fit["covered_count"] >= 2 and best_fit["coverage"] >= 0.4
         semantic_support = best_fit["semantic_score"] >= 0.15
+        intent=str((understanding or {}).get("intent") or "").casefold()
+        procedural_content_support = direct_content and semantic_support
+        if intent in {"procedural","requirements"} and best_fit["title_hit_count"] == 0:
+            procedural_content_support = best_fit["covered_count"] >= 3 and best_fit["coverage"] >= 0.6 and best_fit["semantic_score"] >= 0.40
         # Two independent lexical anchors plus target compatibility are enough for
         # exact operational documents even when OCR lowers the semantic score.
         exact_procedure_support=exact_document and len(candidates)>=2 and (target_ok or str((understanding or {}).get("reference_relation") or "")=="corrected_subject")
-        accepted = target_ok and (direct_title or (direct_content and semantic_support) or exact_procedure_support)
+        accepted = target_ok and (direct_title or procedural_content_support or exact_procedure_support)
         if exact_procedure_support:accepted=True
         if accepted:
             identity = _identity(best)
@@ -207,6 +211,8 @@ def apply_unified_evidence_verdict(retrieval, message, understanding):
         "coverage": round(float(best_fit.get("coverage", 0) if best else 0), 4),
         "requested_operation_terms": sorted(target_terms) if best and wanted else [],
         "exact_document_operation_support": bool(exact_procedure_support) if best and wanted else False,
+        "procedural_content_support": bool(procedural_content_support) if best and wanted else False,
+        "title_alignment_required": bool(best and wanted and str((understanding or {}).get("intent") or "").casefold() in {"procedural","requirements"} and best_fit.get("title_hit_count",0)==0),
         "selected_evidence": deepcopy(selected),
         "rejected_count": max(0, len(candidates) - len(selected)),
     }

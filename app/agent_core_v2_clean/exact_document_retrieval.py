@@ -10,10 +10,15 @@ def document_identifiers(*values):
    k=norm(m)
    if k and k not in out:out.append(k)
  return out
+def semantic_title(value):
+ text=str(value or "")
+ text=_CODE.sub(" ",text)
+ text=re.sub(r"\b(?:v|ver|version)\s*\d+\b"," ",text,flags=re.I)
+ return " ".join(text.split()).strip(" ._-:")
 def query_variants(message,goal,subject):
- ids=document_identifiers(message,goal,subject);out=[];title=" ".join(str(subject or goal or message or "").split())
+ ids=document_identifiers(message,goal,subject);out=[];title=" ".join(str(subject or goal or message or "").split());semantic=semantic_title(title)
  for i in ids:
-  for v in (i.replace(" ",""),"-".join(i.split()),"_".join(i.split()),i,title," ".join(str(message or "").split())):
+  for v in (i.replace(" ",""),"-".join(i.split()),"_".join(i.split()),i,title,semantic," ".join(str(message or "").split())):
    if v and v.casefold() not in {x.casefold() for x in out}:out.append(v)
  return out[:10]
 def exact_matches(items,ids):
