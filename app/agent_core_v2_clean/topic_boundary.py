@@ -58,16 +58,9 @@ def infer_topic_boundary(previous_state: dict, understanding: dict) -> TopicBoun
     changed = sorted(k for k in STRUCTURAL if before.get(k) and now.get(k) and _norm(before[k]) != _norm(now[k]))
     introduced = sorted(k for k in MATERIAL_SCOPE if not before.get(k) and now.get(k))
     material_operation = _material_operation_change(before, now, old_goal, new_goal)
-    if (understanding or {}).get("negative_constraints"):
-        return TopicBoundary("same_topic_changed_scope", "negative_constraint_invalidates_evidence", round(shared, 3), changed, introduced, "none")
     if material_operation:
         changed = sorted(set(changed) | {"operation"})
         return TopicBoundary("new_topic", "material_operation_changed", round(shared, 3), changed, introduced, "none")
-    old_subject = _norm(before.get("subject") or (previous_state or {}).get("active_subject") or "")
-    new_subject = _norm(now.get("subject") or (understanding or {}).get("canonical_subject") or "")
-    if "subject" in changed and old_subject and new_subject and old_subject != new_subject:
-        role="none" if (understanding or {}).get("reference_relation")=="corrected_subject" else "comparison_only"
-        return TopicBoundary("same_topic_changed_scope", "explicit_subject_changed", round(shared, 3), changed, introduced, role)
     if _is_refinement(previous_state, understanding, old, new, changed, introduced):
         return TopicBoundary("same_topic_refinement", "referential_or_contained_goal_refinement", round(shared, 3), changed, introduced, "primary")
     explicit_new = (understanding or {}).get("topic_relation") == "new_topic"

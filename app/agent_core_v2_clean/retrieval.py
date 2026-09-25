@@ -2,7 +2,7 @@ from __future__ import annotations
 from dataclasses import dataclass,asdict
 from typing import Callable,Any
 import hashlib,json,re,unicodedata
-from .exact_document_retrieval import document_identifiers,query_variants,exact_matches
+from .document_resolver import resolve as resolve_document, retrieve as retrieve_resolved_document
 @dataclass
 class RetrievalQuery:
  text:str;fields:dict[str,Any];fingerprint:str
@@ -64,7 +64,7 @@ def _expand_procedure(query,evidence,k=8):
   key=(_identity(x),_page(x),hashlib.sha256(str(x.get("text") or "").casefold().encode()).hexdigest()[:12])
   if key not in seen:seen.add(key);merged.append(x)
  same=[x for x in merged if _identity(x)==source];same.sort(key=_page)
- selected=same[:k] if same else evidence[:k]
+ selected=same[:8] if same else evidence
  for i,x in enumerate(selected,1):x["id"]=f"R{i}"
  pages=[x.get("page") for x in selected if x.get("page")]
  return selected,{"enabled":True,"attempted":True,"ok":bool(raw.get("ok")),"llm_called":False,"adapter":raw.get("adapter"),"seed_document":source,"seed_page":seed.get("page"),"pages":pages,"count":len(selected),"ordered":True,"same_document_only":all(_identity(x)==source for x in selected),"errors":raw.get("errors") or [],"generation_enabled":False}
@@ -76,25 +76,17 @@ class ReadOnlyRetrieval:
  def _normalize(self,raw):return _normalize_items(raw.get("evidence") or [])
  def search(self,built,current_only=None,preferred_sources=None):
   preferred_sources=[str(x) for x in (preferred_sources or []) if str(x).strip()]
-  fields=built.fields or {};details=fields.get("details") or {};subject=details.get("subject") or details.get("product") or "";identifiers=document_identifiers(fields.get("current_message"),fields.get("goal"),subject);variants=query_variants(fields.get("current_message"),fields.get("goal"),subject)
-  if identifiers and variants:
-   attempts=[];matched=[];raw_last={}
-   for variant in variants:
-    raw=self.retrieve_fn(variant,max(self.k,12)) or {};raw_last=raw;rows=self._normalize(raw);hits=exact_matches(rows,identifiers);attempts.append({"mode":"exact_document_identifier","query_text":variant,"count":len(rows),"exact_match_count":len(hits),"titles":[x.get("title") for x in rows[:5]],"sources":[x.get("source") for x in rows[:5]]})
-    matched.extend(hits)
-   if matched:
-    seen=set();seed=[]
-    for item in matched:
-     key=(_identity(item),item.get("page"),str(item.get("text") or "")[:240])
-     if key not in seen:seen.add(key);seed.append(item)
-    expansion_query=". ".join(dict.fromkeys(x for x in [str(fields.get("current_message") or ""),str(fields.get("goal") or ""),str(subject or "")] if x))
-    evidence,expansion=_expand_procedure(expansion_query,seed,24)
-    groups={}
+  fields=built.fields or {};details=fields.get("details") or {};resolution=resolve_document(fields.get("current_message"),fields.get("goal"),details.get("subject"),details.get("product"))
+  if resolution.get("enabled"):
+   evidence=self._normalize({"evidence":retrieve_resolved_document(resolution,built.text,24)})
+   if resolution.get("status")=="exact_match" and evidence:
+    evidence,expansion=_expand_procedure(built.text,evidence,24);groups={}
     for x in evidence:
      identity=_identity(x);g=groups.setdefault(identity,{"identity":identity,"title":x["title"],"pages":[],"chunks":0});g["chunks"]+=1
      if x["page"] and x["page"] not in g["pages"]:g["pages"].append(x["page"])
-    return {"enabled":True,"llm_called":False,"production_changed":False,"query":built.to_dict(),"ok":True,"adapter":raw_last.get("adapter"),"count":len(evidence),"evidence":evidence,"document_groups":list(groups.values()),"errors":[],"diagnostic_only":True,"selection":{"chosen_mode":"exact_document_identifier","quality":1.0,"attempts":attempts,"context_contamination_avoided":True,"exact_identifier_match":True,"matched_identifiers":identifiers,"variant_count":len(attempts),"semantic_title_fallback_used":any(a.get("exact_match_count",0)>0 and not document_identifiers(a.get("query_text")) for a in attempts)},"procedural_expansion":expansion,"exact_document_match":{"matched":True,"identifiers":identifiers,"source":_identity(evidence[0]) if evidence else None}}
-   return {"enabled":True,"llm_called":False,"production_changed":False,"query":built.to_dict(),"ok":bool(raw_last.get("ok")),"adapter":raw_last.get("adapter"),"count":0,"evidence":[],"document_groups":[],"errors":raw_last.get("errors") or [],"diagnostic_only":True,"selection":{"chosen_mode":"exact_document_identifier","quality":0.0,"attempts":attempts,"context_contamination_avoided":True,"exact_identifier_match":False,"matched_identifiers":identifiers},"procedural_expansion":{"enabled":False,"reason":"exact_document_not_found","attempted":False},"exact_document_match":{"matched":False,"identifiers":identifiers,"source":None}}
+    return {"enabled":True,"llm_called":False,"production_changed":False,"query":built.to_dict(),"ok":True,"adapter":"metadata_catalog+same_document","count":len(evidence),"evidence":evidence,"document_groups":list(groups.values()),"errors":[],"diagnostic_only":True,"selection":{"chosen_mode":"deterministic_document_resolver","quality":1.0,"context_contamination_avoided":True,"exact_identifier_match":True},"procedural_expansion":expansion,"document_resolution":resolution,"exact_document_match":{"matched":True,"identifiers":resolution.get("identifiers"),"source":resolution["matches"][0]["source"]}}
+   if resolution.get("status") in {"not_found","ambiguous"}:
+    return {"enabled":True,"llm_called":False,"production_changed":False,"query":built.to_dict(),"ok":True,"adapter":"metadata_catalog","count":0,"evidence":[],"document_groups":[],"errors":[],"diagnostic_only":True,"selection":{"chosen_mode":"deterministic_document_resolver","quality":0.0,"context_contamination_avoided":True,"exact_identifier_match":False},"procedural_expansion":{"enabled":False,"reason":"document_"+resolution.get("status")},"document_resolution":resolution,"exact_document_match":{"matched":False,"identifiers":resolution.get("identifiers"),"source":None}}
   preferred_attempt=None
   if current_only is not None and preferred_sources:
    try:

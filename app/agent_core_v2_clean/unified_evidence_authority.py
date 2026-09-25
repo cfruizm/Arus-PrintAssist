@@ -172,23 +172,20 @@ def apply_unified_evidence_verdict(retrieval, message, understanding):
     best_fit, best = scored[0] if scored else ({}, None)
     if best and wanted:
         subject_terms=_tokens((understanding or {}).get("canonical_subject") or ((understanding or {}).get("goal_updates") or {}).get("subject") or "")
-        shell={"provide","give","show","tell","official","documented","detailed","detail","procedure","please","user","same","dame","obtener","obtain","quiero","conocer","documentado","documentada","documentadas","cuales","son","final","finales","informacion","sobre","explicar","gracias","pero","referia","usar","utilizar"}
-        target_terms=wanted-subject_terms-_OPERATION-shell
+        target_terms=wanted-subject_terms-_OPERATION
         available=_tokens(best.get("title"))|_tokens(best.get("text"))
         target_ok=not target_terms or bool(target_terms&available) or bool(_stems(target_terms)&_stems(available))
         exact_document=bool((out.get("exact_document_match") or {}).get("matched"))
         direct_title = best_fit["title_hit_count"] >= 2
         direct_content = best_fit["covered_count"] >= 2 and best_fit["coverage"] >= 0.4
         semantic_support = best_fit["semantic_score"] >= 0.15
-        intent=str((understanding or {}).get("intent") or "").casefold()
-        procedural_content_support = direct_content and semantic_support
-        if intent in {"procedural","requirements"} and best_fit["title_hit_count"] == 0:
-            procedural_content_support = best_fit["covered_count"] >= 3 and best_fit["coverage"] >= 0.6 and best_fit["semantic_score"] >= 0.40
+        procedural=str((understanding or {}).get("intent") or "").casefold() in {"procedural","requirements"}
+        content_authorized=direct_content and semantic_support
+        if procedural and best_fit["title_hit_count"]==0:content_authorized=best_fit["covered_count"]>=3 and best_fit["coverage"]>=0.6 and best_fit["semantic_score"]>=0.40
         # Two independent lexical anchors plus target compatibility are enough for
         # exact operational documents even when OCR lowers the semantic score.
-        exact_procedure_support=exact_document and len(candidates)>=2 and (target_ok or str((understanding or {}).get("reference_relation") or "")=="corrected_subject")
-        accepted = target_ok and (direct_title or procedural_content_support or exact_procedure_support)
-        if exact_procedure_support:accepted=True
+        exact_support=exact_document and len(candidates)>=2
+        accepted = target_ok and (direct_title or content_authorized or exact_support)
         if accepted:
             identity = _identity(best)
             selected = [item for fit, item in scored if _identity(item) == identity][:8]
@@ -209,10 +206,6 @@ def apply_unified_evidence_verdict(retrieval, message, understanding):
         "document_ids": list(dict.fromkeys(_identity(x) for x in selected)),
         "evidence_ids": [x["id"] for x in selected],
         "coverage": round(float(best_fit.get("coverage", 0) if best else 0), 4),
-        "requested_operation_terms": sorted(target_terms) if best and wanted else [],
-        "exact_document_operation_support": bool(exact_procedure_support) if best and wanted else False,
-        "procedural_content_support": bool(procedural_content_support) if best and wanted else False,
-        "title_alignment_required": bool(best and wanted and str((understanding or {}).get("intent") or "").casefold() in {"procedural","requirements"} and best_fit.get("title_hit_count",0)==0),
         "selected_evidence": deepcopy(selected),
         "rejected_count": max(0, len(candidates) - len(selected)),
     }

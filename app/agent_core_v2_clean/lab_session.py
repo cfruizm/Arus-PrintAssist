@@ -95,8 +95,7 @@ def _attach_retrieval(result, message, store):
         return result
     try:
         reconciled,reconciliation=reconcile_request(message,result.get("understanding") or {},result.get("state_before") or {})
-        result["understanding"]=reconciled
-        result["request_reconciliation"]=reconciliation
+        result["understanding"]=reconciled;result["request_reconciliation"]=reconciliation
         u = type("U", (), reconciled)()
         builder = RetrievalQueryBuilder()
         query = builder.build(message, store["memory"], u)
@@ -121,8 +120,7 @@ def _attach_retrieval(result, message, store):
             answer_context = {}
         constraints=(result.get("understanding") or {}).get("negative_constraints") or []
         if constraints:
-            kept,rejected=filter_excluded(raw.get("diagnostic_evidence") or raw.get("evidence") or [],constraints)
-            raw["diagnostic_evidence"]=kept;raw["evidence"]=kept;raw["negative_constraint_filter"]={"constraints":constraints,"rejected_count":len(rejected),"rejected_titles":[x.get("title") for x in rejected]}
+            kept,rejected=filter_excluded(raw.get("diagnostic_evidence") or raw.get("evidence") or [],constraints);raw["diagnostic_evidence"]=kept;raw["evidence"]=kept;raw["negative_constraint_filter"]={"constraints":constraints,"rejected_count":len(rejected),"rejected_titles":[x.get("title") for x in rejected]}
         retrieval = apply_semantic_fit(raw, answer_context)
         retrieval = apply_unified_evidence_verdict(retrieval, message, result.get("understanding") or {})
         retrieval["_answer_context"] = deepcopy(answer_context)
@@ -291,4 +289,4 @@ def process_message(message, secrets_obj, s):
 
 def export_session(s):
     x = get_store(s)
-    return {"format": "agent_core_v2_clean_phase3c10_identifier_recall_authority", "session_id": x.get("session_id"), "gateway_budget": {"calls": int(s.get("agent_core_gateway_calls_accumulated",0))+int(s.get("llm_gateway_calls", 0)), "tokens": int(s.get("agent_core_gateway_tokens_accumulated",0))+int(s.get("llm_gateway_tokens", 0)), "window_rollovers": int(s.get("agent_core_gateway_calls_accumulated",0))//28}, "messages": deepcopy(x["messages"]), "turns": deepcopy(x["turns"]), "state": x["memory"].to_dict(), "answer_context": deepcopy(x.get("answer_context") or {}), "budget": deepcopy(x["budget"]), "telemetry": snapshot(x["telemetry"]), "cache_metrics": deepcopy(x["cache_metrics"]), "errors": deepcopy(x["errors"]), "retrieval_enabled": True, "documented_answer_enabled": True, "procedural_answer_enabled": True, "production_changed": False}
+    return {"format": "agent_core_v2_clean_phase3d1_document_resolver", "session_id": x.get("session_id"), "gateway_budget": {"calls": int(s.get("agent_core_gateway_calls_accumulated",0))+int(s.get("llm_gateway_calls", 0)), "tokens": int(s.get("agent_core_gateway_tokens_accumulated",0))+int(s.get("llm_gateway_tokens", 0)), "window_rollovers": int(s.get("agent_core_gateway_calls_accumulated",0))//28}, "messages": deepcopy(x["messages"]), "turns": deepcopy(x["turns"]), "state": x["memory"].to_dict(), "answer_context": deepcopy(x.get("answer_context") or {}), "budget": deepcopy(x["budget"]), "telemetry": snapshot(x["telemetry"]), "cache_metrics": deepcopy(x["cache_metrics"]), "errors": deepcopy(x["errors"]), "retrieval_enabled": True, "documented_answer_enabled": True, "procedural_answer_enabled": True, "production_changed": False}
