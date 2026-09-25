@@ -19,6 +19,8 @@ from .response_reconciler import reconcile
 from .topic_boundary import infer_topic_boundary
 from .operational_coherence import normalize_generation_flags
 from .documentation_limitation import classify as classify_documentation_limitation
+from .escalation_coordinator import start as start_escalation, handle as handle_escalation
+from .escalation_export import build_export as build_escalation_export, build_text as build_escalation_text
 
 KEY = "agent_core_v2_clean_store"
 
@@ -215,18 +217,32 @@ def _finalize_answer_context(result, store):
         store["memory"].last_assistant_question = context.get("closing_question") or None
         result["state_after"] = deepcopy(store["memory"].to_dict())
 
+def _escalation_result(message, store, handled, before):
+    store["memory"].turn_number += 1
+    text=handled.get("text") or ""
+    data={"input":message,"state_before":before,"understanding":{"user_act":"escalation","intent":"escalation","topic_relation":"same_topic","domain_relevance":"in_scope","current_goal":"Preparar escalamiento estructurado","goal_complete":handled.get("status") in {"completed","cancelled"},"goal_updates":{},"case_updates":[],"needs_clarification":handled.get("status")=="collecting","clarification_target":handled.get("pending_field"),"should_retrieve":False,"confidence":1.0,"reasoning_summary":"native_escalation_lifecycle"},"understanding_contract":{"valid":True,"source":"native_escalation"},"decision":{"action":"continue_escalation","reason":"native_escalation_lifecycle","ask_one_question":handled.get("status")=="collecting","question_target":handled.get("pending_field")},"answer":{"text":text,"mode":handled.get("mode","escalation"),"knowledge_used":False},"retrieval":{"enabled":False,"skipped_reason":"native_escalation_lifecycle"},"escalation":{"status":handled.get("status"),"pending_field":handled.get("pending_field"),"state":deepcopy(store["memory"].escalation.to_dict()),"export":deepcopy(handled.get("export"))},"state_after":deepcopy(store["memory"].to_dict()),"provider_trace":{"understanding":{"skipped":True,"reason":"native_escalation"},"response":{"skipped":True,"reason":"native_escalation"}},"turn_metrics":_zero(),"execution":{"mode":"deterministic_escalation","llm_calls":0,"tokens":0},"production_changed":False}
+    store["messages"] += [{"role":"user","content":message},{"role":"assistant","content":text}];store["turns"].append(data)
+    return data
+
 def process_message(message, secrets_obj, s):
     store = get_store(s)
     budget = BudgetPolicy(**store["budget"])
     memory_before = deepcopy(store["memory"])
     before = deepcopy(store["memory"].to_dict())
+    if store["memory"].escalation.status in {"collecting","review","suspended","completed"}:
+        handled=handle_escalation(store["memory"].escalation,message,store["memory"],store.get("answer_context") or {})
+        if handled.get("handled"):
+            return _escalation_result(message,store,handled,before)
     key = _context_key(message, store["memory"])
     cached = store["exact_turn_cache"].get(key)
     execution = {"mode": budget.mode, "understanding_budget": budget.understanding_max_tokens, "response_budget": budget.response_max_tokens}
     if cached:
         store["memory"].turn_number += 1
         result = {"input": message, "state_before": before, **deepcopy(cached["artifact"]), "state_after": deepcopy(store["memory"].to_dict()), "provider_trace": {"understanding": {"skipped": True, "reason": "exact_turn_cache"}, "response": {"skipped": True, "reason": "exact_turn_cache"}}, "execution": {**execution, "cache_hit": True}, "cache": {"hit": True, "type": "exact_turn"}, "production_changed": False}
-        result, conceptual, procedural = _answers(result, message, secrets_obj, s, budget, store)
+        if (result.get("decision") or {}).get("action")=="offer_escalation":
+            conceptual={"skipped":True,"reason":"native_escalation"};procedural={"skipped":True,"reason":"native_escalation"}
+        else:
+            result, conceptual, procedural = _answers(result, message, secrets_obj, s, budget, store)
         traces = _apply_answer_traces(result, conceptual, procedural, store)
         result["turn_metrics"] = _combined_turn_metrics([], traces)
         result = reconcile(result, store["memory"])
@@ -245,11 +261,18 @@ def process_message(message, secrets_obj, s):
     store["messages"].append({"role": "user", "content": message})
     try:
         result = build_agent(secrets_obj, s, budget).process(message, store["memory"])
+        if (result.get("decision") or {}).get("action")=="offer_escalation":
+            handled=start_escalation(store["memory"].escalation,store["memory"],store.get("answer_context") or {},"Solicitud explícita del usuario")
+            text=handled.get("text") or ""
+            result["answer"]={"text":text,"mode":handled.get("mode","escalation_collecting"),"knowledge_used":False}
+            result["escalation"]={"status":handled.get("status"),"pending_field":handled.get("pending_field"),"state":deepcopy(store["memory"].escalation.to_dict())}
+            result["state_after"]=deepcopy(store["memory"].to_dict())
         if (result.get("understanding") or {}).get("degraded"):
             store["memory"] = memory_before
             result["state_after"] = deepcopy(store["memory"].to_dict())
             result.setdefault("functional_events", []).append({"type": "degraded_understanding_memory_rollback", "reason": "provider_contract_invalid"})
-        result = _attach_retrieval(result, message, store)
+        if (result.get("decision") or {}).get("action")!="offer_escalation":
+            result = _attach_retrieval(result, message, store)
         base = result.get("provider_trace") or {}
         contract = (result.get("understanding_contract") or {}).get("valid")
         add_result(store["telemetry"], base.get("understanding"), contract)
@@ -280,4 +303,4 @@ def process_message(message, secrets_obj, s):
 
 def export_session(s):
     x = get_store(s)
-    return {"format": "agent_core_v2_clean_phase3d3_scope_association_guard", "session_id": x.get("session_id"), "gateway_budget": {"calls": int(s.get("llm_gateway_calls", 0)), "tokens": int(s.get("llm_gateway_tokens", 0))}, "messages": deepcopy(x["messages"]), "turns": deepcopy(x["turns"]), "state": x["memory"].to_dict(), "answer_context": deepcopy(x.get("answer_context") or {}), "budget": deepcopy(x["budget"]), "telemetry": snapshot(x["telemetry"]), "cache_metrics": deepcopy(x["cache_metrics"]), "errors": deepcopy(x["errors"]), "retrieval_enabled": True, "documented_answer_enabled": True, "procedural_answer_enabled": True, "production_changed": False}
+    return {"format": "agent_core_v2_clean_phase4a1_modular_escalation_migration", "session_id": x.get("session_id"), "gateway_budget": {"calls": int(s.get("llm_gateway_calls", 0)), "tokens": int(s.get("llm_gateway_tokens", 0))}, "messages": deepcopy(x["messages"]), "turns": deepcopy(x["turns"]), "state": x["memory"].to_dict(), "answer_context": deepcopy(x.get("answer_context") or {}), "budget": deepcopy(x["budget"]), "telemetry": snapshot(x["telemetry"]), "cache_metrics": deepcopy(x["cache_metrics"]), "errors": deepcopy(x["errors"]), "escalation_export": build_escalation_export(x["memory"].escalation,x["memory"].conversation_id) if x["memory"].escalation.confirmed else None, "retrieval_enabled": True, "documented_answer_enabled": True, "procedural_answer_enabled": True, "production_changed": False}

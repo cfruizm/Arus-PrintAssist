@@ -40,4 +40,4 @@ def apply_understanding(m,u):
     else:m.support_case.attempts.append({"action":"previous validation","result":v})
     m.support_case.status="diagnosing"
  m.turn_number+=1
-def compact_context(m):return {"active_topic":m.active_topic,"pending_goal":m.pending_goal.__dict__,"confirmed_facts":list(m.fact_records.values()),"support_case":m.support_case.__dict__,"last_assistant_question":m.last_assistant_question,"summary":m.summary,"recent_topics":m.topic_history[-2:]}
+def compact_context(m):return {"active_topic":m.active_topic,"pending_goal":m.pending_goal.__dict__,"confirmed_facts":list(m.fact_records.values()),"support_case":m.support_case.__dict__,"escalation":m.escalation.to_dict(),"last_assistant_question":m.last_assistant_question,"summary":m.summary,"recent_topics":m.topic_history[-2:]}
