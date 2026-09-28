@@ -37,14 +37,19 @@ def apply_understanding(m,u):
    elif k=="affected_scope":m.support_case.affected_scope=v;m.support_case.status="diagnosing"
    elif k=="attempted_action":
     result=str(f.get("result") or "").strip() or None
+    outcome=str(f.get("outcome") or "unknown").strip().casefold()
+    if outcome not in {"resolved","improved","unchanged","worsened","unknown"}:outcome="unknown"
     existing=next((x for x in m.support_case.attempts if _attempt_key(x.get("action"))==_attempt_key(v)),None)
     if existing:
      if result:existing["result"]=result
-    else:m.support_case.attempts.append({"action":v,"result":result})
+     if outcome!="unknown" or not existing.get("outcome"):existing["outcome"]=outcome
+    else:m.support_case.attempts.append({"action":v,"result":result,"outcome":outcome})
     m.support_case.status="diagnosing"
    elif k=="attempt_result":
-    if m.support_case.attempts:m.support_case.attempts[-1]["result"]=v
-    else:m.support_case.attempts.append({"action":"previous validation","result":v})
+    outcome=str(f.get("outcome") or "unknown").strip().casefold()
+    if outcome not in {"resolved","improved","unchanged","worsened","unknown"}:outcome="unknown"
+    if m.support_case.attempts:m.support_case.attempts[-1].update({"result":v,"outcome":outcome})
+    else:m.support_case.attempts.append({"action":"previous validation","result":v,"outcome":outcome})
     m.support_case.status="diagnosing"
  m.turn_number+=1
 def compact_context(m):return {"active_topic":m.active_topic,"pending_goal":m.pending_goal.__dict__,"confirmed_facts":list(m.fact_records.values()),"support_case":m.support_case.__dict__,"escalation":m.escalation.to_dict(),"last_assistant_question":m.last_assistant_question,"summary":m.summary,"recent_topics":m.topic_history[-2:]}

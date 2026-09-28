@@ -22,11 +22,12 @@ def sync_from_memory(state,memory,ctx=None):
  if case.attempts and not state.fields.get("troubleshooting_performed"):
   rows=[]
   for x in case.attempts:
-   a=str(x.get("action") or "").strip();r=str(x.get("result") or "").strip()
-   if a:rows.append(a+(" (resultado: "+r+")" if r else ""))
+   a=str(x.get("action") or "").strip();r=str(x.get("result") or "").strip();o=str(x.get("outcome") or "").strip()
+   if a:rows.append(a+(" (resultado: "+r+")" if r else "")+(" [estado: "+o+"]" if o and o!="unknown" else ""))
   if rows:_set(state,"troubleshooting_performed","; ".join(dict.fromkeys(rows)),"support_case","confirmed",turn)
  if case.affected_scope and not state.fields.get("impact_scope"):_set(state,"impact_scope",case.affected_scope,"support_case","confirmed",turn)
- state.sources_consulted=_source_rows(ctx)
+ rows=_source_rows(ctx)
+ if rows:state.sources_consulted=rows
 def _advance(state):
  missing=next((x for x in FIELDS if x.required and not (state.fields.get(x.key) or {}).get("value")),None) or next((x for x in FIELDS if x.key not in state.fields),None)
  if missing:state.status="collecting";state.pending_field=missing.key
