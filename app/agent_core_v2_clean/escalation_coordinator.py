@@ -1,8 +1,9 @@
 from __future__ import annotations
 from copy import deepcopy
+import unicodedata
 from .escalation_contract import FIELDS,BY_KEY
 from .escalation_export import build_export,build_text
-
+def _norm(v):return " ".join(unicodedata.normalize("NFKD",str(v or "")).encode("ascii","ignore").decode().casefold().split())
 def _set(state,key,value,source,status,turn):
  previous=deepcopy(state.fields.get(key));state.fields[key]={"value":value,"source":source,"status":status,"turn":turn}
  if key in state.unknown_fields and status!="unknown":state.unknown_fields.remove(key)
@@ -21,9 +22,9 @@ def sync_from_memory(state,memory,ctx=None):
  if case.attempts and not state.fields.get("troubleshooting_performed"):
   rows=[]
   for x in case.attempts:
-   action=str(x.get("action") or "").strip();result=str(x.get("result") or "").strip()
-   if action:rows.append(action+(" (resultado: "+result+")" if result else ""))
-  if rows:_set(state,"troubleshooting_performed","; ".join(rows),"support_case","confirmed",turn)
+   a=str(x.get("action") or "").strip();r=str(x.get("result") or "").strip()
+   if a:rows.append(a+(" (resultado: "+r+")" if r else ""))
+  if rows:_set(state,"troubleshooting_performed","; ".join(dict.fromkeys(rows)),"support_case","confirmed",turn)
  if case.affected_scope and not state.fields.get("impact_scope"):_set(state,"impact_scope",case.affected_scope,"support_case","confirmed",turn)
  state.sources_consulted=_source_rows(ctx)
 def _advance(state):
@@ -39,31 +40,30 @@ def response(state,memory):
  if state.status=="completed":return {"handled":True,"status":"completed","mode":"escalation_completed","text":"El escalamiento quedó confirmado y cerrado. Puedes realizar una nueva consulta.","export":build_export(state,memory.conversation_id)}
  if state.status=="cancelled":return {"handled":True,"status":"cancelled","mode":"escalation_cancelled","text":"Cancelé el escalamiento y regresé a la conversación normal."}
  return {"handled":False}
-def handle_semantic(state,message,memory,u,ctx=None):
- workflow=str(getattr(u,"requested_workflow","none") or "none");role=str(getattr(u,"workflow_turn_role","none") or "none");turn=int(memory.turn_number or 0)+1
+def handle(state,message,memory,w,ctx=None):
+ role=w.turn_role;action=w.workflow_action;turn=int(memory.turn_number or 0)+1
  if state.status=="completed":state.status="inactive";state.pending_field=None;return {"handled":False,"reset_after_completion":True}
- if workflow=="cancel_escalation":state.status="cancelled";state.pending_field=None;state.suspended_pending_field=None;state.completion_reason="user_cancelled";state.completed_turn=turn;return response(state,memory)
- if workflow=="suspend_escalation" or role=="independent_question":
+ if action=="cancel":state.status="cancelled";state.pending_field=None;state.suspended_pending_field=None;state.completion_reason="user_cancelled";state.completed_turn=turn;return response(state,memory)
+ if action=="suspend" or role=="independent_question":
   if state.status in {"collecting","review"}:state.suspended_pending_field=state.pending_field;state.status="suspended";state.suspended_reason="independent_question" if role=="independent_question" else "user_requested"
   return {"handled":False,"answer_independent":role=="independent_question","suspended":True}
- if workflow=="resume_escalation":
+ if action in {"resume","restart"}:
   if state.status=="suspended":state.status="collecting";state.pending_field=state.suspended_pending_field;state.suspended_pending_field=None;state.suspended_reason=None;_advance(state);return response(state,memory)
   if state.status=="cancelled":return start(state,memory,ctx,"Usuario reinició un escalamiento cancelado",reuse=True)
  if state.status=="suspended":return {"handled":False,"suspended":True}
  if state.status=="review":
-  if workflow=="confirm_escalation":state.status="completed";state.confirmed=True;state.exported=True;state.completion_reason="user_confirmed";state.completed_turn=turn;return response(state,memory)
-  if role=="correction" and getattr(u,"workflow_field",None) in BY_KEY and str(getattr(u,"workflow_value","") or "").strip():_set(state,u.workflow_field,str(u.workflow_value).strip(),"user_correction","confirmed",turn);return response(state,memory)
+  if action=="confirm":state.status="completed";state.confirmed=True;state.exported=True;state.completion_reason="user_confirmed";state.completed_turn=turn;return response(state,memory)
+  if role=="correction" and w.field in BY_KEY and str(w.value or "").strip():_set(state,w.field,str(w.value).strip(),"user_correction","confirmed",turn);return response(state,memory)
   return {"handled":True,"status":"review","mode":"escalation_review","text":"El resumen está listo. Puedes confirmarlo, corregir un campo o cancelar el proceso."}
  if state.status=="collecting":
   pending=state.pending_field
-  if not pending:_advance(state);return response(state,memory)
   if role=="unknown_value":
    _set(state,pending,"No disponible","user","unknown",turn)
    if pending not in state.unknown_fields:state.unknown_fields.append(pending)
-  else:
-   # Once lifecycle and independent-question semantics have been ruled out, an ordinary reply to the last field question is the field value. This is contextual capture, not lexical matching.
-   value=str(getattr(u,"workflow_value",None) or message).strip()
-   if not value:return {"handled":True,"status":"collecting","mode":"escalation_clarification","text":"Necesito el dato solicitado para continuar con el escalamiento.","pending_field":pending}
+  elif role=="field_value" and str(w.value or "").strip():
+   value=str(w.value).strip();duplicate=next((k for k,v in state.fields.items() if k!=pending and _norm((v or {}).get("value"))==_norm(value)),None)
+   if duplicate:return {"handled":True,"status":"collecting","mode":"escalation_ambiguity","text":"Ese dato ya quedó registrado en otro campo. ¿Puedes indicar específicamente "+BY_KEY[pending].label.casefold()+"?","pending_field":pending}
    _set(state,pending,value,"user","confirmed",turn)
+  else:return {"handled":True,"status":"collecting","mode":"escalation_ambiguity","text":"No pude determinar con seguridad si el mensaje responde a "+BY_KEY[pending].label.casefold()+". "+BY_KEY[pending].question,"pending_field":pending}
   sync_from_memory(state,memory,ctx);_advance(state);return response(state,memory)
  return {"handled":False}

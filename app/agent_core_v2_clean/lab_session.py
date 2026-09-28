@@ -19,7 +19,8 @@ from .response_reconciler import reconcile
 from .topic_boundary import infer_topic_boundary
 from .operational_coherence import normalize_generation_flags
 from .documentation_limitation import classify as classify_documentation_limitation
-from .escalation_coordinator import start as start_escalation, handle_semantic as handle_escalation
+from .escalation_coordinator import start as start_escalation, handle as handle_escalation
+from .workflow_understanding import WorkflowInterpreter
 from .escalation_export import build_export as build_escalation_export, build_text as build_escalation_text
 
 KEY = "agent_core_v2_clean_store"
@@ -230,14 +231,11 @@ def process_message(message, secrets_obj, s):
     memory_before = deepcopy(store["memory"])
     before = deepcopy(store["memory"].to_dict())
     if store["memory"].escalation.status in {"collecting","review","suspended","completed","cancelled"}:
-        preflight=ConversationUnderstanding(_gateway(secrets_obj,s),budget.understanding_max_tokens)
-        workflow_u=preflight.interpret(message,store["memory"])
-        add_result(store["telemetry"],preflight.last_provider_result,preflight.contract_valid)
-        handled=handle_escalation(store["memory"].escalation,message,store["memory"],workflow_u,store.get("answer_context") or {})
+        wi=WorkflowInterpreter(_gateway(secrets_obj,s),180);wu=wi.interpret(message,store["memory"].escalation);add_result(store["telemetry"],wi.last_provider_result,wi.contract_valid)
+        handled=handle_escalation(store["memory"].escalation,message,store["memory"],wu,store.get("answer_context") or {})
         if handled.get("handled"):
-            result=_escalation_result(message,store,handled,before);result["understanding"]=workflow_u.to_dict();result["understanding_contract"]={"valid":preflight.contract_valid,"source":"semantic_workflow_preflight","normalization":deepcopy(preflight.normalization or {})};result["decision"]={"action":"continue_escalation","reason":"semantic_workflow_preflight:"+str(workflow_u.requested_workflow),"ask_one_question":handled.get("status")=="collecting","question_target":handled.get("pending_field")};result["execution"]={"mode":"semantic_escalation","llm_calls":1};return result
-        if handled.get("answer_independent"):
-            before=deepcopy(store["memory"].to_dict())
+            result=_escalation_result(message,store,handled,before);result["workflow_understanding"]=wu.to_dict();result["workflow_contract"]={"valid":wi.contract_valid,"source":"dedicated_workflow_interpreter"};result["provider_trace"]["workflow_understanding"]=wi.last_provider_result;result["execution"]={"mode":"semantic_escalation","llm_calls":1};return result
+        if handled.get("answer_independent"):before=deepcopy(store["memory"].to_dict())
     key = _context_key(message, store["memory"])
     cached = store["exact_turn_cache"].get(key)
     execution = {"mode": budget.mode, "understanding_budget": budget.understanding_max_tokens, "response_budget": budget.response_max_tokens}
@@ -308,4 +306,4 @@ def process_message(message, secrets_obj, s):
 
 def export_session(s):
     x = get_store(s)
-    return {"format": "agent_core_v2_clean_phase4a3_1_semantic_field_capture_recovery", "session_id": x.get("session_id"), "gateway_budget": {"calls": int(s.get("llm_gateway_calls", 0)), "tokens": int(s.get("llm_gateway_tokens", 0))}, "messages": deepcopy(x["messages"]), "turns": deepcopy(x["turns"]), "state": x["memory"].to_dict(), "answer_context": deepcopy(x.get("answer_context") or {}), "budget": deepcopy(x["budget"]), "telemetry": snapshot(x["telemetry"]), "cache_metrics": deepcopy(x["cache_metrics"]), "errors": deepcopy(x["errors"]), "escalation_export": build_escalation_export(x["memory"].escalation,x["memory"].conversation_id) if x["memory"].escalation.confirmed else None, "retrieval_enabled": True, "documented_answer_enabled": True, "procedural_answer_enabled": True, "production_changed": False}
+    return {"format": "agent_core_v2_clean_phase4a3_2_dedicated_workflow_understanding", "session_id": x.get("session_id"), "gateway_budget": {"calls": int(s.get("llm_gateway_calls", 0)), "tokens": int(s.get("llm_gateway_tokens", 0))}, "messages": deepcopy(x["messages"]), "turns": deepcopy(x["turns"]), "state": x["memory"].to_dict(), "answer_context": deepcopy(x.get("answer_context") or {}), "budget": deepcopy(x["budget"]), "telemetry": snapshot(x["telemetry"]), "cache_metrics": deepcopy(x["cache_metrics"]), "errors": deepcopy(x["errors"]), "escalation_export": build_escalation_export(x["memory"].escalation,x["memory"].conversation_id) if x["memory"].escalation.confirmed else None, "retrieval_enabled": True, "documented_answer_enabled": True, "procedural_answer_enabled": True, "production_changed": False}

@@ -2,6 +2,7 @@ from .models import ConversationMemory,TurnUnderstanding,PendingGoal
 STRUCTURAL_GOAL_KEYS={"intent","status","summary","known_details","missing_detail","goal_complete","current_goal","goal_type","goal_updates","answer_to_question"}
 def normalize_goal_updates(updates):
  raw=dict(updates or {});clean={str(k):str(v) for k,v in raw.items() if str(k) not in STRUCTURAL_GOAL_KEYS and str(v).strip()};return clean,sorted(set(map(str,raw))-set(clean))
+def _attempt_key(v):return " ".join(str(v or "").casefold().split())
 def _add(xs,v):
  v=" ".join(str(v or "").split())
  if v and v.casefold() not in {x.casefold() for x in xs}:xs.append(v)
@@ -34,7 +35,13 @@ def apply_understanding(m,u):
    if k in {"symptom","reported_failure","new_case"}:_add(m.support_case.symptoms,v);m.support_case.status="diagnosing"
    elif k=="observation":_add(m.support_case.observations,v);m.support_case.status="diagnosing"
    elif k=="affected_scope":m.support_case.affected_scope=v;m.support_case.status="diagnosing"
-   elif k=="attempted_action":m.support_case.attempts.append({"action":v,"result":str(f.get("result") or "").strip() or None});m.support_case.status="diagnosing"
+   elif k=="attempted_action":
+    result=str(f.get("result") or "").strip() or None
+    existing=next((x for x in m.support_case.attempts if _attempt_key(x.get("action"))==_attempt_key(v)),None)
+    if existing:
+     if result:existing["result"]=result
+    else:m.support_case.attempts.append({"action":v,"result":result})
+    m.support_case.status="diagnosing"
    elif k=="attempt_result":
     if m.support_case.attempts:m.support_case.attempts[-1]["result"]=v
     else:m.support_case.attempts.append({"action":"previous validation","result":v})
