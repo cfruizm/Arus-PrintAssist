@@ -15,7 +15,7 @@ class ConversationMemory:
  def to_dict(self):return asdict(self)
 @dataclass
 class TurnUnderstanding:
- user_act:str;intent:str;topic_relation:str;domain_relevance:str;current_goal:str;goal_complete:bool;goal_updates:dict[str,str]=field(default_factory=dict);case_updates:list[dict[str,Any]]=field(default_factory=list);needs_clarification:bool=False;clarification_target:str|None=None;should_retrieve:bool=False;confidence:float=0.;reasoning_summary:str="";degraded:bool=False;canonical_subject:str|None=None;subject_origin:str|None=None;reference_relation:str="none";requested_workflow:str="none";workflow_payload_type:str="none";workflow_field:str|None=None;workflow_value:str|None=None;workflow_inquiry:bool=False
+ user_act:str;intent:str;topic_relation:str;domain_relevance:str;current_goal:str;goal_complete:bool;goal_updates:dict[str,str]=field(default_factory=dict);case_updates:list[dict[str,Any]]=field(default_factory=list);needs_clarification:bool=False;clarification_target:str|None=None;should_retrieve:bool=False;confidence:float=0.;reasoning_summary:str="";degraded:bool=False;canonical_subject:str|None=None;subject_origin:str|None=None;reference_relation:str="none";requested_workflow:str="none";workflow_turn_role:str="none";workflow_field:str|None=None;workflow_value:str|None=None
  def to_dict(self):return asdict(self)
 @dataclass
 class AgentDecision:

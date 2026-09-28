@@ -12,7 +12,6 @@ WORKFLOW_ACTIONS={
 class ConversationPolicy:
  def decide(self,u,m):
   intent=str(u.intent or "").casefold();act=str(u.user_act or "").casefold();workflow=str(getattr(u,"requested_workflow","none") or "none").casefold()
-  if bool(getattr(u,"workflow_inquiry",False)):return AgentDecision("answer_workflow_contract","semantic_workflow_inquiry")
   # Operational workflow is independent from technical intent and has routing authority.
   if workflow in WORKFLOW_ACTIONS:
    action=WORKFLOW_ACTIONS[workflow]
