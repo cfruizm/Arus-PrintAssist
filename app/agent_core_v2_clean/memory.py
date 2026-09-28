@@ -32,7 +32,11 @@ def apply_understanding(m,u):
     if value and key not in present:case_updates.append({"type":key,"value":value})
   for f in case_updates:
    k,v=str(f.get("type") or ""),str(f.get("value") or "").strip()
-   if k in {"symptom","reported_failure","new_case"}:_add(m.support_case.symptoms,v);m.support_case.status="diagnosing"
+   if k=="scope":k="affected_scope"
+   if k in {"symptom","reported_failure","new_case"}:
+    _add(m.support_case.symptoms,v);m.support_case.status="diagnosing"
+    subject=str(getattr(u,"canonical_subject",None) or (u.goal_updates or {}).get("subject") or "").strip()
+    if subject and not m.support_case.subject:m.support_case.subject=subject
    elif k=="observation":_add(m.support_case.observations,v);m.support_case.status="diagnosing"
    elif k=="affected_scope":m.support_case.affected_scope=v;m.support_case.status="diagnosing"
    elif k=="attempted_action":

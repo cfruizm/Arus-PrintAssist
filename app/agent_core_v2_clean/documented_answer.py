@@ -65,7 +65,7 @@ def _candidate_rows(retrieval):
 
 
 def evidence_pack(retrieval, message="", understanding=None, max_items=6, max_chars=6200):
-    followup=str((understanding or {}).get("user_act") or "") in {"follow_up","answer_to_question","request_elaboration","attempt_result","reported_failure"}
+    followup=(str((understanding or {}).get("user_act") or "") in {"follow_up","answer_to_question","request_elaboration","attempt_result","reported_failure"} or str((understanding or {}).get("topic_relation") or "") in {"same_topic","return_to_previous"})
     if followup:max_items,max_chars=min(max_items,4),min(max_chars,4500)
     """Select a diverse, relevance-ordered evidence set without losing later pages."""
     rows = _candidate_rows(retrieval)
@@ -145,6 +145,14 @@ def readable_sources(evidence, cited_ids):
     return [f"[{rid}] {by_id[rid].get('title') or 'Fuente sin titulo'}, pagina {by_id[rid].get('page') or 'N/D'}" for rid in cited_ids if rid in by_id]
 
 
+
+def _compact_followup_checks(text, understanding, maximum=3):
+    followup=(str((understanding or {}).get("user_act") or "") in {"follow_up","answer_to_question","request_elaboration","attempt_result","reported_failure"} or str((understanding or {}).get("topic_relation") or "") in {"same_topic","return_to_previous"})
+    if not followup:return text
+    matches=list(re.finditer(r"(?m)^\s*(\d+)[.)]\s+",str(text or "")))
+    if len(matches)<=maximum:return text
+    return str(text or "")[:matches[maximum].start()].rstrip()
+
 class DocumentedAnswerComposer:
     def __init__(self, gateway, max_tokens=360):
         self.gateway = gateway
@@ -164,12 +172,16 @@ class DocumentedAnswerComposer:
         if not evidence:
             return AgentResponse("La recuperacion no contiene evidencia suficiente para responder de forma documentada.", "documented_insufficient", False)
         from app.llm_gateway.models import LLMRequest
+        previous=dict(retrieval.get("_answer_context") or {})
+        followup=(str(understanding.get("user_act") or "") in {"follow_up","answer_to_question","request_elaboration","attempt_result","reported_failure"} or str(understanding.get("topic_relation") or "") in {"same_topic","return_to_previous"})
         payload = {
-            "question": message, "intent": intent, "goal": understanding.get("current_goal"),
+            "question": message, "intent": intent, "goal": understanding.get("current_goal"),"followup":followup,
+            "already_delivered_guidance":list(previous.get("delivered_guidance") or [])[:8],"previous_answer_partial":bool(previous.get("partial")),
             "coverage_contract": {
-                "use_all_relevant_fragments": True,
+                "use_all_relevant_fragments": not followup,
                 "preserve_later_page_information": True,
                 "definition_does_not_imply_full_requirements": conceptual,
+                "max_numbered_checks":3 if followup else None,
                 "required_shape": "definition_purpose_capabilities_if_supported" if conceptual else "requirement_categories" if requirements else "proportional",
             },
             "evidence": evidence,
@@ -182,7 +194,7 @@ class DocumentedAnswerComposer:
         self.last_provider_result = result.to_dict()
         if not result.ok:
             return AgentResponse("Encontre documentacion, pero no pude redactar la respuesta en este turno. Las fuentes recuperadas se conservaron.", "documented_provider_degraded", False)
-        text = str(result.text or "").strip()
+        text = _compact_followup_checks(str(result.text or "").strip(),understanding)
         contradiction, dimension_check = contradicted_absence(text, message, understanding, evidence)
         valid, cited = validate_citations(text, [str(x["id"]) for x in evidence])
         truncated = str(result.finish_reason or "").casefold() in {"length", "max_tokens"}

@@ -16,7 +16,8 @@ def _source_rows(ctx):
  return out
 def sync_from_memory(state,memory,ctx=None):
  turn=int(memory.turn_number or 0);case=memory.support_case
- if memory.active_subject and not state.fields.get("product_or_service"):_set(state,"product_or_service",memory.active_subject,"conversation","confirmed",turn)
+ case_subject=str(getattr(case,"subject",None) or "").strip()
+ if (case_subject or memory.active_subject) and not state.fields.get("product_or_service"):_set(state,"product_or_service",case_subject or memory.active_subject,"support_case" if case_subject else "conversation","confirmed",turn)
  issue="; ".join(list(case.symptoms or [])+list(case.observations or []))
  if issue and not state.fields.get("issue_description"):_set(state,"issue_description",issue,"support_case","confirmed",turn)
  if case.attempts and not state.fields.get("troubleshooting_performed"):

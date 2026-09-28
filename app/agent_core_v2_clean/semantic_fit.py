@@ -126,7 +126,9 @@ def capture_answer_context(result):
  inverted=list(re.finditer(r"¿[^?]{1,420}\?",normalized))
  closing_question=inverted[-1].group(0).strip() if inverted else None
  guidance=[]
- numbered=re.findall(r"(?ms)^\s*(?:#{1,6}\s*)?\*\*\d+[.)]\s+([^*\n]+)\*\*\s*(.*?)(?=^\s*(?:#{1,6}\s*)?\*\*\d+[.)]|\Z)",text)
- for title,body in numbered[:8]:
-  guidance.append({"action":" ".join(title.split()),"excerpt":" ".join(body.split())[:260],"status":"truncated" if str(answer.get("finish_reason") or "").casefold() in {"length","max_tokens"} and (title,body)==numbered[-1] else "delivered"})
+ markers=list(re.finditer(r"(?m)^\s*\d+[.)]\s+",text))
+ for index,marker in enumerate(markers[:8]):
+  end=markers[index+1].start() if index+1<len(markers) else len(text)
+  block=text[marker.end():end].strip();first=block.splitlines()[0] if block else "";action=re.sub(r"^[*#\s]+|[*:]+$","",first).strip();body=" ".join(block.split())
+  if action:guidance.append({"action":action,"excerpt":body[:260],"status":"truncated" if str(answer.get("finish_reason") or "").casefold() in {"length","max_tokens"} and index==len(markers[:8])-1 else "delivered"})
  return {"answer_mode":answer.get("mode"),"goal":(result.get("understanding") or {}).get("current_goal"),"main_text_excerpt":normalized[:1000],"closing_question":closing_question,"source_identities":identities,"source_titles":titles,"cited_ids":sorted(cited),"cited_evidence":compact,"delivered_guidance":guidance,"finish_reason":answer.get("finish_reason"),"partial":str(answer.get("mode") or "").endswith("_partial") or str(answer.get("finish_reason") or "").casefold() in {"length","max_tokens"}}

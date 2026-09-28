@@ -11,6 +11,7 @@ def compact_diagnostic_progression(memory):
         completed.append({
             "action": str(item.get("action") or "").strip(),
             "result": str(item.get("result") or "").strip() or None,
+            "outcome": str(item.get("outcome") or "unknown").strip(),
         })
     return {
         "active": str(getattr(case, "status", "") or "") == "diagnosing",
