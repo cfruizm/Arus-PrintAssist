@@ -3,17 +3,17 @@ from dataclasses import dataclass,asdict
 import json
 from .escalation_contract import BY_KEY
 SCHEMA={"type":"object","properties":{"turn_role":{"type":"string","enum":["field_value","unknown_value","correction","independent_question","workflow_action","ambiguous"]},"workflow_action":{"type":"string","enum":["none","cancel","suspend","resume","confirm","restart"]},"field":{"type":["string","null"]},"value":{"type":["string","null"]},"confidence":{"type":"number"},"reason":{"type":"string"}},"required":["turn_role","workflow_action","field","value","confidence","reason"]}
-SYSTEM="""Classify one turn inside an existing support escalation workflow. Interpret meaning from workflow state, pending question, collected fields and the user message. Do not use product-specific assumptions. Lifecycle actions outrank field capture. A request to stop is cancel. A temporary unrelated technical or conceptual question is independent_question. A request to continue a suspended process is resume. A request to start again after cancellation is restart. Confirmation is valid only in review. Correction must identify the canonical field and corrected value. A direct factual answer, including a short proper name, identifier, version, location or scope, is field_value only when it answers the pending question. unknown_value means the requested information is unavailable. If the turn cannot be assigned safely, use ambiguous. Return only the schema JSON."""
+SYSTEM="""Classify one message within an existing support-escalation workflow using only meaning and context. Lifecycle intent outranks field capture. Return workflow_action for cancel, suspend, resume, confirm or restart; independent_question for a temporary separate question; correction for a changed collected value; unknown_value when requested data is unavailable; field_value only when the message answers the pending question; otherwise ambiguous. Do not use product assumptions or keyword rules. Return only schema JSON."""
 @dataclass
 class WorkflowUnderstanding:
  turn_role:str="ambiguous";workflow_action:str="none";field:str|None=None;value:str|None=None;confidence:float=0.;reason:str=""
  def to_dict(self):return asdict(self)
 class WorkflowInterpreter:
- def __init__(self,gateway,max_tokens=180):self.gateway=gateway;self.max_tokens=max(120,min(240,int(max_tokens)));self.last_provider_result={};self.contract_valid=False
+ def __init__(self,gateway,max_tokens=96):self.gateway=gateway;self.max_tokens=max(72,min(112,int(max_tokens)));self.last_provider_result={};self.contract_valid=False
  def interpret(self,message,state):
   from app.llm_gateway.models import LLMRequest
   pending=state.pending_field;spec=BY_KEY.get(pending)
-  payload={"workflow_status":state.status,"pending_field":pending,"pending_question":spec.question if spec else None,"collected_fields":{k:(v or {}).get("value") for k,v in state.fields.items()},"user_message":message}
+  payload={"status":state.status,"field":pending,"question":spec.question if spec else None,"message":message}
   r=self.gateway.complete(LLMRequest([{"role":"system","content":SYSTEM},{"role":"user","content":json.dumps(payload,ensure_ascii=False,separators=(",",":"))}],"agent_core_v2_clean_workflow_understanding",self.max_tokens,0.,SCHEMA));self.last_provider_result=r.to_dict();self.contract_valid=False
   if not r.ok:return WorkflowUnderstanding(reason="provider_unavailable")
   try:

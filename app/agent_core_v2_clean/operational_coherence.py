@@ -5,7 +5,9 @@ def _m(v):return dict(v) if isinstance(v,Mapping) else {}
 def _resolved(s):return str(_m(s.get("support_case")).get("resolution_status","")).casefold()=="resolved" or str(_m(_m(s.get("pending_goal")).get("known_details")).get("resolution_status","")).casefold()=="resolved"
 def reconcile_understanding_object(u,memory,boundary=None):
  events=[];p=u.to_dict()
- if str(p.get("domain_relevance","")).casefold()=="out_of_scope" and (p.get("intent") in {"troubleshooting","procedural","requirements","conceptual"} or p.get("case_updates")):u.domain_relevance="in_scope";events.append({"type":"scope_overridden","reason":"structured_domain_contradiction"})
+ if str(p.get("domain_relevance","")).casefold()=="out_of_scope":
+  u.should_retrieve=False;u.needs_clarification=False;u.clarification_target=None;u.case_updates=[]
+  events.append({"type":"scope_preserved","reason":"explicit_out_of_scope_is_terminal"})
  if _resolved(memory.to_dict()) and p.get("case_updates") and not p.get("goal_complete"):u.goal_complete=False;events.append({"type":"case_reopened","reason":"new_failure_after_resolution"})
  return u,events
 def apply_reopen_transition(memory,events):

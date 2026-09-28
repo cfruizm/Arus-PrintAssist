@@ -6,7 +6,7 @@ import unicodedata
 from collections import defaultdict
 from .models import AgentResponse
 
-PROMPT_VERSION = "documented_v8_evidence_coverage_synthesis"
+PROMPT_VERSION = "documented_v9_budget_aware_natural_synthesis"
 SYSTEM = """Eres un colega de soporte empresarial de impresion. Responde unicamente con la evidencia documental suministrada y usa el idioma del usuario. Se util, directo y natural. No inventes menus, pasos, requisitos, relaciones ni funciones. Cada afirmacion factual debe terminar con una o mas citas [R#].
 
 Ajusta la forma al objetivo:
@@ -14,7 +14,7 @@ Ajusta la forma al objetivo:
 - requirements: sintetiza todas las categorias de condiciones previas respaldadas por el conjunto de evidencia, no solo por el primer fragmento. Separa categorias y conserva alternativas como alternativas.
 - procedural: conserva el orden documental y no rellenes pasos ausentes.
 
-Integra fragmentos complementarios del mismo documento y de paginas posteriores. No copies un unico enunciado si otros fragmentos autorizados agregan capacidades materialmente distintas. Si una parte solicitada no aparece, responde primero todo lo que si esta documentado y declara la limitacion de forma localizada. Nunca afirmes ausencia global sin revisar todos los fragmentos. En seguimientos del mismo caso, no vuelvas a definir, presentar ni describir el producto. Empieza por el nuevo hecho confirmado, su implicación y la siguiente comprobación respaldada. Prioriza cobertura completa y concisa sobre detalle secundario. No menciones procesos internos del laboratorio."""
+Integra fragmentos complementarios del mismo documento y de paginas posteriores. No copies un unico enunciado si otros fragmentos autorizados agregan capacidades materialmente distintas. Si una parte solicitada no aparece, responde primero todo lo que si esta documentado y declara la limitacion de forma localizada. Nunca afirmes ausencia global sin revisar todos los fragmentos. En seguimientos del mismo caso, no vuelvas a definir, presentar ni describir el producto. Empieza por el nuevo hecho confirmado, su implicación y la siguiente comprobación respaldada. Prioriza cobertura completa y concisa sobre detalle secundario. Para una consulta inicial usa como máximo 320 palabras; para un seguimiento del mismo caso usa como máximo 220 palabras. En troubleshooting prioriza la implicación del dato nuevo y hasta tres comprobaciones de mayor valor diagnóstico. No repitas definiciones, contexto, fuentes equivalentes ni recomendaciones ya realizadas. No menciones procesos internos del laboratorio."""
 
 _STOP = {
     "cuales", "cual", "especificamente", "requisitos", "requisito", "necesito",
@@ -64,7 +64,7 @@ def _candidate_rows(retrieval):
     return out
 
 
-def evidence_pack(retrieval, message="", understanding=None, max_items=12, max_chars=12000):
+def evidence_pack(retrieval, message="", understanding=None, max_items=6, max_chars=6200):
     """Select a diverse, relevance-ordered evidence set without losing later pages."""
     rows = _candidate_rows(retrieval)
     wanted = _terms(" ".join((str(message or ""), str((understanding or {}).get("current_goal") or ""))))

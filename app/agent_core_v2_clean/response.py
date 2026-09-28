@@ -11,7 +11,7 @@ class NaturalResponseComposer:
    if any(x in text for x in ("gracias","muchas gracias","eso es todo","hasta luego","adios")):return AgentResponse("Con gusto. Si necesitas revisar otro caso del servicio de impresión, aquí estaré.","social_closing")
    return AgentResponse("Hola. ¿Qué necesitas revisar sobre el servicio de impresión?","social")
   if intent in {"meta","capabilities"} or act=="request_capabilities":return AgentResponse("Puedo explicar conceptos, consultar documentación, orientar procedimientos, apoyar diagnóstico de fallas y preparar información para escalamiento dentro del servicio de impresión.","capabilities")
-  if d.action=="redirect_scope":return AgentResponse("Ese tema está fuera de mi alcance de soporte de impresión. Si quieres, continuamos con el caso técnico.","out_of_scope")
+  if d.action=="redirect_scope":return AgentResponse("Esa consulta está fuera del alcance de este asistente, que atiende exclusivamente soporte técnico y procesos del servicio de impresión.","out_of_scope_closed")
   if d.action=="cancel":m.pending_goal.status="inactive";return AgentResponse("Listo, cancelé el flujo actual. ¿Qué necesitas revisar ahora?","cancelled")
   if d.action=="degraded_continue":return AgentResponse("No pude interpretar este turno de forma confiable. Conservé el estado anterior sin aplicar cambios.","provider_degraded")
   if d.action in {"defer_to_retrieval","diagnose_with_retrieval"}:return AgentResponse("La solicitud quedó lista para contrastarla con la documentación.","retrieval_pending")

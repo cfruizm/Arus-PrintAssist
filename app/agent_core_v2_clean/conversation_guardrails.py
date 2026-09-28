@@ -37,8 +37,8 @@ def scope_gate(message,understanding,state_before):
  independent=act in {'new_request','independent_question','topic_change'} or relation in {'new_topic','independent'}
  # Never convert an explicitly out-of-scope independent request into in-scope because a printing topic was active.
  if scope=='out_of_scope' and independent:
-  u['should_retrieve']=False;u['needs_clarification']=False
-  return u,{'blocked':True,'reason':'explicit_independent_out_of_scope','original_scope':scope,'active_context_ignored':active}
+  u['should_retrieve']=False;u['needs_clarification']=False;u['clarification_target']=None;u['case_updates']=[];u['requested_workflow']='none';u['goal_complete']=True
+  return u,{'blocked':True,'closed':True,'reason':'explicit_independent_out_of_scope','original_scope':scope,'active_context_ignored':active}
  # Only a genuine referential follow-up may inherit the in-scope domain.
  if scope=='out_of_scope' and referential:
   u['domain_relevance']='in_scope';return u,{'blocked':False,'reason':'referential_followup_inherits_scope','original_scope':scope,'active_context_ignored':False}
