@@ -1,6 +1,7 @@
 # Regression lineage: agent_core_v2_clean_phase4a3_9_4_visible_terminal_truncation_recovery
 from copy import deepcopy
 import secrets
+import hashlib
 from app.llm_gateway.config import load_gateway_config
 from app.llm_gateway.gateway import LLMGateway, reset_gateway_session
 from .models import ConversationMemory
@@ -24,6 +25,7 @@ from .escalation_coordinator import start as start_escalation, handle as handle_
 from .workflow_understanding import WorkflowInterpreter
 from .escalation_export import build_export as build_escalation_export, build_text as build_escalation_text
 from .cache_limits import enforce_cache_limits
+from .document_continuity import continuity_authority
 
 KEY = "agent_core_v2_clean_store"
 
@@ -99,24 +101,27 @@ def _attach_retrieval(result, message, store):
         builder = RetrievalQueryBuilder()
         query = builder.build(message, store["memory"], u)
         current = builder.current_only(message, u)
-        cached = store["retrieval_cache"].get(query.fingerprint)
+        # Resolve continuity before retrieval so the previously cited document can
+        # be queried directly. Authority comes only from structured semantic state.
+        boundary = infer_topic_boundary(result.get("state_before") or {}, result.get("understanding") or {})
+        continuity = continuity_authority(result.get("understanding") or {}, boundary.to_dict(), store.get("answer_context") or {})
+        preferred_sources = continuity.get("preferred_sources") or []
+        source_key = "|".join(preferred_sources)
+        cache_key = query.fingerprint + (":" + hashlib.sha256(source_key.encode()).hexdigest()[:12] if source_key else "")
+        cached = store["retrieval_cache"].get(cache_key)
         if cached:
             raw = deepcopy(cached)
             raw["cache_hit"] = True
             store["cache_metrics"]["retrieval_hits"] += 1
         else:
-            raw = ReadOnlyRetrieval(k=6).search(query, current)
+            raw = ReadOnlyRetrieval(k=6).search(query, current, preferred_sources=preferred_sources)
             raw["cache_hit"] = False
-            store["retrieval_cache"][query.fingerprint] = deepcopy(raw)
-        # Resolve the topic boundary before semantic fit. Understanding can label a
-        # referential sub-question as new_topic even when it narrows the active goal.
-        boundary = infer_topic_boundary(result.get("state_before") or {}, result.get("understanding") or {})
+            store["retrieval_cache"][cache_key] = deepcopy(raw)
         result["topic_boundary"] = boundary.to_dict()
+        result["document_continuity"] = {k:v for k,v in continuity.items() if k != "answer_context"}
         raw.setdefault("query", {}).setdefault("fields", {})["topic_relation"] = boundary.relation
-        raw["query"]["fields"]["previous_evidence_role"] = boundary.previous_evidence_role
-        answer_context = store.get("answer_context") or {}
-        if boundary.relation in {"new_topic", "same_topic_changed_scope"}:
-            answer_context = {}
+        raw["query"]["fields"]["previous_evidence_role"] = continuity.get("previous_evidence_role") or boundary.previous_evidence_role
+        answer_context = continuity.get("answer_context") or {}
         retrieval = apply_semantic_fit(raw, answer_context)
         retrieval = apply_unified_evidence_verdict(retrieval, message, result.get("understanding") or {})
         retrieval["documentation_limitation"]=classify_documentation_limitation(retrieval)
@@ -337,4 +342,4 @@ def process_message(message, secrets_obj, s):
 
 def export_session(s):
     x = get_store(s)
-    return {"format": "agent_core_v2_clean_phase4a3_9_5_operational_intent_valid_answer_preservation", "session_id": x.get("session_id"), "gateway_budget": {"calls": int(s.get("llm_gateway_calls", 0)), "tokens": int(s.get("llm_gateway_tokens", 0))}, "messages": deepcopy(x["messages"]), "turns": deepcopy(x["turns"]), "state": x["memory"].to_dict(), "answer_context": deepcopy(x.get("answer_context") or {}), "budget": deepcopy(x["budget"]), "telemetry": snapshot(x["telemetry"]), "cache_metrics": deepcopy(x["cache_metrics"]), "errors": deepcopy(x["errors"]), "escalation_export": build_escalation_export(x["memory"].escalation,x["memory"].conversation_id) if x["memory"].escalation.confirmed else None, "retrieval_enabled": True, "documented_answer_enabled": True, "procedural_answer_enabled": True, "production_changed": False}
+    return {"format": "agent_core_v2_clean_phase4a3_9_6_document_continuity_authority_recovery", "session_id": x.get("session_id"), "gateway_budget": {"calls": int(s.get("llm_gateway_calls", 0)), "tokens": int(s.get("llm_gateway_tokens", 0))}, "messages": deepcopy(x["messages"]), "turns": deepcopy(x["turns"]), "state": x["memory"].to_dict(), "answer_context": deepcopy(x.get("answer_context") or {}), "budget": deepcopy(x["budget"]), "telemetry": snapshot(x["telemetry"]), "cache_metrics": deepcopy(x["cache_metrics"]), "errors": deepcopy(x["errors"]), "escalation_export": build_escalation_export(x["memory"].escalation,x["memory"].conversation_id) if x["memory"].escalation.confirmed else None, "retrieval_enabled": True, "documented_answer_enabled": True, "procedural_answer_enabled": True, "production_changed": False}

@@ -43,7 +43,16 @@ def maybe_generate_procedural(result,message,gateway,budget,store,model=''):
   base=assess_procedural_evidence(r,intent).to_dict();base=scoped_assessment_override(r,base);result['evidence_decision']=base.get('canonical_decision')
  else:return result,None
  result,plan=plan_turn(result,message);assessment=assessment_from_plan(plan,base);result['evidence_sufficiency']=assessment;mode=plan.response_plan['mode']
- if mode!='documented':return _internal(result,message,gateway,budget,store,model,assessment)
+ if mode!='documented':
+  continuity=(result.get('document_continuity') or {})
+  prior=(r.get('_answer_context') or {}).get('cited_evidence') or []
+  current=r.get('diagnostic_evidence') or r.get('generation_evidence') or r.get('evidence') or []
+  if continuity.get('primary') and (prior or current):
+   assessment=dict(assessment or {})
+   assessment['documentation_continuity_guard']={
+    'active':True,'prior_evidence_count':len(prior),'current_evidence_count':len(current),
+    'rule':'do_not_assert_global_absence_while_primary_document_evidence_exists'}
+  return _internal(result,message,gateway,budget,store,model,assessment)
  r=result.get('retrieval') or {};key=procedural_fingerprint(message,u,r,model);cached=_get_cache(store,'procedural_answer_cache',key)
  if cached:result['answer']=deepcopy(cached['answer']);result['procedural_answer']={**deepcopy(cached['diagnostic']),'cache_hit':True};return result,{'skipped':True,'reason':'procedural_answer_cache'}
  allowed,reason=budget.can_call(store['telemetry'],estimated_tokens=2700)

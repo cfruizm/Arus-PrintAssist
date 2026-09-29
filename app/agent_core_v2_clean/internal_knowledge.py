@@ -183,6 +183,10 @@ class ControlledInternalKnowledgeComposer:
         integrity_contract=build_guidance_integrity_contract(retrieval)
         payload["previous_attempts"] = list((retrieval.get("_case_context") or {}).get("attempts") or [])[-6:]
         payload["guidance_integrity_contract"]=integrity_contract
+        continuity_guard=(assessment or {}).get("documentation_continuity_guard") or {}
+        if continuity_guard.get("active"):
+            payload["documentation_continuity_guard"]=continuity_guard
+            payload["scope_contract"]["documentation_absence_policy"]="Do not claim global absence. State what the authorized document confirms and localize only the unsupported remainder."
         payload["user_confirmed_attempts"]=integrity_contract["user_confirmed_attempts"]
         payload["assistant_delivered_guidance"]=integrity_contract["assistant_delivered_guidance"]
         result = self._call(payload)
