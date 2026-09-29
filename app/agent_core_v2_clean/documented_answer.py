@@ -133,6 +133,31 @@ def validate_citations(text, ids):
     return bool(str(text or "").strip()) and bool(cited) and cited.issubset(set(ids)), sorted(cited)
 
 
+def safe_cited_partial(text, valid_ids, finish_reason):
+    """Publish only complete cited content when the provider exhausts output.
+
+    This is structural and domain-independent: no products, actions, symptoms,
+    or campaign phrases are inspected. The boundary is the final complete
+    canonical citation emitted by the documented composer.
+    """
+    if str(finish_reason or "").casefold() not in {"length", "max_tokens"}:
+        return None, []
+    value = str(text or "").strip()
+    matches = list(re.finditer(r"\[(R\d+)\]", value))
+    if not matches:
+        return None, []
+    allowed = set(map(str, valid_ids or []))
+    complete = [m for m in matches if m.group(1) in allowed]
+    if not complete:
+        return None, []
+    cut = complete[-1].end()
+    partial = value[:cut].rstrip()
+    cited = sorted(set(re.findall(r"\[(R\d+)\]", partial)))
+    if not partial or not cited or not set(cited).issubset(allowed):
+        return None, []
+    return partial, cited
+
+
 def answer_fingerprint(message, understanding, retrieval, model=""):
     payload = {
         "q": " ".join(str(message).split()).casefold(), "goal": understanding.get("current_goal"),
@@ -204,16 +229,25 @@ class DocumentedAnswerComposer:
         text = _compact_followup_checks(str(result.text or "").strip(),understanding)
         text,certainty_softened = soften_diagnostic_certainty(text,intent)
         contradiction, dimension_check = contradicted_absence(text, message, understanding, evidence)
-        valid, cited = validate_citations(text, [str(x["id"]) for x in evidence])
+        valid_ids = [str(x["id"]) for x in evidence]
+        valid, cited = validate_citations(text, valid_ids)
         truncated = str(result.finish_reason or "").casefold() in {"length", "max_tokens"}
+        safe_partial_text, safe_partial_cited = safe_cited_partial(text, valid_ids, result.finish_reason)
+        safe_partial = bool(truncated and safe_partial_text)
+        if safe_partial:
+            text = safe_partial_text
+            cited = safe_partial_cited
         cited_pages = {str(x.get("page") or "") for x in evidence if str(x.get("id")) in cited and x.get("page") not in (None, "")}
         available_pages = {str(x.get("page") or "") for x in evidence if x.get("page") not in (None, "")}
         required_page_coverage = min(3, len(available_pages)) if requirements else min(2, len(available_pages)) if conceptual else 1
-        page_coverage_valid = len(cited_pages) >= required_page_coverage
-        valid = bool(valid and page_coverage_valid and not contradiction)
+        complete_page_coverage = len(cited_pages) >= required_page_coverage
+        partial_page_coverage = safe_partial and bool(cited) and (bool(cited_pages) or not available_pages)
+        page_coverage_valid = complete_page_coverage or partial_page_coverage
+        valid = bool((valid or safe_partial) and page_coverage_valid and not contradiction)
         self.validation = {
             "citations_valid": valid, "cited_ids": cited, "finish_reason": result.finish_reason,
-            "truncated": truncated, "published_partial": bool(valid and truncated),
+            "truncated": truncated, "published_partial": bool(valid and safe_partial),
+            "safe_partial_terminal": bool(valid and safe_partial),
             "evidence_pages": sorted(available_pages), "cited_pages": sorted(cited_pages),
             "required_page_coverage": required_page_coverage, "page_coverage_valid": page_coverage_valid,
             "requested_dimension_coverage": dimension_check, "contradicted_absence_blocked": contradiction,
@@ -226,8 +260,8 @@ class DocumentedAnswerComposer:
         if not valid:
             return AgentResponse("Encontre documentacion, pero la respuesta generada no cubrio suficientemente la evidencia o no supero la validacion de citas.", "documented_citation_guard", False, result.provider, result.model, result.usage, result.finish_reason)
         text=strip_generated_source_footer(text)
-        if truncated:
-            text += "\n\n> Respuesta parcial: el proveedor alcanzó el límite de salida. Se publicó únicamente el contenido completo y citado disponible."
+        if safe_partial:
+            text += "\n\n> Respuesta parcial segura: el proveedor alcanzó el límite de salida. Se publicó únicamente el contenido completo y citado disponible."
         footer = compact_sources(evidence, cited)
         if footer:text += "\n\n" + footer
-        return AgentResponse(text, "documented_answer_partial" if truncated else "documented_answer", True, result.provider, result.model, result.usage, result.finish_reason)
+        return AgentResponse(text, "documented_answer_partial" if safe_partial else "documented_answer", True, result.provider, result.model, result.usage, "safe_partial" if safe_partial else result.finish_reason)
