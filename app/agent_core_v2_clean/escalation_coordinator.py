@@ -3,6 +3,7 @@ from copy import deepcopy
 import unicodedata
 from .escalation_contract import FIELDS,BY_KEY
 from .escalation_export import build_export,build_text
+OUTCOME_LABELS={"resolved":"resuelto","improved":"mejoró","unchanged":"sin cambios","worsened":"empeoró","unknown":"desconocido"}
 def _norm(v):return " ".join(unicodedata.normalize("NFKD",str(v or "")).encode("ascii","ignore").decode().casefold().split())
 def _set(state,key,value,source,status,turn):
  previous=deepcopy(state.fields.get(key));state.fields[key]={"value":value,"source":source,"status":status,"turn":turn}
@@ -24,7 +25,10 @@ def sync_from_memory(state,memory,ctx=None):
   rows=[]
   for x in case.attempts:
    a=str(x.get("action") or "").strip();r=str(x.get("result") or "").strip();o=str(x.get("outcome") or "").strip()
-   if a:rows.append(a+(" (resultado: "+r+")" if r else "")+(" [estado: "+o+"]" if o and o!="unknown" else ""))
+   if a:
+    detail=a+(". Resultado: "+r.rstrip(" .")+"." if r else ".")
+    if o and o!="unknown":detail+=" Estado: "+OUTCOME_LABELS.get(o,o)+"."
+    rows.append(" ".join(detail.split()))
   if rows:_set(state,"troubleshooting_performed","; ".join(dict.fromkeys(rows)),"support_case","confirmed",turn)
  if case.affected_scope and not state.fields.get("impact_scope"):_set(state,"impact_scope",case.affected_scope,"support_case","confirmed",turn)
  rows=_source_rows(ctx)

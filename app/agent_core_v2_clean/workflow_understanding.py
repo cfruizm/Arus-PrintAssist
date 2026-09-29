@@ -20,7 +20,11 @@ class WorkflowInterpreter:
    raw=json.loads(str(r.text or "").strip());role=str(raw.get("turn_role") or "ambiguous");action=str(raw.get("workflow_action") or "none");field=raw.get("field");value=raw.get("value");confidence=float(raw.get("confidence") or 0);reason=str(raw.get("reason") or "")
    if role not in {"field_value","unknown_value","correction","independent_question","workflow_action","ambiguous"}:raise ValueError("invalid_role")
    if action not in {"none","cancel","suspend","resume","confirm","restart"}:raise ValueError("invalid_action")
+   action_normalized=False
+   if role!="workflow_action" and action!="none":action="none";action_normalized=True
+   if role=="workflow_action" and action=="none":role="ambiguous"
    if role=="field_value":field=pending;value=str(value or message).strip()
    if role=="unknown_value":field=pending;value=None
+   if action_normalized:reason=(reason+"; incidental lifecycle action normalized").strip("; ")
    self.contract_valid=True;return WorkflowUnderstanding(role,action,field,value,confidence,reason)
   except Exception:return WorkflowUnderstanding(reason="invalid_contract")

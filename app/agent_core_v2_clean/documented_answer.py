@@ -5,6 +5,8 @@ import re
 import unicodedata
 from collections import defaultdict
 from .models import AgentResponse
+from .source_footer import compact_sources
+from .diagnostic_language import soften_diagnostic_certainty
 
 PROMPT_VERSION = "documented_v10_followup_completion_and_novelty"
 SYSTEM = """Eres un colega de soporte empresarial de impresion. Responde unicamente con la evidencia documental suministrada y usa el idioma del usuario. Se util, directo y natural. No inventes menus, pasos, requisitos, relaciones ni funciones. Cada afirmacion factual debe terminar con una o mas citas [R#].
@@ -14,7 +16,7 @@ Ajusta la forma al objetivo:
 - requirements: sintetiza todas las categorias de condiciones previas respaldadas por el conjunto de evidencia, no solo por el primer fragmento. Separa categorias y conserva alternativas como alternativas.
 - procedural: conserva el orden documental y no rellenes pasos ausentes.
 
-Integra fragmentos complementarios del mismo documento y de paginas posteriores. No copies un unico enunciado si otros fragmentos autorizados agregan capacidades materialmente distintas. Si una parte solicitada no aparece, responde primero todo lo que si esta documentado y declara la limitacion de forma localizada. Nunca afirmes ausencia global sin revisar todos los fragmentos. En seguimientos del mismo caso, no vuelvas a definir, presentar ni describir el producto. Empieza por el nuevo hecho confirmado, su implicación y la siguiente comprobación respaldada. Prioriza cobertura completa y concisa sobre detalle secundario. Para una consulta inicial usa como máximo 320 palabras; para un seguimiento del mismo caso usa como máximo 220 palabras. En troubleshooting prioriza la implicación del dato nuevo y hasta tres comprobaciones de mayor valor diagnóstico. No repitas definiciones, contexto, fuentes equivalentes ni recomendaciones ya realizadas. En seguimientos usa máximo 180 palabras y no más de tres comprobaciones numeradas. Continúa primero una comprobación truncada. No repitas acciones incluidas en already_delivered_guidance. No declares una causa o capa descartada salvo evidencia explícita. No menciones procesos internos del laboratorio."""
+Integra fragmentos complementarios del mismo documento y de paginas posteriores. No copies un unico enunciado si otros fragmentos autorizados agregan capacidades materialmente distintas. Si una parte solicitada no aparece, responde primero todo lo que si esta documentado y declara la limitacion de forma localizada. Nunca afirmes ausencia global sin revisar todos los fragmentos. En seguimientos del mismo caso, no vuelvas a definir, presentar ni describir el producto. Empieza por el nuevo hecho confirmado, su implicación y la siguiente comprobación respaldada. Prioriza cobertura completa y concisa sobre detalle secundario. Para una consulta inicial usa como máximo 320 palabras; para un seguimiento del mismo caso usa como máximo 220 palabras. En troubleshooting prioriza la implicación del dato nuevo y hasta tres comprobaciones de mayor valor diagnóstico. No repitas definiciones, contexto, fuentes equivalentes ni recomendaciones ya realizadas. En seguimientos usa máximo 180 palabras y no más de tres comprobaciones numeradas. Continúa primero una comprobación truncada. No repitas acciones incluidas en already_delivered_guidance. No declares una causa o capa descartada salvo evidencia explícita. Una validación correcta solo reduce probabilidad; formula la siguiente hipótesis como ampliación del diagnóstico, no como causa confirmada ni exclusión definitiva. No menciones procesos internos del laboratorio."""
 
 _STOP = {
     "cuales", "cual", "especificamente", "requisitos", "requisito", "necesito",
@@ -195,6 +197,7 @@ class DocumentedAnswerComposer:
         if not result.ok:
             return AgentResponse("Encontre documentacion, pero no pude redactar la respuesta en este turno. Las fuentes recuperadas se conservaron.", "documented_provider_degraded", False)
         text = _compact_followup_checks(str(result.text or "").strip(),understanding)
+        text,certainty_softened = soften_diagnostic_certainty(text,intent)
         contradiction, dimension_check = contradicted_absence(text, message, understanding, evidence)
         valid, cited = validate_citations(text, [str(x["id"]) for x in evidence])
         truncated = str(result.finish_reason or "").casefold() in {"length", "max_tokens"}
@@ -210,6 +213,7 @@ class DocumentedAnswerComposer:
             "required_page_coverage": required_page_coverage, "page_coverage_valid": page_coverage_valid,
             "requested_dimension_coverage": dimension_check, "contradicted_absence_blocked": contradiction,
             "evidence_items_supplied": len(evidence), "prompt_version": PROMPT_VERSION,
+            "diagnostic_certainty_softened": certainty_softened,
         }
         if contradiction:
             return AgentResponse("La respuesta generada contradecia la evidencia documental recuperada y fue bloqueada antes de publicarse. Intenta nuevamente para regenerar la sintesis documentada.", "documented_evidence_contradiction_guard", False, result.provider, result.model, result.usage, result.finish_reason)
@@ -217,7 +221,6 @@ class DocumentedAnswerComposer:
             return AgentResponse("Encontre documentacion, pero la respuesta generada no cubrio suficientemente la evidencia o no supero la validacion de citas.", "documented_citation_guard", False, result.provider, result.model, result.usage, result.finish_reason)
         if truncated:
             text += "\n\n> Respuesta parcial: el proveedor alcanzo el limite de salida. El contenido documentado disponible se conserva; puedes pedirme continuar."
-        sources = readable_sources(evidence, cited)
-        if sources:
-            text += "\n\n**Fuentes documentales**\n" + "\n".join(f"- {x}" for x in sources)
+        footer = compact_sources(evidence, cited)
+        if footer:text += "\n\n" + footer
         return AgentResponse(text, "documented_answer_partial" if truncated else "documented_answer", True, result.provider, result.model, result.usage, result.finish_reason)
