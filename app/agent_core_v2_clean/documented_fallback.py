@@ -1,5 +1,5 @@
-from .source_footer import compact_sources
 from __future__ import annotations
+from .source_footer import compact_sources
 
 def _pages(items):
     values=[]
