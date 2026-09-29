@@ -7,8 +7,9 @@ from collections import defaultdict
 from .models import AgentResponse
 from .source_footer import compact_sources
 from .diagnostic_language import soften_diagnostic_certainty
+from .guidance_integrity import build_guidance_integrity_contract, integrity_diagnostic
 
-PROMPT_VERSION = "documented_v10_followup_completion_and_novelty"
+PROMPT_VERSION = "documented_v11_confirmed_action_integrity"
 SYSTEM = """Eres un colega de soporte empresarial de impresion. Responde unicamente con la evidencia documental suministrada y usa el idioma del usuario. Se util, directo y natural. No inventes menus, pasos, requisitos, relaciones ni funciones. Cada afirmacion factual debe terminar con una o mas citas [R#].
 
 Ajusta la forma al objetivo:
@@ -16,7 +17,7 @@ Ajusta la forma al objetivo:
 - requirements: sintetiza todas las categorias de condiciones previas respaldadas por el conjunto de evidencia, no solo por el primer fragmento. Separa categorias y conserva alternativas como alternativas.
 - procedural: conserva el orden documental y no rellenes pasos ausentes.
 
-Integra fragmentos complementarios del mismo documento y de paginas posteriores. No copies un unico enunciado si otros fragmentos autorizados agregan capacidades materialmente distintas. Si una parte solicitada no aparece, responde primero todo lo que si esta documentado y declara la limitacion de forma localizada. Nunca afirmes ausencia global sin revisar todos los fragmentos. En seguimientos del mismo caso, no vuelvas a definir, presentar ni describir el producto. Empieza por el nuevo hecho confirmado, su implicación y la siguiente comprobación respaldada. Prioriza cobertura completa y concisa sobre detalle secundario. Para una consulta inicial usa como máximo 320 palabras; para un seguimiento del mismo caso usa como máximo 220 palabras. En troubleshooting prioriza la implicación del dato nuevo y hasta tres comprobaciones de mayor valor diagnóstico. No repitas definiciones, contexto, fuentes equivalentes ni recomendaciones ya realizadas. En seguimientos usa máximo 180 palabras y no más de tres comprobaciones numeradas. Continúa primero una comprobación truncada. No repitas acciones incluidas en already_delivered_guidance. No declares una causa o capa descartada salvo evidencia explícita. Una validación correcta solo reduce probabilidad; formula la siguiente hipótesis como ampliación del diagnóstico, no como causa confirmada ni exclusión definitiva. No menciones procesos internos del laboratorio."""
+Integra fragmentos complementarios del mismo documento y de paginas posteriores. No copies un unico enunciado si otros fragmentos autorizados agregan capacidades materialmente distintas. Si una parte solicitada no aparece, responde primero todo lo que si esta documentado y declara la limitacion de forma localizada. Nunca afirmes ausencia global sin revisar todos los fragmentos. En seguimientos del mismo caso, no vuelvas a definir, presentar ni describir el producto. Empieza por el nuevo hecho confirmado, su implicación y la siguiente comprobación respaldada. Prioriza cobertura completa y concisa sobre detalle secundario. Para una consulta inicial usa como máximo 320 palabras; para un seguimiento del mismo caso usa como máximo 220 palabras. En troubleshooting prioriza la implicación del dato nuevo y hasta tres comprobaciones de mayor valor diagnóstico. No repitas definiciones, contexto, fuentes equivalentes ni recomendaciones ya realizadas. En seguimientos usa máximo 180 palabras y no más de tres comprobaciones numeradas. Continúa primero una comprobación truncada. No repitas acciones incluidas en already_delivered_guidance. Las recomendaciones mostradas anteriormente NO son acciones ejecutadas. Considera realizada una validación únicamente cuando aparezca en user_confirmed_attempts. Nunca uses expresiones de ejecución previa, como afirmar que algo ya fue verificado, basándote solo en assistant_delivered_guidance. Si una acción no está confirmada, mantenla como pendiente y redáctala en futuro o como instrucción. Antes de publicar una acción, evalúa semánticamente su impacto y reversibilidad. Si puede causar pérdida de configuración o datos, interrupción, impacto amplio, cambios de seguridad/acceso o rollback difícil, no la presentes como acción rutinaria ni temprana: indica condición de uso, impacto, prerrequisitos de respaldo/recuperación, autorización o ventana cuando apliquen, y ofrece escalamiento si no puede ejecutarse con seguridad. No declares una causa o capa descartada salvo evidencia explícita. Una validación correcta solo reduce probabilidad; formula la siguiente hipótesis como ampliación del diagnóstico, no como causa confirmada ni exclusión definitiva. No menciones procesos internos del laboratorio."""
 
 _STOP = {
     "cuales", "cual", "especificamente", "requisitos", "requisito", "necesito",
@@ -176,9 +177,13 @@ class DocumentedAnswerComposer:
         from app.llm_gateway.models import LLMRequest
         previous=dict(retrieval.get("_answer_context") or {})
         followup=(str(understanding.get("user_act") or "") in {"follow_up","answer_to_question","request_elaboration","attempt_result","reported_failure"} or str(understanding.get("topic_relation") or "") in {"same_topic","return_to_previous"})
+        integrity_contract=build_guidance_integrity_contract(retrieval)
         payload = {
             "question": message, "intent": intent, "goal": understanding.get("current_goal"),"followup":followup,
             "already_delivered_guidance":list(previous.get("delivered_guidance") or [])[:8],"previous_answer_partial":bool(previous.get("partial")),
+            "guidance_integrity_contract":integrity_contract,
+            "user_confirmed_attempts":integrity_contract["user_confirmed_attempts"],
+            "assistant_delivered_guidance":integrity_contract["assistant_delivered_guidance"],
             "coverage_contract": {
                 "use_all_relevant_fragments": not followup,
                 "preserve_later_page_information": True,
@@ -214,6 +219,7 @@ class DocumentedAnswerComposer:
             "requested_dimension_coverage": dimension_check, "contradicted_absence_blocked": contradiction,
             "evidence_items_supplied": len(evidence), "prompt_version": PROMPT_VERSION,
             "diagnostic_certainty_softened": certainty_softened,
+            "guidance_integrity": integrity_diagnostic(integrity_contract),
         }
         if contradiction:
             return AgentResponse("La respuesta generada contradecia la evidencia documental recuperada y fue bloqueada antes de publicarse. Intenta nuevamente para regenerar la sintesis documentada.", "documented_evidence_contradiction_guard", False, result.provider, result.model, result.usage, result.finish_reason)
