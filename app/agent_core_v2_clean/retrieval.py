@@ -104,7 +104,7 @@ class ReadOnlyRetrieval:
    raw2=self.retrieve_fn(current_only.text,self.k) or {};e2=self._normalize(raw2);q2=_quality(current_only.fields.get("current_message"),e2);attempts.append({"mode":"current_turn_only","query":current_only.to_dict(),"quality":q2,"count":len(e2)})
    if q2>q1:chosen=(current_only,raw2,e2,"current_turn_only",q2)
   query,raw,evidence,mode,quality=chosen;expansion={"enabled":False,"reason":"intent_does_not_require_document_expansion","llm_called":False}
-  if str(query.fields.get("intent") or "") in {"procedural","requirements"}:limit=18 if str(query.fields.get("intent") or "")=="requirements" else 8;evidence,expansion=_expand_procedure(query.text,evidence,limit)
+  if str(query.fields.get("intent") or "") in {"procedural","requirements","troubleshooting"}:limit=18 if str(query.fields.get("intent") or "")=="requirements" else 8;evidence,expansion=_expand_procedure(query.text,evidence,limit)
   groups={}
   for x in evidence:
    identity=_identity(x);g=groups.setdefault(identity,{"identity":identity,"title":x["title"],"pages":[],"chunks":0});g["chunks"]+=1

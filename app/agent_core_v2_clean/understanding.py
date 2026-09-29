@@ -44,6 +44,10 @@ class ConversationUnderstanding:
    if not memory.active_topic and not memory.last_assistant_question:x.user_act="new_request";x.topic_relation="new_topic";corrections.append("orphan_elaboration_to_new_request")
    elif x.topic_relation=="new_topic":x.user_act="new_request";x.should_retrieve=True;corrections.append("provider_new_topic_preserved")
    else:x.topic_relation="same_topic";x.should_retrieve=True;corrections.append("referential_operational_retrieval_enforced")
+  operational_case_types={"symptom","reported_failure","new_case","attempted_action","attempt_result","affected_scope"}
+  case_types={str(item.get("type") or "") for item in (x.case_updates or []) if isinstance(item,dict)}
+  if x.intent=="conceptual" and case_types.intersection(operational_case_types):
+   x.intent="troubleshooting";x.should_retrieve=True;corrections.append("case_signal_promoted_operational_intent")
   if x.intent=="conceptual" and x.domain_relevance=="in_scope":x.needs_clarification=False;x.clarification_target=None;x.should_retrieve=True
   if x.needs_clarification and not str(x.clarification_target or "").strip():x.needs_clarification=False;corrections.append("empty_clarification_suppressed")
   if x.intent=="troubleshooting":

@@ -1,3 +1,4 @@
+# Regression lineage: agent_core_v2_clean_phase4a3_9_4_visible_terminal_truncation_recovery
 from copy import deepcopy
 import secrets
 from app.llm_gateway.config import load_gateway_config
@@ -22,6 +23,7 @@ from .documentation_limitation import classify as classify_documentation_limitat
 from .escalation_coordinator import start as start_escalation, handle as handle_escalation
 from .workflow_understanding import WorkflowInterpreter
 from .escalation_export import build_export as build_escalation_export, build_text as build_escalation_text
+from .cache_limits import enforce_cache_limits
 
 KEY = "agent_core_v2_clean_store"
 
@@ -74,6 +76,7 @@ def get_store(s):
         x["cache_metrics"].setdefault(k, 0)
     for k, d in (("deterministic_results", []), ("errors", []), ("turns", []), ("messages", [])):
         x.setdefault(k, d)
+    enforce_cache_limits(x)
     return x
 
 def reset_store(s):
@@ -244,6 +247,14 @@ def _escalation_result(message, store, handled, before):
 
 def process_message(message, secrets_obj, s):
     store = get_store(s)
+    cache_overrides={
+        "exact_turn_cache":getattr(secrets_obj,"get",lambda *_:None)("AGENT_CORE_EXACT_CACHE_MAX_ENTRIES",8),
+        "retrieval_cache":getattr(secrets_obj,"get",lambda *_:None)("AGENT_CORE_RETRIEVAL_CACHE_MAX_ENTRIES",8),
+        "documented_answer_cache":getattr(secrets_obj,"get",lambda *_:None)("AGENT_CORE_DOCUMENTED_CACHE_MAX_ENTRIES",8),
+        "procedural_answer_cache":getattr(secrets_obj,"get",lambda *_:None)("AGENT_CORE_PROCEDURAL_CACHE_MAX_ENTRIES",6),
+        "internal_knowledge_cache":getattr(secrets_obj,"get",lambda *_:None)("AGENT_CORE_INTERNAL_CACHE_MAX_ENTRIES",6),
+    }
+    resource_guard=enforce_cache_limits(store,cache_overrides)
     budget = BudgetPolicy(**store["budget"])
     memory_before = deepcopy(store["memory"])
     before = deepcopy(store["memory"].to_dict())
@@ -258,7 +269,7 @@ def process_message(message, secrets_obj, s):
         if handled.get("answer_independent"):before=deepcopy(store["memory"].to_dict())
     key = _context_key(message, store["memory"])
     cached = store["exact_turn_cache"].get(key)
-    execution = {"mode": budget.mode, "understanding_budget": budget.understanding_max_tokens, "response_budget": budget.response_max_tokens}
+    execution = {"mode": budget.mode, "understanding_budget": budget.understanding_max_tokens, "response_budget": budget.response_max_tokens, "resource_guard":resource_guard}
     if cached:
         store["memory"].turn_number += 1
         result = {"input": message, "state_before": before, **deepcopy(cached["artifact"]), "state_after": deepcopy(store["memory"].to_dict()), "provider_trace": {"understanding": {"skipped": True, "reason": "exact_turn_cache"}, "response": {"skipped": True, "reason": "exact_turn_cache"}}, "execution": {**execution, "cache_hit": True}, "cache": {"hit": True, "type": "exact_turn"}, "production_changed": False}
@@ -326,4 +337,4 @@ def process_message(message, secrets_obj, s):
 
 def export_session(s):
     x = get_store(s)
-    return {"format": "agent_core_v2_clean_phase4a3_9_4_visible_terminal_truncation_recovery", "session_id": x.get("session_id"), "gateway_budget": {"calls": int(s.get("llm_gateway_calls", 0)), "tokens": int(s.get("llm_gateway_tokens", 0))}, "messages": deepcopy(x["messages"]), "turns": deepcopy(x["turns"]), "state": x["memory"].to_dict(), "answer_context": deepcopy(x.get("answer_context") or {}), "budget": deepcopy(x["budget"]), "telemetry": snapshot(x["telemetry"]), "cache_metrics": deepcopy(x["cache_metrics"]), "errors": deepcopy(x["errors"]), "escalation_export": build_escalation_export(x["memory"].escalation,x["memory"].conversation_id) if x["memory"].escalation.confirmed else None, "retrieval_enabled": True, "documented_answer_enabled": True, "procedural_answer_enabled": True, "production_changed": False}
+    return {"format": "agent_core_v2_clean_phase4a3_9_5_operational_intent_valid_answer_preservation", "session_id": x.get("session_id"), "gateway_budget": {"calls": int(s.get("llm_gateway_calls", 0)), "tokens": int(s.get("llm_gateway_tokens", 0))}, "messages": deepcopy(x["messages"]), "turns": deepcopy(x["turns"]), "state": x["memory"].to_dict(), "answer_context": deepcopy(x.get("answer_context") or {}), "budget": deepcopy(x["budget"]), "telemetry": snapshot(x["telemetry"]), "cache_metrics": deepcopy(x["cache_metrics"]), "errors": deepcopy(x["errors"]), "escalation_export": build_escalation_export(x["memory"].escalation,x["memory"].conversation_id) if x["memory"].escalation.confirmed else None, "retrieval_enabled": True, "documented_answer_enabled": True, "procedural_answer_enabled": True, "production_changed": False}

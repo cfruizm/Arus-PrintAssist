@@ -244,14 +244,16 @@ class DocumentedAnswerComposer:
         cited_pages = {str(x.get("page") or "") for x in evidence if str(x.get("id")) in cited and x.get("page") not in (None, "")}
         available_pages = {str(x.get("page") or "") for x in evidence if x.get("page") not in (None, "")}
         required_page_coverage = min(3, len(available_pages)) if requirements else min(2, len(available_pages)) if conceptual else 1
-        complete_page_coverage = len(cited_pages) >= required_page_coverage
-        partial_page_coverage = safe_partial and bool(cited) and (bool(cited_pages) or not available_pages)
+        complete_page_coverage = bool(cited) if not available_pages else len(cited_pages) >= required_page_coverage
+        partial_page_coverage = bool(cited) and (safe_partial or (available_pages and not complete_page_coverage))
         page_coverage_valid = complete_page_coverage or partial_page_coverage
+        coverage_partial = bool(valid and cited and not complete_page_coverage and available_pages and not contradiction)
         valid = bool((valid or safe_partial) and page_coverage_valid and not contradiction)
         self.validation = {
             "citations_valid": valid, "cited_ids": cited, "finish_reason": result.finish_reason,
-            "truncated": truncated, "published_partial": bool(valid and safe_partial),
+            "truncated": truncated, "published_partial": bool(valid and (safe_partial or coverage_partial)),
             "safe_partial_terminal": bool(valid and safe_partial),
+            "coverage_partial_terminal": bool(valid and coverage_partial),
             "visible_truncation_fallback": bool(truncated and not safe_partial),
             "evidence_pages": sorted(available_pages), "cited_pages": sorted(cited_pages),
             "required_page_coverage": required_page_coverage, "page_coverage_valid": page_coverage_valid,
@@ -270,6 +272,9 @@ class DocumentedAnswerComposer:
         text=strip_generated_source_footer(text)
         if safe_partial:
             text += "\n\n> Respuesta parcial segura: el proveedor alcanzó el límite de salida. Se publicó únicamente el contenido completo y citado disponible."
+        elif coverage_partial:
+            text += "\n\n> Cobertura documental parcial: se publicó únicamente la orientación respaldada por las fuentes citadas."
         footer = compact_sources(evidence, cited)
         if footer:text += "\n\n" + footer
-        return AgentResponse(text, "documented_answer_partial" if safe_partial else "documented_answer", True, result.provider, result.model, result.usage, "safe_partial" if safe_partial else result.finish_reason)
+        partial = safe_partial or coverage_partial
+        return AgentResponse(text, "documented_answer_partial" if partial else "documented_answer", True, result.provider, result.model, result.usage, "safe_partial" if safe_partial else "coverage_partial" if coverage_partial else result.finish_reason)

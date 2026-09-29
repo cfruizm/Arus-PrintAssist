@@ -25,6 +25,7 @@ class ConversationPolicy:
   if intent=="escalation" or act=="escalation":return AgentDecision("offer_escalation","legacy_explicit_escalation")
   if u.degraded:return AgentDecision("degraded_continue","provider_degraded")
   if m.support_case.status=="diagnosing" and u.should_retrieve and act in {"request_elaboration","answer_to_question","attempt_result"}:return AgentDecision("diagnose_with_retrieval","active_case_next_guidance_requires_grounding")
+  if intent=="troubleshooting" and u.should_retrieve:return AgentDecision("diagnose_with_retrieval","grounded_troubleshooting_requested")
   if intent=="troubleshooting":return AgentDecision("diagnose","active_failure")
   if u.should_retrieve:return AgentDecision("defer_to_retrieval","retrieval_required_in_next_phase")
   return AgentDecision("answer","goal_understood")
