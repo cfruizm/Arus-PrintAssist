@@ -23,6 +23,17 @@ def load_gateway_config(secrets)->dict:
         "evidence_judge_max_tokens":max(64,min(4096,int(_get(secrets,"LLM_EVIDENCE_JUDGE_MAX_TOKENS",360)))),
         "providers":{
             "groq":{"api_key":_get(secrets,"GROQ_API_KEY"),"orchestrator_model":str(_get(secrets,"GROQ_ORCHESTRATOR_MODEL","qwen/qwen3.8-27b")),"answer_model":str(_get(secrets,"GROQ_ANSWER_MODEL","openai/gpt-oss-120b")),"structured_mode":structured,"base_url":"https://api.groq.com/openai/v1/chat/completions"},
+            "openrouter":{
+                "api_key":_get(secrets,"OPENROUTER_API_KEY"),
+                "orchestrator_model":str(_get(secrets,"OPENROUTER_ORCHESTRATOR_MODEL",_get(secrets,"OPENROUTER_MODEL",""))),
+                "answer_model":str(_get(secrets,"OPENROUTER_ANSWER_MODEL",_get(secrets,"OPENROUTER_MODEL",""))),
+                "structured_mode":str(_get(secrets,"OPENROUTER_STRUCTURED_OUTPUT_MODE","best_effort")).strip().casefold(),
+                "base_url":str(_get(secrets,"OPENROUTER_BASE_URL","https://openrouter.ai/api/v1/chat/completions")).strip(),
+                "timeout_seconds":max(10,min(180,int(_get(secrets,"OPENROUTER_TIMEOUT_SECONDS",75)))),
+                "http_referer":_get(secrets,"OPENROUTER_HTTP_REFERER"),
+                "app_title":_get(secrets,"OPENROUTER_APP_TITLE","Arus PrintAssist"),
+                "allow_format_fallback":_as_bool(_get(secrets,"OPENROUTER_ALLOW_FORMAT_FALLBACK",True),True),
+            },
             "huggingface":{
                 "token":_get(secrets,"HF_TOKEN"),
                 "orchestrator_model":str(_get(secrets,"HF_ORCHESTRATOR_MODEL",_get(secrets,"HF_MODEL",""))),
