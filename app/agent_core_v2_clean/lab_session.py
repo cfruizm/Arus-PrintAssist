@@ -163,14 +163,21 @@ def _conceptual(result, message, secrets_obj, s, budget, store):
 def _answers(result, message, secrets_obj, s, budget, store):
     if (result.get("decision") or {}).get("action") not in {"defer_to_retrieval", "diagnose_with_retrieval"}:
         skipped={"skipped":True,"reason":"decision_does_not_authorize_retrieval"};return result,skipped,skipped
-    retrieval=result.get("retrieval") or {};verdict=retrieval.get("evidence_verdict") or {}
+    retrieval=result.get("retrieval") or {};verdict=retrieval.get("evidence_verdict") or {};documented_trace={"skipped":True,"reason":"documented_answer_not_called"}
     if verdict.get("accepted") and retrieval.get("generation_evidence"):
-        result,trace=_conceptual(result,message,secrets_obj,s,budget,store)
+        result,documented_trace=_conceptual(result,message,secrets_obj,s,budget,store)
         if str((result.get("answer") or {}).get("mode") or "") in {"documented_answer","documented_answer_partial"}:
             result.setdefault("functional_events",[]).append({"type":"terminal_answer_arbitration","winner":"single_documented_composer","suppressed":"procedural_composer","reason":"authorized_evidence_single_generation"})
-            return result,trace,{"skipped":True,"reason":"authorized_documented_answer_is_terminal"}
-    result,trace=maybe_generate_procedural(result,message,_gateway(secrets_obj,s),budget,store,str(getattr(load_gateway_config(secrets_obj),"model","") or ""))
-    return result,{"skipped":True,"reason":"no_terminal_documented_answer"},trace
+            return result,documented_trace,{"skipped":True,"reason":"authorized_documented_answer_is_terminal"}
+    u=result.get("understanding") or {};decision=result.get("decision") or {}
+    active_case_followup=(decision.get("action")=="diagnose_with_retrieval" and u.get("user_act") in {"follow_up","request_elaboration","answer_to_question","attempt_result"} and u.get("topic_relation") in {"same_topic","return_to_previous"})
+    if active_case_followup and u.get("intent")=="conceptual":
+        u=dict(u);u["intent"]="troubleshooting";result["understanding"]=u
+        result.setdefault("functional_events",[]).append({"type":"active_case_followup_route_recovered","from_intent":"conceptual","to_intent":"troubleshooting","reason":"diagnostic_followup_requires_operational_grounding"})
+    result,procedural_trace=maybe_generate_procedural(result,message,_gateway(secrets_obj,s),budget,store,str(getattr(load_gateway_config(secrets_obj),"model","") or ""))
+    if not documented_trace or documented_trace.get("skipped"):
+        documented_trace={"skipped":True,"reason":"no_terminal_documented_answer"}
+    return result,documented_trace,procedural_trace
 
 def _trace_list(value):
     if not value:
@@ -314,4 +321,4 @@ def process_message(message, secrets_obj, s):
 
 def export_session(s):
     x = get_store(s)
-    return {"format": "agent_core_v2_clean_phase4a3_5_followup_case_identity_recovery", "session_id": x.get("session_id"), "gateway_budget": {"calls": int(s.get("llm_gateway_calls", 0)), "tokens": int(s.get("llm_gateway_tokens", 0))}, "messages": deepcopy(x["messages"]), "turns": deepcopy(x["turns"]), "state": x["memory"].to_dict(), "answer_context": deepcopy(x.get("answer_context") or {}), "budget": deepcopy(x["budget"]), "telemetry": snapshot(x["telemetry"]), "cache_metrics": deepcopy(x["cache_metrics"]), "errors": deepcopy(x["errors"]), "escalation_export": build_escalation_export(x["memory"].escalation,x["memory"].conversation_id) if x["memory"].escalation.confirmed else None, "retrieval_enabled": True, "documented_answer_enabled": True, "procedural_answer_enabled": True, "production_changed": False}
+    return {"format": "agent_core_v2_clean_phase4a3_6_operational_closeout", "session_id": x.get("session_id"), "gateway_budget": {"calls": int(s.get("llm_gateway_calls", 0)), "tokens": int(s.get("llm_gateway_tokens", 0))}, "messages": deepcopy(x["messages"]), "turns": deepcopy(x["turns"]), "state": x["memory"].to_dict(), "answer_context": deepcopy(x.get("answer_context") or {}), "budget": deepcopy(x["budget"]), "telemetry": snapshot(x["telemetry"]), "cache_metrics": deepcopy(x["cache_metrics"]), "errors": deepcopy(x["errors"]), "escalation_export": build_escalation_export(x["memory"].escalation,x["memory"].conversation_id) if x["memory"].escalation.confirmed else None, "retrieval_enabled": True, "documented_answer_enabled": True, "procedural_answer_enabled": True, "production_changed": False}

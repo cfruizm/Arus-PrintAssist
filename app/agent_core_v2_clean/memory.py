@@ -30,14 +30,32 @@ def apply_understanding(m,u):
    for key in ("symptom","observation","affected_scope","attempted_action","attempt_result"):
     value=str(clean.get(key) or "").strip()
     if value and key not in present:case_updates.append({"type":key,"value":value})
-  for f in case_updates:
+  normalized_updates=[]
+  for raw in case_updates:
+   f=dict(raw or {})
+   if not f.get("result"):
+    for alias in ("result_detail","result_text","observed_result"):
+     if str(f.get(alias) or "").strip():f["result"]=f.get(alias);break
+   if not f.get("outcome"):
+    for alias in ("outcome_status","result_status","resolution_outcome"):
+     if str(f.get(alias) or "").strip():f["outcome"]=f.get(alias);break
+   normalized_updates.append(f)
+  for index,f in enumerate(normalized_updates):
    k,v=str(f.get("type") or ""),str(f.get("value") or "").strip()
    if k=="scope":k="affected_scope"
+   if k=="attempted_action" and not str(f.get("result") or "").strip():
+    observed=next((str(x.get("value") or "").strip() for x in normalized_updates[index+1:] if str(x.get("type") or "") in {"observation","attempt_result"} and str(x.get("value") or "").strip()),None)
+    if observed:f["result"]=observed
+   if k=="attempted_action" and str(f.get("outcome") or "unknown").casefold()=="unknown" and str(f.get("result") or "").strip():
+    f["outcome"]="unknown"
    if k in {"symptom","reported_failure","new_case"}:
     _add(m.support_case.symptoms,v);m.support_case.status="diagnosing"
     subject=str(getattr(u,"canonical_subject",None) or (u.goal_updates or {}).get("subject") or "").strip()
     if subject and not m.support_case.subject:m.support_case.subject=subject
-   elif k=="observation":_add(m.support_case.observations,v);m.support_case.status="diagnosing"
+   elif k=="observation":
+    consumed=any(str(x.get("type") or "")=="attempted_action" and _attempt_key(x.get("result"))==_attempt_key(v) for x in normalized_updates[:index])
+    if not consumed:_add(m.support_case.observations,v)
+    m.support_case.status="diagnosing"
    elif k=="affected_scope":m.support_case.affected_scope=v;m.support_case.status="diagnosing"
    elif k=="attempted_action":
     result=str(f.get("result") or "").strip() or None
