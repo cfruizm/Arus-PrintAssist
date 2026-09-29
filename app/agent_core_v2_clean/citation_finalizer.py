@@ -1,6 +1,7 @@
 from __future__ import annotations
 from dataclasses import dataclass, asdict
 import re
+from .source_footer import compact_sources, strip_generated_source_footer
 
 _CITE = re.compile(r"\[(R\d+)\]")
 _SOURCE_SECTION = re.compile(r"(?is)\n*\*\*Fuentes documentales\*\*\s*\n.*\Z")
@@ -50,26 +51,9 @@ def _page_ranges(values):
 
 
 def _compact_source_footer(source, cited, evidence):
-    by_id = {str(item.get("id")): item for item in evidence or []}
-    documents = {}
-    order = []
-    for ref_id in cited:
-        item = by_id.get(ref_id)
-        if not item:
-            continue
-        identity = str(item.get("url") or item.get("source") or item.get("title") or ref_id)
-        if identity not in documents:
-            documents[identity] = {"title": str(item.get("title") or "Fuente sin título"), "pages": []}
-            order.append(identity)
-        page = item.get("page") or (item.get("metadata") or {}).get("page_label")
-        if page not in (None, ""):
-            documents[identity]["pages"].append(page)
-    clean = _SOURCE_SECTION.sub("", source).rstrip()
-    if not order:
-        return clean
-    lines = [f"- {documents[key]['title']}, {_page_ranges(documents[key]['pages'])}" for key in order]
-    return clean + "\n\n**Fuentes documentales**\n" + "\n".join(lines)
-
+    clean=strip_generated_source_footer(source)
+    footer=compact_sources(evidence,cited)
+    return clean+("\n\n"+footer if footer else "")
 
 def finalize_citations(text, plan):
     plan = plan or {}

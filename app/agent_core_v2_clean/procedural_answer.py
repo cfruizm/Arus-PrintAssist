@@ -1,7 +1,7 @@
 from __future__ import annotations
 import hashlib,json,re,unicodedata
 from .models import AgentResponse
-from .source_footer import compact_sources
+from .source_footer import compact_sources, strip_generated_source_footer
 from .diagnostic_language import soften_diagnostic_certainty
 from .guidance_integrity import build_guidance_integrity_contract, integrity_diagnostic
 PROMPT_VERSION="procedural_documented_v10_confirmed_action_integrity"
@@ -26,6 +26,25 @@ def evidence_pack(retrieval,max_items=8,max_chars=9000):
  return items
 def _section_numbers(text):
  return [int(x) for x in re.findall(r"(?m)^\s*(?:#{1,6}\s*)?\*\*(\d+)\s*[.)]\s+[^*\n]+\*\*\s*$",str(text or ""))]
+def _is_web(item):
+ metadata=item.get("metadata") or {}
+ value=str(item.get("url") or metadata.get("canonical_url") or metadata.get("source_url") or item.get("source") or "")
+ return value.startswith(("http://","https://"))
+
+def _limit_web_document_chunks(evidence,maximum=4):
+ if not evidence:return []
+ identities={str(x.get("url") or x.get("source") or (x.get("metadata") or {}).get("canonical_url") or x.get("title") or "") for x in evidence}
+ return evidence[:maximum] if len(identities)==1 and all(_is_web(x) for x in evidence) else evidence
+
+def _safe_cited_partial(text,ids,finish_reason):
+ if str(finish_reason or "").casefold() not in {"length","max_tokens"}:return None,[]
+ cited=set(re.findall(r"\[(R\d+)\]",str(text or "")));sections=_section_numbers(text)
+ if not text.strip() or not sections or sections!=list(range(sections[0],sections[0]+len(sections))) or not cited or not cited.issubset(set(ids)):return None,[]
+ matches=list(re.finditer(r"\[(R\d+)\]",text))
+ if not matches:return None,[]
+ partial=text[:matches[-1].end()].rstrip()
+ return partial,sorted(cited)
+
 def validate(text,ids,finish_reason=None,minimum_sections=1):
  cited=set(re.findall(r"\[(R\d+)\]",str(text or "")));sections=_section_numbers(text);ordered=not sections or sections==list(range(sections[0],sections[0]+len(sections)));complete=str(finish_reason or "").casefold() in {"","none","stop","completed"};valid=bool(str(text or "").strip()) and bool(sections) and ordered and bool(cited) and cited.issubset(set(ids)) and complete
  return valid,sorted(cited),{"sections":sections,"ordered":ordered,"finish_complete":complete,"cited_ids":sorted(cited)}
@@ -62,13 +81,21 @@ class ProceduralAnswerComposer:
   message_text=str(fields.get("current_message") or message or "").casefold()
   broad_request=bool(re.search(r"\b(todos?|todas?|completo|completa|completos|completas|entero|entera|principio a fin|paso a paso|full|complete|all steps|entire)\b",message_text))
   focused_followup=relation in {"same_topic","same_topic_refinement"} and act in {"follow_up","request_elaboration","answer_to_question"} and not broad_request and (relation=="same_topic_refinement" or bool(details.get("detail")) or understanding.get("intent") in {"requirements","verification","compatibility"})
-  ok,cited,self.validation=validate(text,[str(x["id"]) for x in evidence],r.finish_reason,1)
+  ids=[str(x["id"]) for x in evidence]
+  ok,cited,self.validation=validate(text,ids,r.finish_reason,1)
+  partial_text,partial_cited=_safe_cited_partial(text,ids,r.finish_reason)
+  safe_partial=bool(not ok and partial_text)
+  if safe_partial:text=partial_text;cited=partial_cited
+  self.validation["safe_partial_published"]=safe_partial
+  self.validation["web_chunk_limit_applied"]=bool(len(pack(retrieval))>len(evidence))
   self.validation["focused_followup"]=focused_followup
   self.validation["minimum_sections"]=1
   self.validation["broad_request"]=broad_request
   self.validation["diagnostic_certainty_softened"]=certainty_softened
   self.validation["guidance_integrity"]=integrity_diagnostic(integrity_contract)
-  if not ok:return AgentResponse("La estructura o las citas no superaron la validación. No mostraré instrucciones sin respaldo.","procedural_citation_guard",False,r.provider,r.model,r.usage,r.finish_reason)
-  footer=compact_sources(retrieval.get("evidence") or [],cited)
+  if not ok and not safe_partial:return AgentResponse("La estructura o las citas no superaron la validación. No mostraré instrucciones sin respaldo.","procedural_citation_guard",False,r.provider,r.model,r.usage,r.finish_reason)
+  text=strip_generated_source_footer(text)
+  if safe_partial:text+="\n\n> Respuesta parcial segura: se publicó únicamente el contenido completo y citado antes del límite de salida."
+  footer=compact_sources(evidence,cited)
   if footer:text+="\n\n"+footer
-  return AgentResponse(text,"procedural_documented_answer",True,r.provider,r.model,r.usage,r.finish_reason)
+  return AgentResponse(text,"procedural_documented_answer_partial" if safe_partial else "procedural_documented_answer",True,r.provider,r.model,r.usage,"safe_partial" if safe_partial else r.finish_reason)

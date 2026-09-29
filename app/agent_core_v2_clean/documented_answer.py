@@ -5,7 +5,7 @@ import re
 import unicodedata
 from collections import defaultdict
 from .models import AgentResponse
-from .source_footer import compact_sources
+from .source_footer import compact_sources, strip_generated_source_footer
 from .diagnostic_language import soften_diagnostic_certainty
 from .guidance_integrity import build_guidance_integrity_contract, integrity_diagnostic
 
@@ -225,8 +225,9 @@ class DocumentedAnswerComposer:
             return AgentResponse("La respuesta generada contradecia la evidencia documental recuperada y fue bloqueada antes de publicarse. Intenta nuevamente para regenerar la sintesis documentada.", "documented_evidence_contradiction_guard", False, result.provider, result.model, result.usage, result.finish_reason)
         if not valid:
             return AgentResponse("Encontre documentacion, pero la respuesta generada no cubrio suficientemente la evidencia o no supero la validacion de citas.", "documented_citation_guard", False, result.provider, result.model, result.usage, result.finish_reason)
+        text=strip_generated_source_footer(text)
         if truncated:
-            text += "\n\n> Respuesta parcial: el proveedor alcanzo el limite de salida. El contenido documentado disponible se conserva; puedes pedirme continuar."
+            text += "\n\n> Respuesta parcial: el proveedor alcanzó el límite de salida. Se publicó únicamente el contenido completo y citado disponible."
         footer = compact_sources(evidence, cited)
         if footer:text += "\n\n" + footer
         return AgentResponse(text, "documented_answer_partial" if truncated else "documented_answer", True, result.provider, result.model, result.usage, result.finish_reason)

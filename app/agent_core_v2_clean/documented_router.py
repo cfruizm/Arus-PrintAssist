@@ -14,7 +14,7 @@ from .state_scope import enrich_understanding
 from .documented_fallback import build_documented_fallback
 
 def _valid_cached(item):
- a=(item or {}).get('answer') or {};return a.get('mode') in {'procedural_documented_answer','controlled_internal_knowledge','controlled_internal_knowledge_partial'}
+ a=(item or {}).get('answer') or {};return a.get('mode') in {'procedural_documented_answer','procedural_documented_answer_partial','controlled_internal_knowledge','controlled_internal_knowledge_partial'}
 def _get_cache(store,name,key):
  item=store.setdefault(name,{}).get(key)
  if item and not _valid_cached(item):store[name].pop(key,None);return None
@@ -49,8 +49,8 @@ def maybe_generate_procedural(result,message,gateway,budget,store,model=''):
  allowed,reason=budget.can_call(store['telemetry'],estimated_tokens=2700)
  if not allowed:return result,{'skipped':True,'reason':'procedural_budget_block','block_reason':reason}
  c=ProceduralAnswerComposer(gateway,900);a=c.compose(message,u,r);attempts=[c.last_provider_result]
- if should_compact_retry(c.last_provider_result):compact=compact_retrieval_for_retry(r);a=c.compose(message+'\n\n'+compact_documented_instruction(),u,compact);attempts.append(c.last_provider_result);result['procedural_recovery']={'attempted':True,'mode':'ordered_full_stage_compaction','selection':compact.get('procedural_recovery_selection')}
- valid=a.mode=='procedural_documented_answer' and not should_compact_retry(c.last_provider_result);payload=a.to_dict();payload['text']=normalize_citation_groups(payload.get('text',''));payload.update({'documented_evidence_used':valid,'internal_knowledge_used':False,'knowledge_mode':'documented_only' if valid else 'none'});payload,audit=enforce_answer_contract(payload,result.get('canonical_response_plan'));result['answer']=payload;diag={'enabled':True,'cache_hit':False,'prompt_version':PROCEDURAL_PROMPT_VERSION,'assessment':assessment,'validation':deepcopy(c.validation),'retry_used':len(attempts)>1,'citation_audit':audit};result['procedural_answer']=diag
+ if a.mode!='procedural_documented_answer_partial' and should_compact_retry(c.last_provider_result):compact=compact_retrieval_for_retry(r);a=c.compose(message+'\n\n'+compact_documented_instruction(),u,compact);attempts.append(c.last_provider_result);result['procedural_recovery']={'attempted':True,'mode':'ordered_full_stage_compaction','selection':compact.get('procedural_recovery_selection')}
+ valid=a.mode in {'procedural_documented_answer','procedural_documented_answer_partial'} and (a.mode=='procedural_documented_answer_partial' or not should_compact_retry(c.last_provider_result));payload=a.to_dict();payload['text']=normalize_citation_groups(payload.get('text',''));payload.update({'documented_evidence_used':valid,'internal_knowledge_used':False,'knowledge_mode':'documented_only' if valid else 'none'});payload,audit=enforce_answer_contract(payload,result.get('canonical_response_plan'));result['answer']=payload;diag={'enabled':True,'cache_hit':False,'prompt_version':PROCEDURAL_PROMPT_VERSION,'assessment':assessment,'validation':deepcopy(c.validation),'retry_used':len(attempts)>1,'citation_audit':audit};result['procedural_answer']=diag
  if valid:store['memory'].pending_goal.status='complete';result['state_after']=deepcopy(store['memory'].to_dict());store.setdefault('procedural_answer_cache',{})[key]={'answer':deepcopy(payload),'diagnostic':deepcopy(diag)};return result,attempts if len(attempts)>1 else attempts[0]
  # When evidence is sufficient, a provider failure must not be mislabeled as insufficient documentation.
  last=attempts[-1] if attempts else {}
