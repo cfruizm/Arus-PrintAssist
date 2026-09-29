@@ -4,6 +4,11 @@ def _get(secrets,key,default=None):
     try:return secrets.get(key,default)
     except Exception:return default
 
+def _as_bool(value, default=False):
+    if value is None:return default
+    if isinstance(value,bool):return value
+    return str(value).strip().casefold() in {"1","true","yes","on"}
+
 def load_gateway_config(secrets)->dict:
     provider=str(_get(secrets,"LLM_PROVIDER","groq")).lower().strip()
     structured=str(_get(secrets,"GROQ_STRUCTURED_OUTPUT_MODE","best_effort")).lower().strip()
@@ -18,7 +23,15 @@ def load_gateway_config(secrets)->dict:
         "evidence_judge_max_tokens":max(64,min(4096,int(_get(secrets,"LLM_EVIDENCE_JUDGE_MAX_TOKENS",360)))),
         "providers":{
             "groq":{"api_key":_get(secrets,"GROQ_API_KEY"),"orchestrator_model":str(_get(secrets,"GROQ_ORCHESTRATOR_MODEL","qwen/qwen3.8-27b")),"answer_model":str(_get(secrets,"GROQ_ANSWER_MODEL","openai/gpt-oss-120b")),"structured_mode":structured,"base_url":"https://api.groq.com/openai/v1/chat/completions"},
-            "huggingface":{"token":_get(secrets,"HF_TOKEN"),"orchestrator_model":str(_get(secrets,"HF_ORCHESTRATOR_MODEL",_get(secrets,"HF_MODEL",""))),"answer_model":str(_get(secrets,"HF_ANSWER_MODEL",_get(secrets,"HF_MODEL",""))),"provider":_get(secrets,"HF_PROVIDER")},
+            "huggingface":{
+                "token":_get(secrets,"HF_TOKEN"),
+                "orchestrator_model":str(_get(secrets,"HF_ORCHESTRATOR_MODEL",_get(secrets,"HF_MODEL",""))),
+                "answer_model":str(_get(secrets,"HF_ANSWER_MODEL",_get(secrets,"HF_MODEL",""))),
+                "provider":_get(secrets,"HF_PROVIDER"),
+                "disable_thinking":_as_bool(_get(secrets,"HF_DISABLE_THINKING",True),True),
+                "timeout_seconds":max(10,min(120,int(_get(secrets,"HF_TIMEOUT_SECONDS",75)))),
+                "structured_mode":str(_get(secrets,"HF_STRUCTURED_OUTPUT_MODE","json_schema")).strip().casefold(),
+            },
         },
     }
 

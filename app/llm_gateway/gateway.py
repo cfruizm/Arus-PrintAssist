@@ -17,7 +17,7 @@ class LLMGateway:
     def _provider(self,name):
         cfg=self.config["providers"][name]
         if name=="groq":return GroqProvider(cfg["api_key"],cfg["base_url"],cfg["structured_mode"])
-        if name=="huggingface":return HuggingFaceProvider(cfg["token"],cfg.get("provider"))
+        if name=="huggingface":return HuggingFaceProvider(cfg["token"],cfg.get("provider"),cfg.get("disable_thinking",True),cfg.get("timeout_seconds",75),cfg.get("structured_mode","json_schema"))
         raise LLMGatewayError("unsupported_provider",f"Proveedor no soportado: {name}")
     def _budget(self):
         if self.session is None:return
