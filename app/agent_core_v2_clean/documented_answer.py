@@ -134,28 +134,33 @@ def validate_citations(text, ids):
 
 
 def safe_cited_partial(text, valid_ids, finish_reason):
-    """Publish only complete cited content when the provider exhausts output.
+    """Return only content ending at the last complete authorized citation.
 
-    This is structural and domain-independent: no products, actions, symptoms,
-    or campaign phrases are inspected. The boundary is the final complete
-    canonical citation emitted by the documented composer.
+    The decision is structural and domain-independent. It does not inspect
+    products, symptoms, actions, customers, URLs, or test-campaign phrases.
     """
     if str(finish_reason or "").casefold() not in {"length", "max_tokens"}:
         return None, []
     value = str(text or "").strip()
-    matches = list(re.finditer(r"\[(R\d+)\]", value))
+    allowed = set(map(str, valid_ids or []))
+    matches = [m for m in re.finditer(r"\[(R\d+)\]", value) if m.group(1) in allowed]
     if not matches:
         return None, []
-    allowed = set(map(str, valid_ids or []))
-    complete = [m for m in matches if m.group(1) in allowed]
-    if not complete:
-        return None, []
-    cut = complete[-1].end()
-    partial = value[:cut].rstrip()
+    partial = value[:matches[-1].end()].rstrip()
     cited = sorted(set(re.findall(r"\[(R\d+)\]", partial)))
     if not partial or not cited or not set(cited).issubset(allowed):
         return None, []
     return partial, cited
+
+
+def visible_truncation_fallback(evidence):
+    """Build a visible, source-only terminal fallback without another LLM call."""
+    ids = [str(item.get("id")) for item in evidence or [] if item.get("id")]
+    text = ("La generación documentada alcanzó el límite antes de producir un bloque completo "
+            "y citado. Para evitar publicar una instrucción incompleta, no se mostrará el texto "
+            "truncado ni se ejecutará un segundo compositor en este turno.")
+    footer = compact_sources(evidence, ids)
+    return text + ("\n\n" + footer if footer else "")
 
 
 def answer_fingerprint(message, understanding, retrieval, model=""):
@@ -232,11 +237,10 @@ class DocumentedAnswerComposer:
         valid_ids = [str(x["id"]) for x in evidence]
         valid, cited = validate_citations(text, valid_ids)
         truncated = str(result.finish_reason or "").casefold() in {"length", "max_tokens"}
-        safe_partial_text, safe_partial_cited = safe_cited_partial(text, valid_ids, result.finish_reason)
-        safe_partial = bool(truncated and safe_partial_text)
+        partial_text, partial_cited = safe_cited_partial(text, valid_ids, result.finish_reason)
+        safe_partial = bool(truncated and partial_text)
         if safe_partial:
-            text = safe_partial_text
-            cited = safe_partial_cited
+            text, cited = partial_text, partial_cited
         cited_pages = {str(x.get("page") or "") for x in evidence if str(x.get("id")) in cited and x.get("page") not in (None, "")}
         available_pages = {str(x.get("page") or "") for x in evidence if x.get("page") not in (None, "")}
         required_page_coverage = min(3, len(available_pages)) if requirements else min(2, len(available_pages)) if conceptual else 1
@@ -248,6 +252,7 @@ class DocumentedAnswerComposer:
             "citations_valid": valid, "cited_ids": cited, "finish_reason": result.finish_reason,
             "truncated": truncated, "published_partial": bool(valid and safe_partial),
             "safe_partial_terminal": bool(valid and safe_partial),
+            "visible_truncation_fallback": bool(truncated and not safe_partial),
             "evidence_pages": sorted(available_pages), "cited_pages": sorted(cited_pages),
             "required_page_coverage": required_page_coverage, "page_coverage_valid": page_coverage_valid,
             "requested_dimension_coverage": dimension_check, "contradicted_absence_blocked": contradiction,
@@ -257,6 +262,9 @@ class DocumentedAnswerComposer:
         }
         if contradiction:
             return AgentResponse("La respuesta generada contradecia la evidencia documental recuperada y fue bloqueada antes de publicarse. Intenta nuevamente para regenerar la sintesis documentada.", "documented_evidence_contradiction_guard", False, result.provider, result.model, result.usage, result.finish_reason)
+        if truncated and not safe_partial:
+            text = visible_truncation_fallback(evidence)
+            return AgentResponse(text, "documented_truncation_safe_defer", False, result.provider, result.model, result.usage, "safe_defer")
         if not valid:
             return AgentResponse("Encontre documentacion, pero la respuesta generada no cubrio suficientemente la evidencia o no supero la validacion de citas.", "documented_citation_guard", False, result.provider, result.model, result.usage, result.finish_reason)
         text=strip_generated_source_footer(text)
