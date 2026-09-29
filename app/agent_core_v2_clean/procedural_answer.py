@@ -64,7 +64,9 @@ def contradicted_absence_claim(text, question, evidence):
 class ProceduralAnswerComposer:
  def __init__(self,gateway,max_tokens=900):self.gateway=gateway;self.max_tokens=max(620,min(1100,int(max_tokens)));self.last_provider_result={};self.validation={}
  def compose(self,message,understanding,retrieval):
-  exp=retrieval.get("procedural_expansion") or {};evidence=evidence_pack(retrieval)
+  exp=retrieval.get("procedural_expansion") or {}
+  packed_evidence=evidence_pack(retrieval)
+  evidence=_limit_web_document_chunks(packed_evidence)
   if not (exp.get("ok") and exp.get("same_document_only") and exp.get("ordered") and evidence):return AgentResponse("La evidencia operacional todavía no es suficiente o consistente para redactar una orientación segura.","procedural_evidence_guard",False)
   from app.llm_gateway.models import LLMRequest
   integrity_contract=build_guidance_integrity_contract(retrieval)
@@ -87,7 +89,9 @@ class ProceduralAnswerComposer:
   safe_partial=bool(not ok and partial_text)
   if safe_partial:text=partial_text;cited=partial_cited
   self.validation["safe_partial_published"]=safe_partial
-  self.validation["web_chunk_limit_applied"]=bool(len(pack(retrieval))>len(evidence))
+  self.validation["web_chunk_limit_applied"]=bool(len(packed_evidence)>len(evidence))
+  self.validation["packed_evidence_count"]=len(packed_evidence)
+  self.validation["generation_evidence_count"]=len(evidence)
   self.validation["focused_followup"]=focused_followup
   self.validation["minimum_sections"]=1
   self.validation["broad_request"]=broad_request
