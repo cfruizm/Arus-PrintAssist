@@ -130,11 +130,80 @@ def _conceptual_selection(candidates, understanding):
         "rejected_count": max(0, len(candidates) - len(selected)),
     }
 
+
+def _primary_continuity_selection(out, candidates, wanted):
+    """Authorize relevant evidence from the already-authorized primary document.
+
+    This branch is strictly scoped to structured same-document continuity. It does
+    not approve a document by identity alone: current-turn terms must still be
+    covered by the current evidence. No product or operation vocabulary is used.
+    """
+    query = (out.get("query") or {}).get("fields") or {}
+    context = out.get("_answer_context") or {}
+    if str(query.get("previous_evidence_role") or "") != "primary":
+        return None
+    identities = {str(x).strip() for x in context.get("source_identities") or [] if str(x).strip()}
+    if not identities or not wanted:
+        return None
+    rows = []
+    for position, item in enumerate(candidates):
+        if _identity(item) not in identities:
+            continue
+        fit = _fit(item, wanted)
+        semantic = float((item.get("semantic_fit") or {}).get("score", 0.0) or 0.0)
+        relevant = fit["covered_count"] >= 2 or (fit["covered_count"] >= 1 and semantic >= 0.15)
+        if relevant:
+            rows.append((fit["covered_count"], fit["coverage"], semantic, -position, deepcopy(item)))
+    if not rows:
+        return None
+    rows.sort(reverse=True, key=lambda x:(x[0],x[1],x[2],x[3]))
+    identity = _identity(rows[0][4])
+    selected = [x[4] for x in rows if _identity(x[4]) == identity][:8]
+    for index, item in enumerate(selected, 1):
+        item["id"] = f"R{index}"
+    coverage = max(x[1] for x in rows)
+    return {
+        "schema_version": 5,
+        "status": "sufficient",
+        "mode": "documented",
+        "accepted": True,
+        "reason": "primary_document_current_turn_relevance",
+        "request_terms": sorted(wanted),
+        "document_ids": [identity],
+        "evidence_ids": [x["id"] for x in selected],
+        "coverage": round(float(coverage), 4),
+        "selected_evidence": selected,
+        "rejected_count": max(0, len(candidates)-len(selected)),
+        "continuity_authority": "structured_primary_document",
+    }
+
 def apply_unified_evidence_verdict(retrieval, message, understanding):
     out = deepcopy(retrieval or {})
     candidates = _dedup(out.get("diagnostic_evidence") or out.get("generation_evidence") or out.get("evidence") or [])
     wanted = _tokens(_request_text(message, understanding, out))
+    continuity = _primary_continuity_selection(out, candidates, wanted)
     conceptual = _conceptual_selection(candidates, understanding)
+    if continuity:
+        selected = continuity["selected_evidence"]
+        out["evidence_verdict"] = continuity
+        out["generation_evidence"] = deepcopy(selected)
+        out["evidence"] = deepcopy(selected)
+        semantic_fit = out.setdefault("semantic_fit", {})
+        semantic_fit.update({
+            "accepted_for_generation": True,
+            "low_fit": False,
+            "generation_ids": continuity["evidence_ids"],
+            "generation_count": len(selected),
+            "selected_document": continuity["document_ids"][0],
+            "previous_evidence_role": "primary",
+            "previous_evidence_primary_eligible": True,
+            "decision_path": "unified_evidence_authority_v5_primary_continuity",
+        })
+        follow = out.setdefault("followup_grounding", {})
+        follow["previous_evidence_considered"] = len((out.get("_answer_context") or {}).get("cited_evidence") or [])
+        follow["previous_evidence_selected"] = len(selected)
+        follow["primary_document_reused"] = True
+        return out
     if conceptual:
         selected = conceptual["selected_evidence"]
         out["evidence_verdict"] = conceptual
