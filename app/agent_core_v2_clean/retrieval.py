@@ -92,12 +92,14 @@ class ReadOnlyRetrieval:
     from app.integration.document_expansion_adapter import retrieve_same_document
     source=preferred_sources[0];rawp=retrieve_same_document(current_only.text,source,self.k) or {};ep=self._normalize(rawp);qp=_quality(current_only.fields.get("current_message"),ep)
     preferred_attempt={"mode":"active_document","query":current_only.to_dict(),"source":source,"quality":qp,"count":len(ep)}
-    if ep and qp>=0.30:
+    if ep:
+     # Structured primary-document continuity outranks global lexical fallback.
+     # Relevance is still decided later by semantic fit and unified authority.
      limit=18 if str(current_only.fields.get("intent") or "")=="requirements" else 8;ep,exp=_expand_procedure(current_only.text,ep,limit);groups={}
      for x in ep:
       identity=_identity(x);g=groups.setdefault(identity,{"identity":identity,"title":x["title"],"pages":[],"chunks":0});g["chunks"]+=1
       if x["page"] and x["page"] not in g["pages"]:g["pages"].append(x["page"])
-     return {"enabled":True,"llm_called":False,"production_changed":False,"query":current_only.to_dict(),"ok":bool(rawp.get("ok",True)),"adapter":rawp.get("adapter"),"count":len(ep),"evidence":ep,"document_groups":list(groups.values()),"errors":rawp.get("errors") or [],"diagnostic_only":True,"selection":{"chosen_mode":"active_document","quality":qp,"attempts":[preferred_attempt],"context_contamination_avoided":True,"active_document_reused":True},"procedural_expansion":exp}
+     return {"enabled":True,"llm_called":False,"production_changed":False,"query":current_only.to_dict(),"ok":bool(rawp.get("ok",True)),"adapter":rawp.get("adapter"),"count":len(ep),"evidence":ep,"document_groups":list(groups.values()),"errors":rawp.get("errors") or [],"diagnostic_only":True,"selection":{"chosen_mode":"active_document","quality":qp,"attempts":[preferred_attempt],"context_contamination_avoided":True,"active_document_reused":True,"preferred_document_locked":True},"procedural_expansion":exp}
    except Exception as exc:preferred_attempt={"mode":"active_document","quality":0.0,"count":0,"error":f"{type(exc).__name__}: {exc}"}
   raw1=self.retrieve_fn(built.text,self.k) or {};e1=self._normalize(raw1);q1=_quality(built.fields.get("current_message"),e1);attempts=([preferred_attempt] if preferred_attempt else [])+[{"mode":"contextual","query":built.to_dict(),"quality":q1,"count":len(e1)}];chosen=(built,raw1,e1,"contextual",q1)
   if current_only is not None and q1<0.5:

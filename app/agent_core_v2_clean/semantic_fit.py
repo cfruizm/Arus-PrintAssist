@@ -111,17 +111,33 @@ def apply_semantic_fit(retrieval,answer_context=None):
  result["followup_grounding"]={"followup_detected":follow,"previous_evidence_considered":len(_prior_evidence(answer_context or {})) if follow else 0,"previous_evidence_selected":carried,"global_retrieval_skipped_reason":"previous_evidence_sufficient" if carried else None}
  return result
 
-def capture_answer_context(result):
+def capture_answer_context(result, previous_context=None):
  answer=result.get("answer") or {};retrieval=result.get("retrieval") or {};text=str(answer.get("text") or "").strip()
  if not text:return {}
  cited=set(re.findall(r"\[(R\d+)\]",text));evidence=retrieval.get("evidence") or [];chosen=[e for e in evidence if not cited or str(e.get("id")) in cited]
- identities=[];titles=[];compact=[]
- for item in chosen[:6]:
+ previous_context=previous_context or {}
+ continuity=(result.get("document_continuity") or {})
+ current_identities=[]
+ for item in chosen:
+  identity=_identity(item)
+  if identity and identity not in current_identities:current_identities.append(identity)
+ # Accumulate only evidence from the same structured primary document. This is a
+ # bounded documentary ledger, not conversational memory and not a new authority.
+ if continuity.get("primary") and current_identities:
+  for old in previous_context.get("cited_evidence") or []:
+   if _identity(old) in current_identities:
+    chosen.append(copy.deepcopy(old))
+ identities=[];titles=[];compact=[];seen=set()
+ for item in chosen:
+  signature=_chunk_identity(item)
+  if signature in seen:continue
+  seen.add(signature)
   identity=_identity(item)
   if identity and identity not in identities:identities.append(identity)
   title=str(item.get("title") or "").strip()
   if title and title not in titles:titles.append(title)
   compact.append({"id":item.get("id"),"title":title,"source":item.get("source"),"url":item.get("url"),"page":item.get("page"),"text":" ".join(str(item.get("text") or "").split())[:1000],"metadata":{k:v for k,v in (item.get("metadata") or {}).items() if k in {"product","component","document_family","canonical_url","source_group"}}})
+  if len(compact)>=12:break
  normalized=" ".join(text.split())
  inverted=list(re.finditer(r"¿[^?]{1,420}\?",normalized))
  closing_question=inverted[-1].group(0).strip() if inverted else None
@@ -131,4 +147,4 @@ def capture_answer_context(result):
   end=markers[index+1].start() if index+1<len(markers) else len(text)
   block=text[marker.end():end].strip();first=block.splitlines()[0] if block else "";action=re.sub(r"^[*#\s]+|[*:]+$","",first).strip();body=" ".join(block.split())
   if action:guidance.append({"action":action,"excerpt":body[:260],"status":"truncated" if str(answer.get("finish_reason") or "").casefold() in {"length","max_tokens"} and index==len(markers[:8])-1 else "delivered"})
- return {"answer_mode":answer.get("mode"),"goal":(result.get("understanding") or {}).get("current_goal"),"main_text_excerpt":normalized[:1000],"closing_question":closing_question,"source_identities":identities,"source_titles":titles,"cited_ids":sorted(cited),"cited_evidence":compact,"delivered_guidance":guidance,"finish_reason":answer.get("finish_reason"),"partial":str(answer.get("mode") or "").endswith("_partial") or str(answer.get("finish_reason") or "").casefold() in {"length","max_tokens"}}
+ return {"answer_mode":answer.get("mode"),"goal":(result.get("understanding") or {}).get("current_goal"),"main_text_excerpt":normalized[:1000],"evidence_ledger_version":"active_primary_document_v1","cumulative_evidence_count":len(compact),"closing_question":closing_question,"source_identities":identities,"source_titles":titles,"cited_ids":sorted(cited),"cited_evidence":compact,"delivered_guidance":guidance,"finish_reason":answer.get("finish_reason"),"partial":str(answer.get("mode") or "").endswith("_partial") or str(answer.get("finish_reason") or "").casefold() in {"length","max_tokens"}}

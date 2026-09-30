@@ -129,11 +129,13 @@ def contradicted_absence(text, message, understanding, evidence):
 
 
 def _remove_contradicted_absence_claims(text, message, understanding, evidence):
-    """Remove only negative documentary claims contradicted by authorized evidence.
+    """Remove a complete contradictory negative block without another LLM call.
 
-    This is domain-independent. It uses the existing requested-dimension coverage
-    signal and generic negation structures. It does not inspect product names,
-    document titles, platforms, operations, URLs, or campaign phrases.
+    The repair is structural and domain-independent. A section containing a
+    contradicted documentary-absence claim is removed as a unit, including its
+    subordinate list. Positive cited sections are preserved. If no section
+    boundaries exist, only the contradictory sentence and immediately subordinate
+    list are removed. No missing fact is invented by the repair.
     """
     contradiction, coverage = contradicted_absence(text, message, understanding, evidence)
     if not contradiction:
@@ -142,28 +144,50 @@ def _remove_contradicted_absence_claims(text, message, understanding, evidence):
         "no especifica", "no contiene", "no detalla", "no proporciona", "no documenta",
         "no es posible responder", "not specify", "not contain", "not document",
     )
-    value = str(text or "").strip()
-    # Preserve headings and positive cited statements. Remove only sentence-like
-    # units that make a global/local absence claim contradicted by the evidence.
-    units = re.split(r"(?<=[.!?])\s+|\n+", value)
-    kept = []
-    removed = []
-    for unit in units:
-        clean = unit.strip()
-        if not clean:
-            continue
-        normalized = _norm(clean)
-        if any(marker in normalized for marker in markers):
-            removed.append(clean)
-        else:
-            kept.append(clean)
-    repaired = "\n".join(kept).strip()
-    cited = set(re.findall(r"\[(R\d+)\]", repaired))
+    value=str(text or "").strip()
+    lines=value.splitlines()
+    heading=lambda line: bool(re.match(r"^\s*(?:#{1,6}\s+|\*\*[^*]+\*\*\s*$)",line))
+    sections=[]; current=[]
+    for line in lines:
+        if heading(line) and current:
+            sections.append(current);current=[line]
+        else:current.append(line)
+    if current:sections.append(current)
+    bad=[]
+    for index,section in enumerate(sections):
+        body=_norm("\n".join(section))
+        if any(marker in body for marker in markers):bad.append(index)
+    # Drop whole contradictory sections only when another cited section survives.
+    survivors=[section for index,section in enumerate(sections) if index not in bad]
+    survivor_text="\n".join("\n".join(x) for x in survivors).strip()
+    if bad and survivor_text and re.search(r"\[(R\d+)\]",survivor_text):
+        repaired=survivor_text
+    else:
+        kept=[];suppress_list=False
+        for line in lines:
+            is_list=bool(re.match(r"^\s*(?:[-*+]\s+|\d+[.)]\s+)",line))
+            if suppress_list and is_list:continue
+            if suppress_list and not is_list and line.strip():suppress_list=False
+            # A mixed paragraph may contain a positive cited sentence followed by
+            # a contradictory negative sentence. Preserve only the positive unit.
+            units=re.split(r"(?<=[.!?])\s+",line)
+            clean_units=[];negative_found=False
+            for unit in units:
+                normalized=_norm(unit)
+                if any(marker in normalized for marker in markers):
+                    negative_found=True;continue
+                if unit.strip():clean_units.append(unit.strip())
+            if negative_found:suppress_list=True
+            if clean_units:kept.append(" ".join(clean_units))
+        repaired="\n".join(kept).strip()
+    # Remove empty headings and normalize excessive blank lines.
+    repaired=re.sub(r"(?m)^\s*(?:#{1,6}\s+|\*\*)[^\n]*?(?:\*\*)?\s*$\n(?=\s*(?:\n|$))","",repaired)
+    repaired=re.sub(r"\n{3,}","\n\n",repaired).strip()
+    cited=set(re.findall(r"\[(R\d+)\]",repaired))
     if repaired and cited:
-        repaired += ("\n\n> Alcance documental: se omitió una afirmación de ausencia que "
-                     "contradecía la evidencia autorizada. Se conservaron únicamente "
-                     "las afirmaciones positivas y citadas.")
-        return repaired, bool(removed), coverage
+        repaired += ("\n\n> Alcance documental: se omitió un bloque de ausencia que "
+                     "contradecía la evidencia autorizada. No se añadieron limitaciones no verificadas.")
+        return repaired, True, coverage
     return value, False, coverage
 
 
@@ -238,8 +262,8 @@ class DocumentedAnswerComposer:
         conceptual = intent == "conceptual"
         evidence = evidence_pack(
             retrieval, message, understanding,
-            max_items=16 if requirements else 12 if conceptual else 8,
-            max_chars=16000 if requirements else 12000 if conceptual else 8000,
+            max_items=10 if requirements else 10 if conceptual else 8,
+            max_chars=11000 if requirements else 10000 if conceptual else 8000,
         )
         if not evidence:
             return AgentResponse("La recuperacion no contiene evidencia suficiente para responder de forma documentada.", "documented_insufficient", False)
