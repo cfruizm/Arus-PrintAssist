@@ -19,7 +19,7 @@ class LLMGateway:
         cfg=self.config["providers"][name]
         if name=="groq":return GroqProvider(cfg["api_key"],cfg["base_url"],cfg["structured_mode"])
         if name=="huggingface":return HuggingFaceProvider(cfg["token"],cfg.get("provider"),cfg.get("disable_thinking",True),cfg.get("timeout_seconds",75),cfg.get("structured_mode","json_schema"))
-        if name=="openrouter":return OpenRouterProvider(cfg["api_key"],cfg.get("base_url"),cfg.get("structured_mode","best_effort"),cfg.get("timeout_seconds",75),cfg.get("http_referer"),cfg.get("app_title"),cfg.get("allow_format_fallback",True))
+        if name=="openrouter":return OpenRouterProvider(cfg["api_key"],cfg.get("base_url"),cfg.get("structured_mode","best_effort"),cfg.get("timeout_seconds",75),cfg.get("http_referer"),cfg.get("app_title"),cfg.get("allow_format_fallback",True),cfg.get("reasoning_effort","none"),cfg.get("exclude_reasoning",True),cfg.get("reasoning_fallback",True),cfg.get("reasoning_max_tokens",0))
         raise LLMGatewayError("unsupported_provider",f"Proveedor no soportado: {name}")
     def _budget(self):
         if self.session is None:return

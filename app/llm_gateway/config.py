@@ -33,6 +33,10 @@ def load_gateway_config(secrets)->dict:
                 "http_referer":_get(secrets,"OPENROUTER_HTTP_REFERER"),
                 "app_title":_get(secrets,"OPENROUTER_APP_TITLE","Arus PrintAssist"),
                 "allow_format_fallback":_as_bool(_get(secrets,"OPENROUTER_ALLOW_FORMAT_FALLBACK",True),True),
+                "reasoning_effort":str(_get(secrets,"OPENROUTER_REASONING_EFFORT","none")).strip().casefold(),
+                "exclude_reasoning":_as_bool(_get(secrets,"OPENROUTER_EXCLUDE_REASONING",True),True),
+                "reasoning_fallback":_as_bool(_get(secrets,"OPENROUTER_REASONING_FALLBACK",True),True),
+                "reasoning_max_tokens":max(0,min(4096,int(_get(secrets,"OPENROUTER_REASONING_MAX_TOKENS",0)))),
             },
             "huggingface":{
                 "token":_get(secrets,"HF_TOKEN"),
