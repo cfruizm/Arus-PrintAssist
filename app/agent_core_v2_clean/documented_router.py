@@ -45,7 +45,7 @@ def maybe_generate_procedural(result,message,gateway,budget,store,model=''):
  result,plan=plan_turn(result,message);assessment=assessment_from_plan(plan,base);result['evidence_sufficiency']=assessment;mode=plan.response_plan['mode']
  if mode!='documented':
   continuity=(result.get('document_continuity') or {})
-  prior=(r.get('_answer_context') or {}).get('cited_evidence') or []
+  ctx=r.get('_answer_context') or {};prior=ctx.get('active_document_evidence_ledger') or ctx.get('cited_evidence') or []
   current=r.get('diagnostic_evidence') or r.get('generation_evidence') or r.get('evidence') or []
   if continuity.get('primary') and (prior or current):
    assessment=dict(assessment or {})

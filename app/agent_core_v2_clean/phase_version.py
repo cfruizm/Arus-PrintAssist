@@ -1,2 +1,2 @@
-PHASE="4A.3.9.9"
-FORMAT="agent_core_v2_clean_phase4a3_9_9_cumulative_document_evidence_safe_negative_block_repair"
+PHASE="4A.3.9.10"
+FORMAT="agent_core_v2_clean_phase4a3_9_10_degraded_terminal_arbitration_scoped_negative_claims"

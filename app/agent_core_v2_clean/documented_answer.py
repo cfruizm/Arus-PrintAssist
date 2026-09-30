@@ -17,7 +17,7 @@ Ajusta la forma al objetivo:
 - requirements: sintetiza todas las categorias de condiciones previas respaldadas por el conjunto de evidencia, no solo por el primer fragmento. Separa categorias y conserva alternativas como alternativas.
 - procedural: conserva el orden documental y no rellenes pasos ausentes.
 
-Integra fragmentos complementarios del mismo documento y de paginas posteriores. No copies un unico enunciado si otros fragmentos autorizados agregan capacidades materialmente distintas. Si una parte solicitada no aparece, responde primero todo lo que si esta documentado y declara la limitacion de forma localizada. Nunca afirmes ausencia global sin revisar todos los fragmentos. En seguimientos del mismo caso, no vuelvas a definir, presentar ni describir el producto. Empieza por el nuevo hecho confirmado, su implicación y la siguiente comprobación respaldada. Prioriza cobertura completa y concisa sobre detalle secundario. Para una consulta inicial usa como máximo 320 palabras; para un seguimiento del mismo caso usa como máximo 220 palabras. En troubleshooting prioriza la implicación del dato nuevo y hasta tres comprobaciones de mayor valor diagnóstico. No repitas definiciones, contexto, fuentes equivalentes ni recomendaciones ya realizadas. En seguimientos usa máximo 180 palabras y no más de tres comprobaciones numeradas. Continúa primero una comprobación truncada. No repitas acciones incluidas en already_delivered_guidance. Las recomendaciones mostradas anteriormente NO son acciones ejecutadas. Considera realizada una validación únicamente cuando aparezca en user_confirmed_attempts. Nunca uses expresiones de ejecución previa, como afirmar que algo ya fue verificado, basándote solo en assistant_delivered_guidance. Si una acción no está confirmada, mantenla como pendiente y redáctala en futuro o como instrucción. Antes de publicar una acción, evalúa semánticamente su impacto y reversibilidad. Si puede causar pérdida de configuración o datos, interrupción, impacto amplio, cambios de seguridad/acceso o rollback difícil, no la presentes como acción rutinaria ni temprana: indica condición de uso, impacto, prerrequisitos de respaldo/recuperación, autorización o ventana cuando apliquen, y ofrece escalamiento si no puede ejecutarse con seguridad. No declares una causa o capa descartada salvo evidencia explícita. Una validación correcta solo reduce probabilidad; formula la siguiente hipótesis como ampliación del diagnóstico, no como causa confirmada ni exclusión definitiva. No menciones procesos internos del laboratorio."""
+Integra fragmentos complementarios del mismo documento y de paginas posteriores. No copies un unico enunciado si otros fragmentos autorizados agregan capacidades materialmente distintas. Si una parte solicitada no aparece, responde primero todo lo que si esta documentado y declara la limitacion de forma localizada. Nunca afirmes ausencia global sin revisar todos los fragmentos. En seguimientos del mismo caso, no vuelvas a definir, presentar ni describir el producto. Empieza por el nuevo hecho confirmado, su implicación y la siguiente comprobación respaldada. Prioriza cobertura completa y concisa sobre detalle secundario. Para una consulta inicial usa como máximo 320 palabras; para un seguimiento del mismo caso usa como máximo 220 palabras. En troubleshooting prioriza la implicación del dato nuevo y hasta tres comprobaciones de mayor valor diagnóstico. No repitas definiciones, contexto, fuentes equivalentes ni recomendaciones ya realizadas. En seguimientos usa máximo 180 palabras y no más de tres comprobaciones numeradas. Continúa primero una comprobación truncada. No repitas acciones incluidas en already_delivered_guidance. Las recomendaciones mostradas anteriormente NO son acciones ejecutadas. Considera realizada una validación únicamente cuando aparezca en user_confirmed_attempts. Nunca uses expresiones de ejecución previa, como afirmar que algo ya fue verificado, basándote solo en assistant_delivered_guidance. Si una acción no está confirmada, mantenla como pendiente y redáctala en futuro o como instrucción. Antes de publicar una acción, evalúa semánticamente su impacto y reversibilidad. Si puede causar pérdida de configuración o datos, interrupción, impacto amplio, cambios de seguridad/acceso o rollback difícil, no la presentes como acción rutinaria ni temprana: indica condición de uso, impacto, prerrequisitos de respaldo/recuperación, autorización o ventana cuando apliquen, y ofrece escalamiento si no puede ejecutarse con seguridad. No declares una causa o capa descartada salvo evidencia explícita. Una validación correcta solo reduce probabilidad; formula la siguiente hipótesis como ampliación del diagnóstico, no como causa confirmada ni exclusión definitiva. Distingue requisitos generales documentados de requisitos adicionales o exclusivos que la fuente no especifica. Una ausencia cualificada no contradice requisitos generales confirmados. No menciones procesos internos del laboratorio."""
 
 _STOP = {
     "cuales", "cual", "especificamente", "requisitos", "requisito", "necesito",
@@ -118,6 +118,25 @@ def dimension_coverage(message, understanding, evidence):
     return {"requested": terms, "covered": covered, "missing": [x for x in terms if x not in body], "sufficient": not terms or bool(covered)}
 
 
+def _negative_claim_scope(text):
+    """Classify documentary absence by linguistic scope, never by product terms.
+
+    A qualified absence concerns additional/specific conditions and may coexist
+    with general documented requirements. An unqualified absence denies the
+    documented dimension itself and can contradict positive evidence.
+    """
+    value = _norm(text)
+    qualifiers = (
+        "adicional", "adicionales", "especifico", "especificos",
+        "especificas", "exclusivo", "exclusiva", "exclusivos", "exclusivas",
+        "distinto", "distinta", "distintos", "distintas", "particular",
+        "particulares", "propio", "propia", "propios", "propias", "extra",
+        "additional", "specific", "exclusive", "different", "particular",
+    )
+    words = set(re.findall(r"[a-z0-9]+", value))
+    return "qualified" if words.intersection(qualifiers) else "general"
+
+
 def contradicted_absence(text, message, understanding, evidence):
     body = _norm(text)
     absence = any(x in body for x in (
@@ -125,17 +144,18 @@ def contradicted_absence(text, message, understanding, evidence):
         "no es posible responder", "not specify", "not contain", "not document",
     ))
     coverage = dimension_coverage(message, understanding, evidence)
-    return bool(absence and coverage["covered"]), coverage
+    scope = _negative_claim_scope(text)
+    coverage["negative_claim_scope"] = scope
+    # General positive requirements and qualified absence can both be true.
+    return bool(absence and scope == "general" and coverage["covered"]), coverage
 
 
 def _remove_contradicted_absence_claims(text, message, understanding, evidence):
-    """Remove a complete contradictory negative block without another LLM call.
+    """Remove only unqualified negative blocks that contradict positive evidence.
 
-    The repair is structural and domain-independent. A section containing a
-    contradicted documentary-absence claim is removed as a unit, including its
-    subordinate list. Positive cited sections are preserved. If no section
-    boundaries exist, only the contradictory sentence and immediately subordinate
-    list are removed. No missing fact is invented by the repair.
+    Qualified limitations such as additional or environment-specific requirements
+    are preserved. The repair is structural, domain-independent and uses no extra
+    model call.
     """
     contradiction, coverage = contradicted_absence(text, message, understanding, evidence)
     if not contradiction:
@@ -144,51 +164,53 @@ def _remove_contradicted_absence_claims(text, message, understanding, evidence):
         "no especifica", "no contiene", "no detalla", "no proporciona", "no documenta",
         "no es posible responder", "not specify", "not contain", "not document",
     )
-    value=str(text or "").strip()
-    lines=value.splitlines()
-    heading=lambda line: bool(re.match(r"^\s*(?:#{1,6}\s+|\*\*[^*]+\*\*\s*$)",line))
-    sections=[]; current=[]
+    value = str(text or "").strip()
+    lines = value.splitlines()
+    # Mixed positive and negative claims may share one paragraph. Remove only the
+    # unqualified negative sentence while preserving cited positive sentences.
+    sentences = [x.strip() for x in re.split(r"(?<=[.!?])\s+", value) if x.strip()]
+    if len(sentences) > 1 and not any(re.match(r"^\s*(?:[-*+]\s+|\d+[.)]\s+)", line) for line in lines):
+        kept_sentences = [
+            sentence for sentence in sentences
+            if not (any(marker in _norm(sentence) for marker in markers)
+                    and _negative_claim_scope(sentence) == "general")
+        ]
+        sentence_text = " ".join(kept_sentences).strip()
+        if len(kept_sentences) < len(sentences) and re.search(r"\[(R\d+)\]", sentence_text):
+            return sentence_text, True, coverage
+    heading = lambda line: bool(re.match(r"^\s*(?:#{1,6}\s+|\*\*[^*]+\*\*\s*$)", line))
+    sections, current = [], []
     for line in lines:
         if heading(line) and current:
-            sections.append(current);current=[line]
-        else:current.append(line)
-    if current:sections.append(current)
-    bad=[]
-    for index,section in enumerate(sections):
-        body=_norm("\n".join(section))
-        if any(marker in body for marker in markers):bad.append(index)
-    # Drop whole contradictory sections only when another cited section survives.
-    survivors=[section for index,section in enumerate(sections) if index not in bad]
-    survivor_text="\n".join("\n".join(x) for x in survivors).strip()
-    if bad and survivor_text and re.search(r"\[(R\d+)\]",survivor_text):
-        repaired=survivor_text
+            sections.append(current); current = [line]
+        else:
+            current.append(line)
+    if current:
+        sections.append(current)
+    bad = []
+    for index, section in enumerate(sections):
+        body = _norm("\n".join(section))
+        if any(marker in body for marker in markers) and _negative_claim_scope(body) == "general":
+            bad.append(index)
+    survivors = [section for index, section in enumerate(sections) if index not in bad]
+    survivor_text = "\n".join("\n".join(x) for x in survivors).strip()
+    if bad and survivor_text and re.search(r"\[(R\d+)\]", survivor_text):
+        repaired = survivor_text
     else:
-        kept=[];suppress_list=False
+        kept, suppress_list = [], False
         for line in lines:
-            is_list=bool(re.match(r"^\s*(?:[-*+]\s+|\d+[.)]\s+)",line))
-            if suppress_list and is_list:continue
-            if suppress_list and not is_list and line.strip():suppress_list=False
-            # A mixed paragraph may contain a positive cited sentence followed by
-            # a contradictory negative sentence. Preserve only the positive unit.
-            units=re.split(r"(?<=[.!?])\s+",line)
-            clean_units=[];negative_found=False
-            for unit in units:
-                normalized=_norm(unit)
-                if any(marker in normalized for marker in markers):
-                    negative_found=True;continue
-                if unit.strip():clean_units.append(unit.strip())
-            if negative_found:suppress_list=True
-            if clean_units:kept.append(" ".join(clean_units))
-        repaired="\n".join(kept).strip()
-    # Remove empty headings and normalize excessive blank lines.
-    repaired=re.sub(r"(?m)^\s*(?:#{1,6}\s+|\*\*)[^\n]*?(?:\*\*)?\s*$\n(?=\s*(?:\n|$))","",repaired)
-    repaired=re.sub(r"\n{3,}","\n\n",repaired).strip()
-    cited=set(re.findall(r"\[(R\d+)\]",repaired))
-    if repaired and cited:
-        repaired += ("\n\n> Alcance documental: se omitió un bloque de ausencia que "
-                     "contradecía la evidencia autorizada. No se añadieron limitaciones no verificadas.")
-        return repaired, True, coverage
-    return value, False, coverage
+            is_list = bool(re.match(r"^\s*(?:[-*+]\s+|\d+[.)]\s+)", line))
+            if suppress_list and is_list:
+                continue
+            if suppress_list and not is_list and line.strip():
+                suppress_list = False
+            low = _norm(line)
+            if any(marker in low for marker in markers) and _negative_claim_scope(low) == "general":
+                suppress_list = True
+                continue
+            kept.append(line)
+        repaired = "\n".join(kept).strip()
+    return repaired or value, repaired != value, coverage
 
 
 def validate_citations(text, ids):

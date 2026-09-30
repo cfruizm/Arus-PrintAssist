@@ -1,3 +1,4 @@
+# Regression lineage: agent_core_v2_clean_phase4a3_9_9_cumulative_document_evidence_safe_negative_block_repair
 # Regression lineage: agent_core_v2_clean_phase4a3_9_4_visible_terminal_truncation_recovery
 from copy import deepcopy
 import secrets
@@ -14,6 +15,7 @@ from .budget import BudgetPolicy
 from .retrieval import RetrievalQueryBuilder, ReadOnlyRetrieval, retrieval_summary
 from .documented_answer import DocumentedAnswerComposer, answer_fingerprint, PROMPT_VERSION
 from .documented_router import maybe_generate_procedural
+from .documented_fallback import build_documented_fallback
 from .conceptual_route import must_preempt_documented_answer
 from .semantic_fit import apply_semantic_fit, capture_answer_context
 from .unified_evidence_authority import apply_unified_evidence_verdict
@@ -201,6 +203,34 @@ def _answers(result, message, secrets_obj, s, budget, store):
                 "reason":"accepted_evidence_completed_documented_attempt_is_terminal",
             })
             return result,documented_trace,{"skipped":True,"reason":"authorized_documented_answer_is_terminal"}
+        # Accepted documentary evidence remains authoritative when its composer is
+        # temporarily unavailable. Do not spend a second large generation call.
+        provider_failed = (documented_trace or {}).get("ok") is False
+        provider_error = str((documented_trace or {}).get("error_code") or "").casefold()
+        transient_failure = provider_failed and provider_error in {
+            "rate_limited", "timeout", "provider_unavailable", "service_unavailable",
+            "provider_error", "upstream_unavailable",
+        }
+        if transient_failure and verdict.get("accepted"):
+            fallback = build_documented_fallback(retrieval, reason=provider_error or "provider_degraded")
+            if fallback:
+                result["answer"] = fallback
+                result["documented_answer"] = {
+                    **dict(result.get("documented_answer") or {}),
+                    "provider_degraded": True,
+                    "deterministic_fallback_used": True,
+                    "secondary_composer_suppressed": True,
+                }
+                result.setdefault("functional_events", []).append({
+                    "type": "degraded_terminal_arbitration",
+                    "winner": "deterministic_documented_fallback",
+                    "suppressed": "procedural_composer",
+                    "reason": "accepted_documented_evidence_provider_failure_no_secondary_composer",
+                })
+                return result, documented_trace, {
+                    "skipped": True,
+                    "reason": "accepted_documented_evidence_provider_failure_no_secondary_composer",
+                }
     u=result.get("understanding") or {};decision=result.get("decision") or {}
     active_case_followup=(decision.get("action")=="diagnose_with_retrieval" and u.get("user_act") in {"follow_up","request_elaboration","answer_to_question","attempt_result"} and u.get("topic_relation") in {"same_topic","return_to_previous"})
     if active_case_followup and u.get("intent")=="conceptual":
@@ -361,4 +391,4 @@ def process_message(message, secrets_obj, s):
 
 def export_session(s):
     x = get_store(s)
-    return {"format": "agent_core_v2_clean_phase4a3_9_9_cumulative_document_evidence_safe_negative_block_repair", "session_id": x.get("session_id"), "gateway_budget": {"calls": int(s.get("llm_gateway_calls", 0)), "tokens": int(s.get("llm_gateway_tokens", 0))}, "messages": deepcopy(x["messages"]), "turns": deepcopy(x["turns"]), "state": x["memory"].to_dict(), "answer_context": deepcopy(x.get("answer_context") or {}), "budget": deepcopy(x["budget"]), "telemetry": snapshot(x["telemetry"]), "cache_metrics": deepcopy(x["cache_metrics"]), "errors": deepcopy(x["errors"]), "escalation_export": build_escalation_export(x["memory"].escalation,x["memory"].conversation_id) if x["memory"].escalation.confirmed else None, "retrieval_enabled": True, "documented_answer_enabled": True, "procedural_answer_enabled": True, "production_changed": False}
+    return {"format": "agent_core_v2_clean_phase4a3_9_10_degraded_terminal_arbitration_scoped_negative_claims", "session_id": x.get("session_id"), "gateway_budget": {"calls": int(s.get("llm_gateway_calls", 0)), "tokens": int(s.get("llm_gateway_tokens", 0))}, "messages": deepcopy(x["messages"]), "turns": deepcopy(x["turns"]), "state": x["memory"].to_dict(), "answer_context": deepcopy(x.get("answer_context") or {}), "budget": deepcopy(x["budget"]), "telemetry": snapshot(x["telemetry"]), "cache_metrics": deepcopy(x["cache_metrics"]), "errors": deepcopy(x["errors"]), "escalation_export": build_escalation_export(x["memory"].escalation,x["memory"].conversation_id) if x["memory"].escalation.confirmed else None, "retrieval_enabled": True, "documented_answer_enabled": True, "procedural_answer_enabled": True, "production_changed": False}

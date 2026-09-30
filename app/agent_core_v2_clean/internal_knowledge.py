@@ -48,7 +48,8 @@ def authorized_evidence(
     max_chars=MAX_AUTHORIZED_CHARS,
 ):
     current = list(retrieval.get("generation_evidence") or retrieval.get("evidence") or [])
-    previous = list(((retrieval.get("_answer_context") or {}).get("cited_evidence") or []))
+    ctx = retrieval.get("_answer_context") or {}
+    previous = list(ctx.get("active_document_evidence_ledger") or ctx.get("cited_evidence") or [])
     query_terms = _terms(f"{question} {goal}")
     candidates = []
 
