@@ -34,10 +34,10 @@ def apply_understanding(m,u):
   for raw in case_updates:
    f=dict(raw or {})
    if not f.get("result"):
-    for alias in ("result_detail","result_text","observed_result"):
+    for alias in ("result_detail","result_text","observed_result","result_observed"):
      if str(f.get(alias) or "").strip():f["result"]=f.get(alias);break
    if not f.get("outcome"):
-    for alias in ("outcome_status","result_status","resolution_outcome"):
+    for alias in ("outcome_status","result_status","resolution_outcome","outcome_observed"):
      if str(f.get(alias) or "").strip():f["outcome"]=f.get(alias);break
    normalized_updates.append(f)
   for index,f in enumerate(normalized_updates):
