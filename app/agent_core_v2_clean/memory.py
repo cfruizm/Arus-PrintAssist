@@ -37,7 +37,7 @@ def apply_understanding(m,u):
     for alias in ("result_detail","result_text","observed_result","result_observed"):
      if str(f.get(alias) or "").strip():f["result"]=f.get(alias);break
    if not f.get("outcome"):
-    for alias in ("outcome_status","result_status","resolution_outcome","outcome_observed","outcome_text","observed_outcome"):
+    for alias in ("outcome_status","result_status","resolution_outcome","outcome_observed"):
      if str(f.get(alias) or "").strip():f["outcome"]=f.get(alias);break
    normalized_updates.append(f)
   for index,f in enumerate(normalized_updates):
