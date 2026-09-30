@@ -65,10 +65,15 @@ def diagnose_openrouter(api_key,configured_model,http_referer=None,app_title=Non
     return result
 
 class OpenRouterProvider(BaseProvider):
-    def __init__(self,api_key,base_url=CHAT_URL,structured_mode="best_effort",timeout_seconds=75,http_referer=None,app_title=None,allow_format_fallback=True):
+    def __init__(self,api_key,base_url=CHAT_URL,structured_mode="best_effort",timeout_seconds=75,http_referer=None,app_title=None,allow_format_fallback=True,reasoning_effort="none",exclude_reasoning=True,reasoning_fallback=True,reasoning_max_tokens=0):
         if not api_key:raise LLMGatewayError("missing_api_key","Falta OPENROUTER_API_KEY.")
         self.api_key=str(api_key).strip();self.base_url=str(base_url or CHAT_URL).strip();self.structured_mode=str(structured_mode or "best_effort").casefold()
         self.timeout_seconds=max(10,min(180,int(timeout_seconds)));self.http_referer=http_referer;self.app_title=app_title;self.allow_format_fallback=bool(allow_format_fallback)
+        allowed={"none","minimal","low","medium","high","xhigh","max"}
+        effort=str(reasoning_effort or "none").strip().casefold()
+        self.reasoning_effort=effort if effort in allowed else "none"
+        self.exclude_reasoning=bool(exclude_reasoning);self.reasoning_fallback=bool(reasoning_fallback)
+        self.reasoning_max_tokens=max(0,min(4096,int(reasoning_max_tokens or 0)))
     def _response_format(self,request):
         mode=str(getattr(request,"response_format_mode","auto") or "auto").casefold()
         if mode=="text" or not request.response_schema:return None,"text"
@@ -78,21 +83,34 @@ class OpenRouterProvider(BaseProvider):
         response_format,format_mode=self._response_format(request)
         body={"model":model,"messages":request.messages,"max_tokens":max(1,min(4096,int(request.max_tokens))),"temperature":max(0.0,min(2.0,float(request.temperature))),"stream":False}
         if response_format:body["response_format"]=response_format
-        effort=str(getattr(request,"reasoning_effort","") or "").casefold()
-        if effort in {"low","medium","high"}:body["reasoning"]={"effort":effort}
+        requested_effort=str(getattr(request,"reasoning_effort","") or "").strip().casefold()
+        effort=requested_effort if requested_effort in {"none","minimal","low","medium","high","xhigh","max"} else self.reasoning_effort
+        reasoning={"effort":effort,"exclude":self.exclude_reasoning}
+        if self.reasoning_max_tokens>0:
+            reasoning.pop("effort",None);reasoning["max_tokens"]=self.reasoning_max_tokens
+        body["reasoning"]=reasoning
         started=time.perf_counter();status,data,headers=_request_json(self.base_url,self.api_key,"POST",body,self.timeout_seconds,self.http_referer,self.app_title)
-        retried_without_format=False
+        retried_without_format=False;retried_without_reasoning=False
         if status==400 and response_format and self.allow_format_fallback and self.structured_mode=="best_effort":
             fallback_body=dict(body);fallback_body.pop("response_format",None)
             status,data,headers=_request_json(self.base_url,self.api_key,"POST",fallback_body,self.timeout_seconds,self.http_referer,self.app_title)
-            retried_without_format=True;format_mode="text_fallback"
+            retried_without_format=True;format_mode="text_fallback";body=fallback_body
+        if status==400 and "reasoning" in body and self.reasoning_fallback:
+            fallback_body=dict(body);fallback_body.pop("reasoning",None)
+            status,data,headers=_request_json(self.base_url,self.api_key,"POST",fallback_body,self.timeout_seconds,self.http_referer,self.app_title)
+            retried_without_reasoning=True
         latency=round((time.perf_counter()-started)*1000,3)
         if status!=200:return _error_result(status,data,model,request.purpose,latency,format_mode,headers)
         choice=(data.get("choices") or [{}])[0];message=choice.get("message") or {};usage=data.get("usage") or {}
         text=str(message.get("content") or "");finish=choice.get("finish_reason")
-        metadata={"structured_mode":self.structured_mode,"response_format_mode":format_mode,"structured_fallback_used":retried_without_format,"reasoning_effort":effort or "provider_default","request_id":headers.get("x-request-id") or headers.get("X-Request-Id"),"resolved_model":data.get("model") or model,"upstream_provider":data.get("provider"),"generation_id":data.get("id")}
+        reasoning_details=(usage.get("completion_tokens_details") or {}) if isinstance(usage,dict) else {}
+        reasoning_tokens=int(reasoning_details.get("reasoning_tokens") or 0)
+        metadata={"structured_mode":self.structured_mode,"response_format_mode":format_mode,"structured_fallback_used":retried_without_format,"reasoning_effort_requested":effort,"reasoning_excluded":self.exclude_reasoning,"reasoning_max_tokens":self.reasoning_max_tokens,"reasoning_parameter_fallback_used":retried_without_reasoning,"reasoning_tokens":reasoning_tokens,"request_id":headers.get("x-request-id") or headers.get("X-Request-Id"),"resolved_model":data.get("model") or model,"upstream_provider":data.get("provider"),"generation_id":data.get("id")}
         if "cost" in usage:metadata["cost"]=usage.get("cost")
         if not text.strip():
-            code="empty_truncated_response" if str(finish).casefold() in {"length","max_tokens"} else "empty_response"
-            return LLMResult(False,provider="openrouter",model=model,purpose=request.purpose,latency_ms=latency,usage={"prompt_tokens":int(usage.get("prompt_tokens") or 0),"completion_tokens":int(usage.get("completion_tokens") or 0),"total_tokens":int(usage.get("total_tokens") or 0)},finish_reason=finish,error_code=code,error_message="OpenRouter returned empty content.",metadata=metadata)
+            completion_tokens=int(usage.get("completion_tokens") or 0)
+            reasoning_consumed=reasoning_tokens>0 and reasoning_tokens>=max(0,completion_tokens-2)
+            code="reasoning_consumed_output_budget" if reasoning_consumed else "empty_truncated_response" if str(finish).casefold() in {"length","max_tokens"} else "empty_response"
+            message="OpenRouter reasoning consumed the visible output budget." if reasoning_consumed else "OpenRouter returned empty content."
+            return LLMResult(False,provider="openrouter",model=model,purpose=request.purpose,latency_ms=latency,usage={"prompt_tokens":int(usage.get("prompt_tokens") or 0),"completion_tokens":completion_tokens,"total_tokens":int(usage.get("total_tokens") or 0)},finish_reason=finish,error_code=code,error_message=message,metadata=metadata)
         return LLMResult(True,text,"openrouter",model,request.purpose,latency,{"prompt_tokens":int(usage.get("prompt_tokens") or 0),"completion_tokens":int(usage.get("completion_tokens") or 0),"total_tokens":int(usage.get("total_tokens") or 0)},finish,metadata=metadata)
