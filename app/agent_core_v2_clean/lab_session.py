@@ -184,8 +184,22 @@ def _answers(result, message, secrets_obj, s, budget, store):
     retrieval=result.get("retrieval") or {};verdict=retrieval.get("evidence_verdict") or {};documented_trace={"skipped":True,"reason":"documented_answer_not_called"}
     if verdict.get("accepted") and retrieval.get("generation_evidence"):
         result,documented_trace=_conceptual(result,message,secrets_obj,s,budget,store)
-        if str((result.get("answer") or {}).get("mode") or "") in {"documented_answer","documented_answer_partial","documented_truncation_safe_defer"}:
-            result.setdefault("functional_events",[]).append({"type":"terminal_answer_arbitration","winner":"single_documented_composer","suppressed":"procedural_composer","reason":"authorized_evidence_single_generation_or_visible_truncation_fallback"})
+        answer_mode = str((result.get("answer") or {}).get("mode") or "")
+        provider_completed = bool((documented_trace or {}).get("ok"))
+        documented_terminal = answer_mode in {
+            "documented_answer", "documented_answer_partial",
+            "documented_truncation_safe_defer",
+        }
+        # Accepted evidence plus a completed documented-provider call is terminal.
+        # Validation and deterministic repair belong to the documented composer;
+        # a second large composer may not overwrite, contradict, or rate-limit it.
+        if documented_terminal or (provider_completed and verdict.get("accepted") and answer_mode.startswith("documented_")):
+            result.setdefault("functional_events",[]).append({
+                "type":"terminal_answer_arbitration",
+                "winner":"single_documented_composer",
+                "suppressed":"procedural_composer",
+                "reason":"accepted_evidence_completed_documented_attempt_is_terminal",
+            })
             return result,documented_trace,{"skipped":True,"reason":"authorized_documented_answer_is_terminal"}
     u=result.get("understanding") or {};decision=result.get("decision") or {}
     active_case_followup=(decision.get("action")=="diagnose_with_retrieval" and u.get("user_act") in {"follow_up","request_elaboration","answer_to_question","attempt_result"} and u.get("topic_relation") in {"same_topic","return_to_previous"})
@@ -347,4 +361,4 @@ def process_message(message, secrets_obj, s):
 
 def export_session(s):
     x = get_store(s)
-    return {"format": "agent_core_v2_clean_phase4a3_9_7_primary_evidence_context_propagation", "session_id": x.get("session_id"), "gateway_budget": {"calls": int(s.get("llm_gateway_calls", 0)), "tokens": int(s.get("llm_gateway_tokens", 0))}, "messages": deepcopy(x["messages"]), "turns": deepcopy(x["turns"]), "state": x["memory"].to_dict(), "answer_context": deepcopy(x.get("answer_context") or {}), "budget": deepcopy(x["budget"]), "telemetry": snapshot(x["telemetry"]), "cache_metrics": deepcopy(x["cache_metrics"]), "errors": deepcopy(x["errors"]), "escalation_export": build_escalation_export(x["memory"].escalation,x["memory"].conversation_id) if x["memory"].escalation.confirmed else None, "retrieval_enabled": True, "documented_answer_enabled": True, "procedural_answer_enabled": True, "production_changed": False}
+    return {"format": "agent_core_v2_clean_phase4a3_9_8_terminal_documented_arbitration_negative_claim_integrity", "session_id": x.get("session_id"), "gateway_budget": {"calls": int(s.get("llm_gateway_calls", 0)), "tokens": int(s.get("llm_gateway_tokens", 0))}, "messages": deepcopy(x["messages"]), "turns": deepcopy(x["turns"]), "state": x["memory"].to_dict(), "answer_context": deepcopy(x.get("answer_context") or {}), "budget": deepcopy(x["budget"]), "telemetry": snapshot(x["telemetry"]), "cache_metrics": deepcopy(x["cache_metrics"]), "errors": deepcopy(x["errors"]), "escalation_export": build_escalation_export(x["memory"].escalation,x["memory"].conversation_id) if x["memory"].escalation.confirmed else None, "retrieval_enabled": True, "documented_answer_enabled": True, "procedural_answer_enabled": True, "production_changed": False}

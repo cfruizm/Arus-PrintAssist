@@ -128,6 +128,45 @@ def contradicted_absence(text, message, understanding, evidence):
     return bool(absence and coverage["covered"]), coverage
 
 
+def _remove_contradicted_absence_claims(text, message, understanding, evidence):
+    """Remove only negative documentary claims contradicted by authorized evidence.
+
+    This is domain-independent. It uses the existing requested-dimension coverage
+    signal and generic negation structures. It does not inspect product names,
+    document titles, platforms, operations, URLs, or campaign phrases.
+    """
+    contradiction, coverage = contradicted_absence(text, message, understanding, evidence)
+    if not contradiction:
+        return str(text or ""), False, coverage
+    markers = (
+        "no especifica", "no contiene", "no detalla", "no proporciona", "no documenta",
+        "no es posible responder", "not specify", "not contain", "not document",
+    )
+    value = str(text or "").strip()
+    # Preserve headings and positive cited statements. Remove only sentence-like
+    # units that make a global/local absence claim contradicted by the evidence.
+    units = re.split(r"(?<=[.!?])\s+|\n+", value)
+    kept = []
+    removed = []
+    for unit in units:
+        clean = unit.strip()
+        if not clean:
+            continue
+        normalized = _norm(clean)
+        if any(marker in normalized for marker in markers):
+            removed.append(clean)
+        else:
+            kept.append(clean)
+    repaired = "\n".join(kept).strip()
+    cited = set(re.findall(r"\[(R\d+)\]", repaired))
+    if repaired and cited:
+        repaired += ("\n\n> Alcance documental: se omitió una afirmación de ausencia que "
+                     "contradecía la evidencia autorizada. Se conservaron únicamente "
+                     "las afirmaciones positivas y citadas.")
+        return repaired, bool(removed), coverage
+    return value, False, coverage
+
+
 def validate_citations(text, ids):
     cited = set(re.findall(r"\[(R\d+)\]", text or ""))
     return bool(str(text or "").strip()) and bool(cited) and cited.issubset(set(ids)), sorted(cited)
@@ -233,7 +272,10 @@ class DocumentedAnswerComposer:
             return AgentResponse("Encontre documentacion, pero no pude redactar la respuesta en este turno. Las fuentes recuperadas se conservaron.", "documented_provider_degraded", False)
         text = _compact_followup_checks(str(result.text or "").strip(),understanding)
         text,certainty_softened = soften_diagnostic_certainty(text,intent)
-        contradiction, dimension_check = contradicted_absence(text, message, understanding, evidence)
+        text, negative_claim_removed, dimension_check = _remove_contradicted_absence_claims(
+            text, message, understanding, evidence
+        )
+        contradiction, _ = contradicted_absence(text, message, understanding, evidence)
         valid_ids = [str(x["id"]) for x in evidence]
         valid, cited = validate_citations(text, valid_ids)
         truncated = str(result.finish_reason or "").casefold() in {"length", "max_tokens"}
@@ -258,6 +300,7 @@ class DocumentedAnswerComposer:
             "evidence_pages": sorted(available_pages), "cited_pages": sorted(cited_pages),
             "required_page_coverage": required_page_coverage, "page_coverage_valid": page_coverage_valid,
             "requested_dimension_coverage": dimension_check, "contradicted_absence_blocked": contradiction,
+            "contradicted_negative_claim_removed": negative_claim_removed,
             "evidence_items_supplied": len(evidence), "prompt_version": PROMPT_VERSION,
             "diagnostic_certainty_softened": certainty_softened,
             "guidance_integrity": integrity_diagnostic(integrity_contract),
@@ -276,5 +319,7 @@ class DocumentedAnswerComposer:
             text += "\n\n> Cobertura documental parcial: se publicó únicamente la orientación respaldada por las fuentes citadas."
         footer = compact_sources(evidence, cited)
         if footer:text += "\n\n" + footer
-        partial = safe_partial or coverage_partial
-        return AgentResponse(text, "documented_answer_partial" if partial else "documented_answer", True, result.provider, result.model, result.usage, "safe_partial" if safe_partial else "coverage_partial" if coverage_partial else result.finish_reason)
+        partial = safe_partial or coverage_partial or negative_claim_removed
+        finish = ("safe_partial" if safe_partial else "coverage_partial" if coverage_partial
+                  else "negative_claim_repaired" if negative_claim_removed else result.finish_reason)
+        return AgentResponse(text, "documented_answer_partial" if partial else "documented_answer", True, result.provider, result.model, result.usage, finish)
