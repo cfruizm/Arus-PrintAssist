@@ -7,3 +7,6 @@ textColor = "#1E1E1E"
 
 [server]
 headless = true
+
+[client]
+showSidebarNavigation = false
