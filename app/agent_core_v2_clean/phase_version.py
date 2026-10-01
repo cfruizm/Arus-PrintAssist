@@ -1,2 +1,2 @@
-PHASE="4B.1.2"
-FORMAT="henkia_support_assist_4b1_2_deterministic_social_terminal_context_preservation"
+PHASE="4B.1.3"
+FORMAT="henkia_support_assist_4b1_3_documented_fact_coverage_integrity"
