@@ -9,7 +9,7 @@ from .source_footer import compact_sources, strip_generated_source_footer
 from .diagnostic_language import soften_diagnostic_certainty
 from .guidance_integrity import build_guidance_integrity_contract, integrity_diagnostic
 
-PROMPT_VERSION = "documented_v13_semantic_fact_coverage"
+PROMPT_VERSION = "documented_v14_material_coverage_repair"
 SYSTEM = """Eres un colega de soporte empresarial de impresion. Responde unicamente con la evidencia documental suministrada y usa el idioma del usuario. Se util, directo y natural. No inventes menus, pasos, requisitos, relaciones ni funciones. Cada afirmacion factual debe terminar con una o mas citas [R#].
 
 Ajusta la forma al objetivo:
@@ -366,29 +366,86 @@ class DocumentedAnswerComposer:
             [{"role": "system", "content": SYSTEM}, {"role": "user", "content": json.dumps(payload, ensure_ascii=False, separators=(",", ":"))}],
             "agent_core_v2_clean_documented_answer", limit, 0.0, None,
         ))
-        self.last_provider_result = result.to_dict()
+        attempts=[result.to_dict()]
+        self.last_provider_result = attempts[0]
         if not result.ok:
             return AgentResponse("Encontre documentacion, pero no pude redactar la respuesta en este turno. Las fuentes recuperadas se conservaron.", "documented_provider_degraded", False)
-        text = _compact_followup_checks(str(result.text or "").strip(),understanding)
-        text,certainty_softened = soften_diagnostic_certainty(text,intent)
-        text, negative_claim_removed, dimension_check = _remove_contradicted_absence_claims(
-            text, message, understanding, evidence
-        )
-        contradiction, _ = contradicted_absence(text, message, understanding, evidence)
-        valid_ids = [str(x["id"]) for x in evidence]
-        valid, cited = validate_citations(text, valid_ids)
-        truncated = str(result.finish_reason or "").casefold() in {"length", "max_tokens"}
-        partial_text, partial_cited = safe_cited_partial(text, valid_ids, result.finish_reason)
-        safe_partial = bool(truncated and partial_text)
-        if safe_partial:
-            text, cited = partial_text, partial_cited
+
+        def evaluate(candidate, candidate_result):
+            candidate = _compact_followup_checks(str(candidate or "").strip(), understanding)
+            candidate, certainty = soften_diagnostic_certainty(candidate, intent)
+            candidate, negative_removed, dimension = _remove_contradicted_absence_claims(
+                candidate, message, understanding, evidence
+            )
+            contradiction_found, _ = contradicted_absence(candidate, message, understanding, evidence)
+            valid_ids_local = [str(x["id"]) for x in evidence]
+            citations_valid, cited_local = validate_citations(candidate, valid_ids_local)
+            truncated_local = str(candidate_result.finish_reason or "").casefold() in {"length", "max_tokens"}
+            partial_candidate, partial_citations = safe_cited_partial(candidate, valid_ids_local, candidate_result.finish_reason)
+            safe_partial_local = bool(truncated_local and partial_candidate)
+            if safe_partial_local:
+                candidate, cited_local = partial_candidate, partial_citations
+            facts = factual_coverage(message, evidence, candidate)
+            return {
+                "text": candidate, "certainty_softened": certainty,
+                "negative_claim_removed": negative_removed, "dimension_check": dimension,
+                "contradiction": contradiction_found, "valid": citations_valid,
+                "cited": cited_local, "truncated": truncated_local,
+                "safe_partial": safe_partial_local, "factual_coverage": facts,
+            }
+
+        evaluated=evaluate(result.text,result)
+        repair_attempted=False
+        repair_succeeded=False
+        initial_coverage=dict(evaluated["factual_coverage"])
+        # One controlled repair is allowed only when the first complete provider response
+        # omitted material facts that are already present in the supplied evidence.
+        if (evaluated["valid"] and not evaluated["truncated"] and not evaluated["contradiction"]
+                and not evaluated["factual_coverage"]["complete"]):
+            repair_attempted=True
+            repair_payload={
+                **payload,
+                "draft_to_repair": evaluated["text"],
+                "missing_material_facts": evaluated["factual_coverage"]["missing"],
+                "repair_contract": {
+                    "preserve_supported_content_and_citations": True,
+                    "add_every_missing_material_fact_from_evidence": True,
+                    "do_not_add_facts_outside_evidence": True,
+                    "use_a_concise_markdown_table_when_multiple_comparable_records_are_present": True,
+                    "return_only_the_repaired_answer": True,
+                },
+            }
+            repaired=self.gateway.complete(LLMRequest(
+                [{"role":"system","content":SYSTEM},{"role":"user","content":json.dumps(repair_payload,ensure_ascii=False,separators=(",",":"))}],
+                "agent_core_v2_clean_documented_answer_coverage_repair", limit, 0.0, None,
+            ))
+            attempts.append(repaired.to_dict())
+            if repaired.ok:
+                repaired_evaluation=evaluate(repaired.text,repaired)
+                if (repaired_evaluation["valid"] and not repaired_evaluation["contradiction"]
+                        and len(repaired_evaluation["factual_coverage"]["missing"]) < len(evaluated["factual_coverage"]["missing"])):
+                    result=repaired
+                    evaluated=repaired_evaluation
+                    repair_succeeded=True
+        self.last_provider_result={
+            "ok":bool(result.ok), "attempts":attempts,
+            "repair_attempted":repair_attempted, "repair_succeeded":repair_succeeded,
+            "purpose":"agent_core_v2_clean_documented_answer_with_coverage_repair",
+        }
+        text=evaluated["text"]
+        certainty_softened=evaluated["certainty_softened"]
+        negative_claim_removed=evaluated["negative_claim_removed"]
+        dimension_check=evaluated["dimension_check"]
+        contradiction=evaluated["contradiction"]
+        valid=evaluated["valid"]
+        cited=evaluated["cited"]
+        truncated=evaluated["truncated"]
+        safe_partial=evaluated["safe_partial"]
+        fact_coverage=evaluated["factual_coverage"]
         cited_pages = {str(x.get("page") or "") for x in evidence if str(x.get("id")) in cited and x.get("page") not in (None, "")}
         available_pages = {str(x.get("page") or "") for x in evidence if x.get("page") not in (None, "")}
         required_page_coverage = min(3, len(available_pages)) if requirements else min(2, len(available_pages)) if conceptual else 1
         complete_page_coverage = bool(cited) if not available_pages else len(cited_pages) >= required_page_coverage
-        # Page count is retained for observability only. Completeness is determined by
-        # requested semantic dimensions and material facts, not by how many pages were cited.
-        fact_coverage=factual_coverage(message,evidence,text)
         page_coverage_valid=True
         coverage_partial=bool(valid and cited and not fact_coverage["complete"] and not contradiction)
         valid=bool((valid or safe_partial) and not contradiction)
@@ -399,9 +456,11 @@ class DocumentedAnswerComposer:
             "coverage_partial_terminal": bool(valid and coverage_partial),
             "visible_truncation_fallback": bool(truncated and not safe_partial),
             "evidence_pages": sorted(available_pages), "cited_pages": sorted(cited_pages),
-            "required_page_coverage": required_page_coverage, "page_coverage_valid": page_coverage_valid,
-            "page_coverage_observational_only": True,
+            "required_page_coverage": required_page_coverage, "complete_page_coverage_observed":complete_page_coverage,
+            "page_coverage_valid": page_coverage_valid, "page_coverage_observational_only": True,
             "requested_dimension_coverage": dimension_check, "factual_coverage": fact_coverage,
+            "initial_factual_coverage":initial_coverage,
+            "coverage_repair":{"attempted":repair_attempted,"succeeded":repair_succeeded,"attempt_count":len(attempts)},
             "contradicted_absence_blocked": contradiction,
             "contradicted_negative_claim_removed": negative_claim_removed,
             "evidence_items_supplied": len(evidence), "prompt_version": PROMPT_VERSION,
@@ -424,5 +483,5 @@ class DocumentedAnswerComposer:
         if footer:text += "\n\n" + footer
         partial = safe_partial or coverage_partial or negative_claim_removed
         finish = ("safe_partial" if safe_partial else "coverage_partial" if coverage_partial
-                  else "negative_claim_repaired" if negative_claim_removed else result.finish_reason)
+                  else "coverage_repaired" if repair_succeeded else "negative_claim_repaired" if negative_claim_removed else result.finish_reason)
         return AgentResponse(text, "documented_answer_partial" if partial else "documented_answer", True, result.provider, result.model, result.usage, finish)

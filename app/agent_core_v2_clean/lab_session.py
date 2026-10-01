@@ -173,7 +173,7 @@ def _conceptual(result, message, secrets_obj, s, budget, store):
     payload = answer.to_dict()
     payload.update({"documented_evidence_used": answer.mode in {"documented_answer", "documented_answer_partial"}, "internal_knowledge_used": False, "knowledge_mode": "documented_only" if answer.mode in {"documented_answer", "documented_answer_partial"} else "none"})
     result["answer"] = payload
-    diagnostic = {"enabled": True, "cache_hit": False, "prompt_version": PROMPT_VERSION, "quality_budget_preserved": True, "semantic_fit": retrieval.get("semantic_fit")}
+    diagnostic = {"enabled": True, "cache_hit": False, "prompt_version": PROMPT_VERSION, "quality_budget_preserved": True, "semantic_fit": retrieval.get("semantic_fit"), "validation": deepcopy(composer.validation or {})}
     result["documented_answer"] = diagnostic
     if answer.mode in {"documented_answer", "documented_answer_partial"}:
         store["memory"].pending_goal.status = "complete" if answer.mode == "documented_answer" else "partially_answered"
@@ -403,4 +403,4 @@ def process_message(message, secrets_obj, s):
 
 def export_session(s):
     x = get_store(s)
-    return {"format": "henkia_support_assist_4b1_6_semantic_fact_coverage", "session_id": x.get("session_id"), "gateway_budget": {"calls": int(s.get("llm_gateway_calls", 0)), "tokens": int(s.get("llm_gateway_tokens", 0))}, "messages": deepcopy(x["messages"]), "turns": deepcopy(x["turns"]), "state": x["memory"].to_dict(), "answer_context": deepcopy(x.get("answer_context") or {}), "budget": deepcopy(x["budget"]), "telemetry": snapshot(x["telemetry"]), "cache_metrics": deepcopy(x["cache_metrics"]), "errors": deepcopy(x["errors"]), "escalation_export": build_escalation_export(x["memory"].escalation,x["memory"].conversation_id) if x["memory"].escalation.confirmed else None, "retrieval_enabled": True, "documented_answer_enabled": True, "procedural_answer_enabled": True, "production_changed": False}
+    return {"format": "henkia_support_assist_4b1_7_material_coverage_repair", "session_id": x.get("session_id"), "gateway_budget": {"calls": int(s.get("llm_gateway_calls", 0)), "tokens": int(s.get("llm_gateway_tokens", 0))}, "messages": deepcopy(x["messages"]), "turns": deepcopy(x["turns"]), "state": x["memory"].to_dict(), "answer_context": deepcopy(x.get("answer_context") or {}), "budget": deepcopy(x["budget"]), "telemetry": snapshot(x["telemetry"]), "cache_metrics": deepcopy(x["cache_metrics"]), "errors": deepcopy(x["errors"]), "escalation_export": build_escalation_export(x["memory"].escalation,x["memory"].conversation_id) if x["memory"].escalation.confirmed else None, "retrieval_enabled": True, "documented_answer_enabled": True, "procedural_answer_enabled": True, "production_changed": False}
