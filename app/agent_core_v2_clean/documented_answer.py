@@ -9,7 +9,7 @@ from .source_footer import compact_sources, strip_generated_source_footer
 from .diagnostic_language import soften_diagnostic_certainty
 from .guidance_integrity import build_guidance_integrity_contract, integrity_diagnostic
 
-PROMPT_VERSION = "documented_v14_material_coverage_repair"
+PROMPT_VERSION = "documented_v15_proportional_coverage_no_fact_forcing"
 SYSTEM = """Eres un colega de soporte empresarial de impresion. Responde unicamente con la evidencia documental suministrada y usa el idioma del usuario. Se util, directo y natural. No inventes menus, pasos, requisitos, relaciones ni funciones. Cada afirmacion factual debe terminar con una o mas citas [R#].
 
 Ajusta la forma al objetivo:
@@ -119,55 +119,25 @@ def dimension_coverage(message, understanding, evidence):
 
 
 
-_DIMENSION_ALIASES = {
-    "ports": {"puerto", "puertos", "port", "ports"},
-    "network": {"red", "redes", "network", "networking", "conectividad", "connectivity"},
-    "firewall": {"firewall", "cortafuegos"},
-    "protocol": {"protocolo", "protocol", "tls", "ssl", "https", "http", "tcp", "udp"},
-}
 
-def _requested_dimension_classes(message):
-    words=set(re.findall(r"[a-z0-9]+",_norm(message)))
-    return sorted(name for name,aliases in _DIMENSION_ALIASES.items() if words & aliases)
+def coverage_scope(message, understanding, evidence):
+    """Return an observational coverage trace without inventing fact obligations.
 
-def _evidence_fact_obligations(message,evidence):
-    """Derive generic factual obligations from the current request and supplied evidence.
-
-    This is deliberately product-neutral. Numbers are obligations only when the user
-    requests ports and the evidence associates those numbers with a port/protocol row.
-    A protocol-qualified follow-up narrows obligations to evidence spans containing the
-    requested protocol, preventing unrelated ports from creating false partial results.
+    Completeness cannot be derived safely from arbitrary numbers or vocabulary in OCR
+    fragments.  The response is therefore assessed by citation validity, contradiction,
+    truncation and the user's requested scope.  Exhaustive enumeration is required only
+    when the semantic request explicitly asks for an exhaustive inventory.
     """
-    dimensions=_requested_dimension_classes(message)
-    if "ports" not in dimensions:
-        return {"dimensions":dimensions,"facts":[],"basis":"semantic_dimensions"}
-    query_words=set(re.findall(r"[a-z0-9]+",_norm(message)))
-    requested_protocols=query_words & _DIMENSION_ALIASES["protocol"]
-    facts=set()
-    for item in evidence:
-        raw=str(item.get("text") or "")
-        spans=re.split(r"[\n\r]+|(?<=[.;])\s+",raw)
-        for span in spans:
-            norm=_norm(span)
-            if not norm:
-                continue
-            has_port_context=bool(re.search(r"\b(?:puert(?:o|os)|ports?)\b",norm)) or bool(re.match(r"^\s*\d{2,5}\b",norm))
-            if not has_port_context:
-                continue
-            if requested_protocols and not any(re.search(rf"\b{re.escape(proto)}\b",norm) for proto in requested_protocols):
-                continue
-            for number in re.findall(r"(?<!\d)(\d{2,5})(?!\d)",norm):
-                value=int(number)
-                if 1 <= value <= 65535:
-                    facts.add(str(value))
-    return {"dimensions":dimensions,"facts":sorted(facts,key=int),"basis":"current_request_evidence_facts"}
-
-def factual_coverage(message,evidence,answer):
-    obligations=_evidence_fact_obligations(message,evidence)
-    answer_numbers=set(re.findall(r"(?<!\d)(\d{2,5})(?!\d)",_norm(answer)))
-    covered=[fact for fact in obligations["facts"] if fact in answer_numbers]
-    missing=[fact for fact in obligations["facts"] if fact not in answer_numbers]
-    return {**obligations,"covered":covered,"missing":missing,"complete":not missing}
+    normalized=_norm(message)
+    exhaustive=bool(re.search(r"\b(?:todos|todas|completo|completa|exhaustivo|exhaustiva|all|complete|exhaustive)\b",normalized))
+    return {
+        "policy":"proportional_semantic_coverage",
+        "exhaustive_requested":exhaustive,
+        "evidence_items":len(evidence or []),
+        "fact_extraction_used":False,
+        "automatic_repair_allowed":False,
+        "reason":"avoid_numeric_and_lexical_fact_overfitting",
+    }
 
 def _negative_claim_scope(text):
     """Classify documentary absence by linguistic scope, never by product terms.
@@ -356,8 +326,8 @@ class DocumentedAnswerComposer:
                 "definition_does_not_imply_full_requirements": conceptual,
                 "max_numbered_checks":3 if followup else None,
                 "required_shape": "definition_purpose_capabilities_if_supported" if conceptual else "requirement_categories" if requirements else "proportional",
-                "semantic_obligations": _evidence_fact_obligations(message,evidence),
-                "completion_rule": "cover every material fact listed in semantic_obligations.facts; do not infer missing facts",
+                "coverage_scope": coverage_scope(message,understanding,evidence),
+                "completion_rule": "answer proportionally to the request and evidence; do not claim exhaustiveness unless the user explicitly requested it",
             },
             "evidence": evidence,
         }
@@ -366,106 +336,47 @@ class DocumentedAnswerComposer:
             [{"role": "system", "content": SYSTEM}, {"role": "user", "content": json.dumps(payload, ensure_ascii=False, separators=(",", ":"))}],
             "agent_core_v2_clean_documented_answer", limit, 0.0, None,
         ))
-        attempts=[result.to_dict()]
-        self.last_provider_result = attempts[0]
+        self.last_provider_result = result.to_dict()
         if not result.ok:
+            self.validation={
+                "provider_ok":False,"prompt_version":PROMPT_VERSION,
+                "coverage_scope":coverage_scope(message,understanding,evidence),
+                "coverage_repair":{"attempted":False,"reason":"automatic_repair_disabled"},
+            }
             return AgentResponse("Encontre documentacion, pero no pude redactar la respuesta en este turno. Las fuentes recuperadas se conservaron.", "documented_provider_degraded", False)
-
-        def evaluate(candidate, candidate_result):
-            candidate = _compact_followup_checks(str(candidate or "").strip(), understanding)
-            candidate, certainty = soften_diagnostic_certainty(candidate, intent)
-            candidate, negative_removed, dimension = _remove_contradicted_absence_claims(
-                candidate, message, understanding, evidence
-            )
-            contradiction_found, _ = contradicted_absence(candidate, message, understanding, evidence)
-            valid_ids_local = [str(x["id"]) for x in evidence]
-            citations_valid, cited_local = validate_citations(candidate, valid_ids_local)
-            truncated_local = str(candidate_result.finish_reason or "").casefold() in {"length", "max_tokens"}
-            partial_candidate, partial_citations = safe_cited_partial(candidate, valid_ids_local, candidate_result.finish_reason)
-            safe_partial_local = bool(truncated_local and partial_candidate)
-            if safe_partial_local:
-                candidate, cited_local = partial_candidate, partial_citations
-            facts = factual_coverage(message, evidence, candidate)
-            return {
-                "text": candidate, "certainty_softened": certainty,
-                "negative_claim_removed": negative_removed, "dimension_check": dimension,
-                "contradiction": contradiction_found, "valid": citations_valid,
-                "cited": cited_local, "truncated": truncated_local,
-                "safe_partial": safe_partial_local, "factual_coverage": facts,
-            }
-
-        evaluated=evaluate(result.text,result)
-        repair_attempted=False
-        repair_succeeded=False
-        initial_coverage=dict(evaluated["factual_coverage"])
-        # One controlled repair is allowed only when the first complete provider response
-        # omitted material facts that are already present in the supplied evidence.
-        if (evaluated["valid"] and not evaluated["truncated"] and not evaluated["contradiction"]
-                and not evaluated["factual_coverage"]["complete"]):
-            repair_attempted=True
-            repair_payload={
-                **payload,
-                "draft_to_repair": evaluated["text"],
-                "missing_material_facts": evaluated["factual_coverage"]["missing"],
-                "repair_contract": {
-                    "preserve_supported_content_and_citations": True,
-                    "add_every_missing_material_fact_from_evidence": True,
-                    "do_not_add_facts_outside_evidence": True,
-                    "use_a_concise_markdown_table_when_multiple_comparable_records_are_present": True,
-                    "return_only_the_repaired_answer": True,
-                },
-            }
-            repaired=self.gateway.complete(LLMRequest(
-                [{"role":"system","content":SYSTEM},{"role":"user","content":json.dumps(repair_payload,ensure_ascii=False,separators=(",",":"))}],
-                "agent_core_v2_clean_documented_answer_coverage_repair", limit, 0.0, None,
-            ))
-            attempts.append(repaired.to_dict())
-            if repaired.ok:
-                repaired_evaluation=evaluate(repaired.text,repaired)
-                if (repaired_evaluation["valid"] and not repaired_evaluation["contradiction"]
-                        and len(repaired_evaluation["factual_coverage"]["missing"]) < len(evaluated["factual_coverage"]["missing"])):
-                    result=repaired
-                    evaluated=repaired_evaluation
-                    repair_succeeded=True
-        self.last_provider_result={
-            "ok":bool(result.ok), "attempts":attempts,
-            "repair_attempted":repair_attempted, "repair_succeeded":repair_succeeded,
-            "purpose":"agent_core_v2_clean_documented_answer_with_coverage_repair",
-        }
-        text=evaluated["text"]
-        certainty_softened=evaluated["certainty_softened"]
-        negative_claim_removed=evaluated["negative_claim_removed"]
-        dimension_check=evaluated["dimension_check"]
-        contradiction=evaluated["contradiction"]
-        valid=evaluated["valid"]
-        cited=evaluated["cited"]
-        truncated=evaluated["truncated"]
-        safe_partial=evaluated["safe_partial"]
-        fact_coverage=evaluated["factual_coverage"]
+        text = _compact_followup_checks(str(result.text or "").strip(),understanding)
+        text,certainty_softened = soften_diagnostic_certainty(text,intent)
+        text, negative_claim_removed, dimension_check = _remove_contradicted_absence_claims(
+            text, message, understanding, evidence
+        )
+        contradiction, _ = contradicted_absence(text, message, understanding, evidence)
+        valid_ids = [str(x["id"]) for x in evidence]
+        valid, cited = validate_citations(text, valid_ids)
+        truncated = str(result.finish_reason or "").casefold() in {"length", "max_tokens"}
+        partial_text, partial_cited = safe_cited_partial(text, valid_ids, result.finish_reason)
+        safe_partial = bool(truncated and partial_text)
+        if safe_partial:
+            text, cited = partial_text, partial_cited
         cited_pages = {str(x.get("page") or "") for x in evidence if str(x.get("id")) in cited and x.get("page") not in (None, "")}
         available_pages = {str(x.get("page") or "") for x in evidence if x.get("page") not in (None, "")}
-        required_page_coverage = min(3, len(available_pages)) if requirements else min(2, len(available_pages)) if conceptual else 1
-        complete_page_coverage = bool(cited) if not available_pages else len(cited_pages) >= required_page_coverage
-        page_coverage_valid=True
-        coverage_partial=bool(valid and cited and not fact_coverage["complete"] and not contradiction)
+        scope=coverage_scope(message,understanding,evidence)
         valid=bool((valid or safe_partial) and not contradiction)
         self.validation = {
-            "citations_valid": valid, "cited_ids": cited, "finish_reason": result.finish_reason,
-            "truncated": truncated, "published_partial": bool(valid and (safe_partial or coverage_partial)),
-            "safe_partial_terminal": bool(valid and safe_partial),
-            "coverage_partial_terminal": bool(valid and coverage_partial),
-            "visible_truncation_fallback": bool(truncated and not safe_partial),
-            "evidence_pages": sorted(available_pages), "cited_pages": sorted(cited_pages),
-            "required_page_coverage": required_page_coverage, "complete_page_coverage_observed":complete_page_coverage,
-            "page_coverage_valid": page_coverage_valid, "page_coverage_observational_only": True,
-            "requested_dimension_coverage": dimension_check, "factual_coverage": fact_coverage,
-            "initial_factual_coverage":initial_coverage,
-            "coverage_repair":{"attempted":repair_attempted,"succeeded":repair_succeeded,"attempt_count":len(attempts)},
-            "contradicted_absence_blocked": contradiction,
-            "contradicted_negative_claim_removed": negative_claim_removed,
-            "evidence_items_supplied": len(evidence), "prompt_version": PROMPT_VERSION,
-            "diagnostic_certainty_softened": certainty_softened,
-            "guidance_integrity": integrity_diagnostic(integrity_contract),
+            "citations_valid":valid,"cited_ids":cited,"finish_reason":result.finish_reason,
+            "truncated":truncated,"published_partial":bool(valid and safe_partial),
+            "safe_partial_terminal":bool(valid and safe_partial),
+            "coverage_partial_terminal":False,
+            "visible_truncation_fallback":bool(truncated and not safe_partial),
+            "evidence_pages":sorted(available_pages),"cited_pages":sorted(cited_pages),
+            "page_coverage_observational_only":True,
+            "requested_dimension_coverage":dimension_check,
+            "coverage_scope":scope,
+            "coverage_repair":{"attempted":False,"reason":"automatic_repair_disabled_to_avoid_overfitting_and_extra_calls"},
+            "contradicted_absence_blocked":contradiction,
+            "contradicted_negative_claim_removed":negative_claim_removed,
+            "evidence_items_supplied":len(evidence),"prompt_version":PROMPT_VERSION,
+            "diagnostic_certainty_softened":certainty_softened,
+            "guidance_integrity":integrity_diagnostic(integrity_contract),
         }
         if contradiction:
             return AgentResponse("La respuesta generada contradecia la evidencia documental recuperada y fue bloqueada antes de publicarse. Intenta nuevamente para regenerar la sintesis documentada.", "documented_evidence_contradiction_guard", False, result.provider, result.model, result.usage, result.finish_reason)
@@ -477,11 +388,8 @@ class DocumentedAnswerComposer:
         text=strip_generated_source_footer(text)
         if safe_partial:
             text += "\n\n> Respuesta parcial segura: el proveedor alcanzó el límite de salida. Se publicó únicamente el contenido completo y citado disponible."
-        elif coverage_partial:
-            text += "\n\n> Cobertura documental parcial: se publicó únicamente la orientación respaldada por las fuentes citadas."
         footer = compact_sources(evidence, cited)
         if footer:text += "\n\n" + footer
-        partial = safe_partial or coverage_partial or negative_claim_removed
-        finish = ("safe_partial" if safe_partial else "coverage_partial" if coverage_partial
-                  else "coverage_repaired" if repair_succeeded else "negative_claim_repaired" if negative_claim_removed else result.finish_reason)
+        partial = safe_partial or negative_claim_removed
+        finish = "safe_partial" if safe_partial else "negative_claim_repaired" if negative_claim_removed else result.finish_reason
         return AgentResponse(text, "documented_answer_partial" if partial else "documented_answer", True, result.provider, result.model, result.usage, finish)
