@@ -12,7 +12,7 @@ def run():
         'social_terminal_event':'deterministic_social_terminal' in agent,
         'social_context_preserved':'preserved_previous_answer_context' in lab,
         'social_finalize_returns_before_capture':lab.index('if social_turn:') < lab.index('context = capture_answer_context'),
-        'format_updated':any(v in lab for v in ('henkia_support_assist_4b1_2','henkia_support_assist_4b1_3','henkia_support_assist_4b1_4')),
+        'format_updated':any(v in lab for v in ('henkia_support_assist_4b1_2','henkia_support_assist_4b1_3','henkia_support_assist_4b1_5')),
         'no_literal_social_word_routing':all(x not in response.casefold() for x in ['message.lower()','message.casefold()','muchas gracias','hasta luego']),
     }
     failed=[k for k,v in checks.items() if not v]

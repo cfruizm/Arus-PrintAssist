@@ -53,9 +53,8 @@ def _request_text(message, understanding, retrieval):
     relation = str(fields.get("topic_relation") or understanding.get("topic_relation") or "")
     if relation == "new_topic":
         return " ".join((str(message or ""), str(understanding.get("current_goal") or "")))
-    # On a same-topic follow-up, the active document supplies identity continuity.
-    # Relevance must be driven by the current utterance, otherwise the broad inherited
-    # goal can outrank the exact paragraph that answers the new requested dimension.
+    # Current follow-up wording defines the requested dimension; the active primary
+    # document provides identity continuity without diluting current-turn relevance.
     return str(message or "")
 
 def _fit(item, wanted):

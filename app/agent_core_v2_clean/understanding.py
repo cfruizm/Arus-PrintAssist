@@ -39,6 +39,21 @@ class ConversationUnderstanding:
   return TurnUnderstanding(**clean)
  def _normalize(self,x,memory):
   corrections=[]
+  # Recover a non-operational conversational opening before the generic conceptual
+  # policy can force retrieval. This uses only semantic structure, never user words.
+  goal_updates=dict(x.goal_updates or {})
+  social_shape=(
+   x.user_act=="new_request" and x.intent=="conceptual" and bool(x.goal_complete)
+   and not x.case_updates and not x.needs_clarification
+   and not str(x.canonical_subject or "").strip()
+   and str(x.reference_relation or "none")=="none"
+   and str(x.requested_workflow or "none")=="none"
+   and set(goal_updates).issubset({"operation"})
+  )
+  if social_shape:
+   x.user_act="social";x.intent="social";x.topic_relation="same_topic" if (memory.active_topic or memory.active_subject) else "no_topic"
+   x.should_retrieve=False;x.goal_updates={};x.case_updates=[];x.needs_clarification=False;x.clarification_target=None
+   corrections.append("semantic_non_operational_opening_recovered_before_retrieval_policy")
   if x.user_act=="answer_to_question" and not memory.last_assistant_question:x.user_act="follow_up" if memory.active_topic else "new_request";corrections.append("answer_without_pending_question_normalized")
   if x.user_act=="request_elaboration":
    if not memory.active_topic and not memory.last_assistant_question:x.user_act="new_request";x.topic_relation="new_topic";corrections.append("orphan_elaboration_to_new_request")
