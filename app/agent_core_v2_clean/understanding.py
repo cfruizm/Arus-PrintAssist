@@ -54,6 +54,24 @@ class ConversationUnderstanding:
    x.user_act="social";x.intent="social";x.topic_relation="same_topic" if (memory.active_topic or memory.active_subject) else "no_topic"
    x.should_retrieve=False;x.goal_updates={};x.case_updates=[];x.needs_clarification=False;x.clarification_target=None
    corrections.append("semantic_non_operational_opening_recovered_before_retrieval_policy")
+  # Recover a completed acknowledgement/closure before an inherited technical intent
+  # can turn it into a follow-up. This relies only on structured semantic state.
+  # A pending assistant question, workflow, case fact, retrieval request or new technical
+  # detail keeps the turn operational. The inherited subject alone is not new work.
+  normalized_updates=dict(x.goal_updates or {})
+  closure_shape=(
+   x.user_act in {"answer_to_question","follow_up"}
+   and not memory.last_assistant_question and bool(x.goal_complete)
+   and not x.should_retrieve and not x.case_updates and not x.needs_clarification
+   and str(x.requested_workflow or "none")=="none"
+   and str(normalized_updates.get("goal_status") or "").casefold() in {"complete","completed","closed"}
+   and set(normalized_updates).issubset({"goal_status","subject"})
+  )
+  if closure_shape:
+   x.user_act="social";x.intent="social";x.topic_relation="same_topic" if (memory.active_topic or memory.active_subject) else "no_topic"
+   x.should_retrieve=False;x.goal_updates={};x.case_updates=[];x.needs_clarification=False;x.clarification_target=None
+   x.canonical_subject=None;x.subject_origin=None;x.reference_relation="none"
+   corrections.append("semantic_non_operational_closure_recovered_before_followup_policy")
   if x.user_act=="answer_to_question" and not memory.last_assistant_question:x.user_act="follow_up" if memory.active_topic else "new_request";corrections.append("answer_without_pending_question_normalized")
   if x.user_act=="request_elaboration":
    if not memory.active_topic and not memory.last_assistant_question:x.user_act="new_request";x.topic_relation="new_topic";corrections.append("orphan_elaboration_to_new_request")
