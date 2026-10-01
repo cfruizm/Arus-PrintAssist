@@ -7,9 +7,10 @@ class NaturalResponseComposer:
  def compose(self,message,m,u,d):
   intent=str(u.intent or "").casefold();act=str(u.user_act or "").casefold()
   if intent=="social" or act=="social":
-   text=str(message or "").casefold()
-   if any(x in text for x in ("gracias","muchas gracias","eso es todo","hasta luego","adios")):return AgentResponse("Con gusto. Si necesitas revisar otro caso del servicio de impresión, aquí estaré.","social_closing")
-   return AgentResponse("Hola. ¿Qué necesitas revisar sobre el servicio de impresión?","social")
+   # The understanding contract already established a social act. Do not inspect words here.
+   # Use one short conversational generation so greetings, thanks and farewells remain natural
+   # across languages without retrieval or operational-memory mutation.
+   pass
   if intent in {"meta","capabilities"} or act=="request_capabilities":return AgentResponse("Puedo explicar conceptos, consultar documentación, orientar procedimientos, apoyar diagnóstico de fallas y preparar información para escalamiento dentro del servicio de impresión.","capabilities")
   if d.action=="redirect_scope":return AgentResponse("Esa consulta está fuera del alcance de este asistente, que atiende exclusivamente soporte técnico y procesos del servicio de impresión.","out_of_scope_closed")
   if d.action=="cancel":m.pending_goal.status="inactive";return AgentResponse("Listo, cancelé el flujo actual. ¿Qué necesitas revisar ahora?","cancelled")

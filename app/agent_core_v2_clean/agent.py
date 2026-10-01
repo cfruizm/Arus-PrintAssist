@@ -20,10 +20,22 @@ class CleanConversationalAgent:
   u,c,b=reconcile_turn(u,memory,message);u,e=reconcile_understanding_object(u,memory,b);guarded,association_event=reconcile_association(message,u.to_dict(),before);guarded,scope_event=scope_gate(message,guarded,before)
   for key,value in guarded.items():
    if hasattr(u,key):setattr(u,key,value)
-  n=deepcopy(self.understanding.normalization or {});n.setdefault("structural_corrections",[]);n["structural_corrections"].extend(x for x in c+[z.get("reason") for z in e] if x and x not in n["structural_corrections"]);d=self.policy.decide(u,memory);apply_understanding(memory,u);apply_reopen_transition(memory,e)
+  n=deepcopy(self.understanding.normalization or {});n.setdefault("structural_corrections",[]);n["structural_corrections"].extend(x for x in c+[z.get("reason") for z in e] if x and x not in n["structural_corrections"])
+  social_turn=str(u.intent or "").casefold()=="social" or str(u.user_act or "").casefold()=="social"
+  if social_turn:
+   # Semantic, language-independent guard. A lateral social act is visible in chat but cannot
+   # become a technical goal, case fact, retrieval request or document boundary.
+   u.intent="social";u.user_act="social";u.should_retrieve=False;u.needs_clarification=False;u.clarification_target=None;u.case_updates=[];u.goal_updates={};u.goal_complete=True;u.requested_workflow="none"
+   n["structural_corrections"].append("social_turn_operational_state_guard")
+  d=self.policy.decide(u,memory)
+  if social_turn:
+   memory.turn_number+=1
+  else:
+   apply_understanding(memory,u);apply_reopen_transition(memory,e)
   if d.action in {"offer_escalation","continue_escalation"}:a=AgentResponse("","workflow_pending",False)
   else:a=self.response.compose(message,memory,u,d)
   q=_closing_question(a.text)
-  if q:memory.last_assistant_question=q
-  elif d.action not in {"redirect_scope","degraded_continue","offer_escalation","continue_escalation"}:memory.last_assistant_question=None
+  if not social_turn:
+   if q:memory.last_assistant_question=q
+   elif d.action not in {"redirect_scope","degraded_continue","offer_escalation","continue_escalation"}:memory.last_assistant_question=None
   return {"input":message,"state_before":before,"understanding":u.to_dict(),"understanding_contract":{"valid":self.understanding.contract_valid,"error":self.understanding.validation_error,"normalization":deepcopy(self.understanding.normalization or {}),"repair_attempted":bool((self.understanding.normalization or {}).get("repair_attempted")),"repair_succeeded":bool((self.understanding.normalization or {}).get("repair_succeeded"))},"goal_update_normalization":n,"decision":d.to_dict(),"state_after":deepcopy(memory.to_dict()),"answer":a.to_dict(),"provider_trace":{"understanding":self.understanding.last_provider_result,"response":self.response.last_provider_result if d.action not in {"offer_escalation","continue_escalation"} else {"skipped":True,"reason":"native_workflow_response_authority"}},"retrieval":{"enabled":False},"topic_boundary":b,"conversation_entity_frame":entity_frame,"association_reconciliation":association_event,"scope_gate":scope_event,"functional_events":e,"production_changed":False}

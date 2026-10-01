@@ -76,13 +76,31 @@ def reconcile_turn(understanding, memory, message):
         and understanding.domain_relevance == "in_scope"
     )
     semantic_followup, semantic_ratio = _semantic_continuation(understanding, memory)
+    structured_reference_followup = (
+        bool(getattr(memory, "active_subject", None))
+        and str(getattr(understanding, "reference_relation", "") or "").casefold() == "current_subject"
+        and str(getattr(understanding, "subject_origin", "") or "").casefold() in {"conversation_memory", "current_subject", "inherited"}
+        and str(getattr(understanding, "canonical_subject", "") or "").strip().casefold()
+            == str(getattr(memory, "active_subject", "") or "").strip().casefold()
+        and str(getattr(understanding, "domain_relevance", "") or "").casefold() == "in_scope"
+        and str(getattr(understanding, "intent", "") or "").casefold() in {"conceptual", "procedural", "requirements", "troubleshooting", "architecture", "warranty"}
+    )
     completed_goal_followup = (
         semantic_followup
         and understanding.intent in _CONTINUATION_INTENTS
         and understanding.domain_relevance == "in_scope"
     )
 
-    if active_case_continuation:
+    if structured_reference_followup:
+        understanding.topic_relation = "same_topic"
+        if understanding.user_act == "new_request":
+            understanding.user_act = "request_elaboration"
+        boundary = type(boundary)(
+            "same_topic_refinement", "structured_current_subject_reference", max(boundary.shared_ratio, semantic_ratio),
+            boundary.changed_dimensions, boundary.introduced_dimensions, "primary"
+        )
+        corrections.append("structured_current_subject_continuity_preserved")
+    elif active_case_continuation:
         understanding.topic_relation = "same_topic"
         boundary = type(boundary)(
             "same_topic_refinement", "active_case_continuity", boundary.shared_ratio,
