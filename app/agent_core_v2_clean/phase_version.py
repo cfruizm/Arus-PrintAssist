@@ -1,2 +1,2 @@
-PHASE="4B.1.1"
-FORMAT="henkia_support_assist_4b1_1_social_referential_continuity_guard"
+PHASE="4B.1.2"
+FORMAT="henkia_support_assist_4b1_2_deterministic_social_terminal_context_preservation"
