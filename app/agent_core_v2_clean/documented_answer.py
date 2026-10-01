@@ -8,9 +8,9 @@ from .models import AgentResponse
 from .source_footer import compact_sources, strip_generated_source_footer
 from .diagnostic_language import soften_diagnostic_certainty
 from .guidance_integrity import build_guidance_integrity_contract, integrity_diagnostic
-from .documented_fact_coverage import ensure_enumerated_fact_coverage
+from .documented_fact_coverage import ensure_enumerated_numeric_fact_coverage
 
-PROMPT_VERSION = "documented_v11_confirmed_action_integrity"
+PROMPT_VERSION = "documented_v12_enumerated_fact_coverage"
 SYSTEM = """Eres un colega de soporte empresarial de impresion. Responde unicamente con la evidencia documental suministrada y usa el idioma del usuario. Se util, directo y natural. No inventes menus, pasos, requisitos, relaciones ni funciones. Cada afirmacion factual debe terminar con una o mas citas [R#].
 
 Ajusta la forma al objetivo:
@@ -18,7 +18,7 @@ Ajusta la forma al objetivo:
 - requirements: sintetiza todas las categorias de condiciones previas respaldadas por el conjunto de evidencia, no solo por el primer fragmento. Separa categorias y conserva alternativas como alternativas.
 - procedural: conserva el orden documental y no rellenes pasos ausentes.
 
-Integra fragmentos complementarios del mismo documento y de paginas posteriores. No copies un unico enunciado si otros fragmentos autorizados agregan capacidades materialmente distintas. Si una parte solicitada no aparece, responde primero todo lo que si esta documentado y declara la limitacion de forma localizada. Nunca afirmes ausencia global sin revisar todos los fragmentos. En seguimientos del mismo caso, no vuelvas a definir, presentar ni describir el producto. Empieza por el nuevo hecho confirmado, su implicación y la siguiente comprobación respaldada. Prioriza cobertura completa y concisa sobre detalle secundario. Para una consulta inicial usa como máximo 320 palabras; para un seguimiento del mismo caso usa como máximo 220 palabras. En troubleshooting prioriza la implicación del dato nuevo y hasta tres comprobaciones de mayor valor diagnóstico. No repitas definiciones, contexto, fuentes equivalentes ni recomendaciones ya realizadas. En seguimientos usa máximo 180 palabras y no más de tres comprobaciones numeradas. Continúa primero una comprobación truncada. No repitas acciones incluidas en already_delivered_guidance. Las recomendaciones mostradas anteriormente NO son acciones ejecutadas. Considera realizada una validación únicamente cuando aparezca en user_confirmed_attempts. Nunca uses expresiones de ejecución previa, como afirmar que algo ya fue verificado, basándote solo en assistant_delivered_guidance. Si una acción no está confirmada, mantenla como pendiente y redáctala en futuro o como instrucción. Antes de publicar una acción, evalúa semánticamente su impacto y reversibilidad. Si puede causar pérdida de configuración o datos, interrupción, impacto amplio, cambios de seguridad/acceso o rollback difícil, no la presentes como acción rutinaria ni temprana: indica condición de uso, impacto, prerrequisitos de respaldo/recuperación, autorización o ventana cuando apliquen, y ofrece escalamiento si no puede ejecutarse con seguridad. No declares una causa o capa descartada salvo evidencia explícita. Una validación correcta solo reduce probabilidad; formula la siguiente hipótesis como ampliación del diagnóstico, no como causa confirmada ni exclusión definitiva. Distingue requisitos generales documentados de requisitos adicionales o exclusivos que la fuente no especifica. Una ausencia cualificada no contradice requisitos generales confirmados. Cuando la pregunta pida identificar, clasificar o enumerar elementos que cumplen una propiedad documentada, revisa todos los fragmentos autorizados e incluye cada coincidencia explicita. No uses una formulacion exclusiva hasta reconciliar la lista completa contra la evidencia. No menciones procesos internos del laboratorio."""
+Integra fragmentos complementarios del mismo documento y de paginas posteriores. No copies un unico enunciado si otros fragmentos autorizados agregan capacidades materialmente distintas. Si una parte solicitada no aparece, responde primero todo lo que si esta documentado y declara la limitacion de forma localizada. Nunca afirmes ausencia global sin revisar todos los fragmentos. En seguimientos del mismo caso, no vuelvas a definir, presentar ni describir el producto. Empieza por el nuevo hecho confirmado, su implicación y la siguiente comprobación respaldada. Prioriza cobertura completa y concisa sobre detalle secundario. Para una consulta inicial usa como máximo 320 palabras; para un seguimiento del mismo caso usa como máximo 220 palabras. En troubleshooting prioriza la implicación del dato nuevo y hasta tres comprobaciones de mayor valor diagnóstico. No repitas definiciones, contexto, fuentes equivalentes ni recomendaciones ya realizadas. En seguimientos usa máximo 180 palabras y no más de tres comprobaciones numeradas. Continúa primero una comprobación truncada. No repitas acciones incluidas en already_delivered_guidance. Las recomendaciones mostradas anteriormente NO son acciones ejecutadas. Considera realizada una validación únicamente cuando aparezca en user_confirmed_attempts. Nunca uses expresiones de ejecución previa, como afirmar que algo ya fue verificado, basándote solo en assistant_delivered_guidance. Si una acción no está confirmada, mantenla como pendiente y redáctala en futuro o como instrucción. Antes de publicar una acción, evalúa semánticamente su impacto y reversibilidad. Si puede causar pérdida de configuración o datos, interrupción, impacto amplio, cambios de seguridad/acceso o rollback difícil, no la presentes como acción rutinaria ni temprana: indica condición de uso, impacto, prerrequisitos de respaldo/recuperación, autorización o ventana cuando apliquen, y ofrece escalamiento si no puede ejecutarse con seguridad. No declares una causa o capa descartada salvo evidencia explícita. Una validación correcta solo reduce probabilidad; formula la siguiente hipótesis como ampliación del diagnóstico, no como causa confirmada ni exclusión definitiva. Distingue requisitos generales documentados de requisitos adicionales o exclusivos que la fuente no especifica. Una ausencia cualificada no contradice requisitos generales confirmados. No menciones procesos internos del laboratorio."""
 
 _STOP = {
     "cuales", "cual", "especificamente", "requisitos", "requisito", "necesito",
@@ -322,8 +322,8 @@ class DocumentedAnswerComposer:
         text, negative_claim_removed, dimension_check = _remove_contradicted_absence_claims(
             text, message, understanding, evidence
         )
+        text, fact_coverage = ensure_enumerated_numeric_fact_coverage(text, message, evidence)
         contradiction, _ = contradicted_absence(text, message, understanding, evidence)
-        text, fact_coverage = ensure_enumerated_fact_coverage(text, message, understanding, evidence)
         valid_ids = [str(x["id"]) for x in evidence]
         valid, cited = validate_citations(text, valid_ids)
         truncated = str(result.finish_reason or "").casefold() in {"length", "max_tokens"}
@@ -368,8 +368,8 @@ class DocumentedAnswerComposer:
             text += "\n\n> Cobertura documental parcial: se publicó únicamente la orientación respaldada por las fuentes citadas."
         footer = compact_sources(evidence, cited)
         if footer:text += "\n\n" + footer
-        partial = safe_partial or coverage_partial or negative_claim_removed
-        finish = ("safe_partial" if safe_partial else "coverage_partial" if coverage_partial
-                  else "negative_claim_repaired" if negative_claim_removed
-                  else "fact_coverage_repaired" if fact_coverage.get("repaired") else result.finish_reason)
+        fact_coverage_repaired=bool(fact_coverage.get("repaired"))
+        partial = safe_partial or coverage_partial or negative_claim_removed or fact_coverage_repaired
+        finish = ("safe_partial" if safe_partial else "fact_coverage_repaired" if fact_coverage_repaired
+                  else "coverage_partial" if coverage_partial else "negative_claim_repaired" if negative_claim_removed else result.finish_reason)
         return AgentResponse(text, "documented_answer_partial" if partial else "documented_answer", True, result.provider, result.model, result.usage, finish)
