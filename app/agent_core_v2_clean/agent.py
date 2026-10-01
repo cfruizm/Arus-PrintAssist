@@ -26,10 +26,12 @@ def _is_structurally_social(u):
     domain = str(getattr(u, "domain_relevance", "") or "").casefold()
     workflow = str(getattr(u, "requested_workflow", "none") or "none").casefold()
     reference = str(getattr(u, "reference_relation", "none") or "none").casefold()
+    goal_updates = dict(getattr(u, "goal_updates", {}) or {})
+    only_abstract_operation = set(goal_updates).issubset({"operation"})
     no_operational_payload = (
         not bool(getattr(u, "should_retrieve", False))
         and not bool(getattr(u, "needs_clarification", False))
-        and not dict(getattr(u, "goal_updates", {}) or {})
+        and only_abstract_operation
         and not list(getattr(u, "case_updates", []) or [])
         and not str(getattr(u, "canonical_subject", "") or "").strip()
         and workflow in {"", "none"}

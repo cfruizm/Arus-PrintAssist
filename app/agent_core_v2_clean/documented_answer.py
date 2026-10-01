@@ -9,7 +9,7 @@ from .source_footer import compact_sources, strip_generated_source_footer
 from .diagnostic_language import soften_diagnostic_certainty
 from .guidance_integrity import build_guidance_integrity_contract, integrity_diagnostic
 
-PROMPT_VERSION = "documented_v11_confirmed_action_integrity"
+PROMPT_VERSION = "documented_v12_current_dimension_coverage"
 SYSTEM = """Eres un colega de soporte empresarial de impresion. Responde unicamente con la evidencia documental suministrada y usa el idioma del usuario. Se util, directo y natural. No inventes menus, pasos, requisitos, relaciones ni funciones. Cada afirmacion factual debe terminar con una o mas citas [R#].
 
 Ajusta la forma al objetivo:

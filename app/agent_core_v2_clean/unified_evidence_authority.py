@@ -11,7 +11,7 @@ _GENERIC = {
     "necesito", "quiero", "puedo", "dime", "hacer", "obtener", "comprender",
     "the", "how", "for", "documented", "information", "process", "method",
 }
-_SHORT = {"pin", "ews", "usb", "smb", "wja", "ipp", "pcl", "pdf", "mf", "dca", "sds"}
+_SHORT = {"pin", "ews", "usb", "smb", "wja", "ipp", "pcl", "pdf", "mf", "dca", "sds", "tls", "ssl"}
 _OPERATION = {
     "asignar", "consultar", "actualizar", "instalar", "configurar", "analizar",
     "mostrar", "generar", "exportar", "comparar", "validar", "recuperar",
@@ -53,11 +53,10 @@ def _request_text(message, understanding, retrieval):
     relation = str(fields.get("topic_relation") or understanding.get("topic_relation") or "")
     if relation == "new_topic":
         return " ".join((str(message or ""), str(understanding.get("current_goal") or "")))
-    updates = understanding.get("goal_updates") or {}
-    return " ".join(str(x or "") for x in (
-        message, understanding.get("current_goal"), updates.get("operation"),
-        updates.get("subject"), updates.get("product"), fields.get("contextual_operation"),
-    ))
+    # On a same-topic follow-up, the active document supplies identity continuity.
+    # Relevance must be driven by the current utterance, otherwise the broad inherited
+    # goal can outrank the exact paragraph that answers the new requested dimension.
+    return str(message or "")
 
 def _fit(item, wanted):
     title = _tokens(item.get("title"))
