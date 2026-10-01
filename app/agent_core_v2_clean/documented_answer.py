@@ -9,7 +9,7 @@ from .source_footer import compact_sources, strip_generated_source_footer
 from .diagnostic_language import soften_diagnostic_certainty
 from .guidance_integrity import build_guidance_integrity_contract, integrity_diagnostic
 
-PROMPT_VERSION = "documented_v12_current_dimension_coverage"
+PROMPT_VERSION = "documented_v13_semantic_fact_coverage"
 SYSTEM = """Eres un colega de soporte empresarial de impresion. Responde unicamente con la evidencia documental suministrada y usa el idioma del usuario. Se util, directo y natural. No inventes menus, pasos, requisitos, relaciones ni funciones. Cada afirmacion factual debe terminar con una o mas citas [R#].
 
 Ajusta la forma al objetivo:
@@ -117,6 +117,57 @@ def dimension_coverage(message, understanding, evidence):
     covered = [x for x in terms if x in body]
     return {"requested": terms, "covered": covered, "missing": [x for x in terms if x not in body], "sufficient": not terms or bool(covered)}
 
+
+
+_DIMENSION_ALIASES = {
+    "ports": {"puerto", "puertos", "port", "ports"},
+    "network": {"red", "redes", "network", "networking", "conectividad", "connectivity"},
+    "firewall": {"firewall", "cortafuegos"},
+    "protocol": {"protocolo", "protocol", "tls", "ssl", "https", "http", "tcp", "udp"},
+}
+
+def _requested_dimension_classes(message):
+    words=set(re.findall(r"[a-z0-9]+",_norm(message)))
+    return sorted(name for name,aliases in _DIMENSION_ALIASES.items() if words & aliases)
+
+def _evidence_fact_obligations(message,evidence):
+    """Derive generic factual obligations from the current request and supplied evidence.
+
+    This is deliberately product-neutral. Numbers are obligations only when the user
+    requests ports and the evidence associates those numbers with a port/protocol row.
+    A protocol-qualified follow-up narrows obligations to evidence spans containing the
+    requested protocol, preventing unrelated ports from creating false partial results.
+    """
+    dimensions=_requested_dimension_classes(message)
+    if "ports" not in dimensions:
+        return {"dimensions":dimensions,"facts":[],"basis":"semantic_dimensions"}
+    query_words=set(re.findall(r"[a-z0-9]+",_norm(message)))
+    requested_protocols=query_words & _DIMENSION_ALIASES["protocol"]
+    facts=set()
+    for item in evidence:
+        raw=str(item.get("text") or "")
+        spans=re.split(r"[\n\r]+|(?<=[.;])\s+",raw)
+        for span in spans:
+            norm=_norm(span)
+            if not norm:
+                continue
+            has_port_context=bool(re.search(r"\b(?:puert(?:o|os)|ports?)\b",norm)) or bool(re.match(r"^\s*\d{2,5}\b",norm))
+            if not has_port_context:
+                continue
+            if requested_protocols and not any(re.search(rf"\b{re.escape(proto)}\b",norm) for proto in requested_protocols):
+                continue
+            for number in re.findall(r"(?<!\d)(\d{2,5})(?!\d)",norm):
+                value=int(number)
+                if 1 <= value <= 65535:
+                    facts.add(str(value))
+    return {"dimensions":dimensions,"facts":sorted(facts,key=int),"basis":"current_request_evidence_facts"}
+
+def factual_coverage(message,evidence,answer):
+    obligations=_evidence_fact_obligations(message,evidence)
+    answer_numbers=set(re.findall(r"(?<!\d)(\d{2,5})(?!\d)",_norm(answer)))
+    covered=[fact for fact in obligations["facts"] if fact in answer_numbers]
+    missing=[fact for fact in obligations["facts"] if fact not in answer_numbers]
+    return {**obligations,"covered":covered,"missing":missing,"complete":not missing}
 
 def _negative_claim_scope(text):
     """Classify documentary absence by linguistic scope, never by product terms.
@@ -305,6 +356,8 @@ class DocumentedAnswerComposer:
                 "definition_does_not_imply_full_requirements": conceptual,
                 "max_numbered_checks":3 if followup else None,
                 "required_shape": "definition_purpose_capabilities_if_supported" if conceptual else "requirement_categories" if requirements else "proportional",
+                "semantic_obligations": _evidence_fact_obligations(message,evidence),
+                "completion_rule": "cover every material fact listed in semantic_obligations.facts; do not infer missing facts",
             },
             "evidence": evidence,
         }
@@ -333,10 +386,12 @@ class DocumentedAnswerComposer:
         available_pages = {str(x.get("page") or "") for x in evidence if x.get("page") not in (None, "")}
         required_page_coverage = min(3, len(available_pages)) if requirements else min(2, len(available_pages)) if conceptual else 1
         complete_page_coverage = bool(cited) if not available_pages else len(cited_pages) >= required_page_coverage
-        partial_page_coverage = bool(cited) and (safe_partial or (available_pages and not complete_page_coverage))
-        page_coverage_valid = complete_page_coverage or partial_page_coverage
-        coverage_partial = bool(valid and cited and not complete_page_coverage and available_pages and not contradiction)
-        valid = bool((valid or safe_partial) and page_coverage_valid and not contradiction)
+        # Page count is retained for observability only. Completeness is determined by
+        # requested semantic dimensions and material facts, not by how many pages were cited.
+        fact_coverage=factual_coverage(message,evidence,text)
+        page_coverage_valid=True
+        coverage_partial=bool(valid and cited and not fact_coverage["complete"] and not contradiction)
+        valid=bool((valid or safe_partial) and not contradiction)
         self.validation = {
             "citations_valid": valid, "cited_ids": cited, "finish_reason": result.finish_reason,
             "truncated": truncated, "published_partial": bool(valid and (safe_partial or coverage_partial)),
@@ -345,7 +400,9 @@ class DocumentedAnswerComposer:
             "visible_truncation_fallback": bool(truncated and not safe_partial),
             "evidence_pages": sorted(available_pages), "cited_pages": sorted(cited_pages),
             "required_page_coverage": required_page_coverage, "page_coverage_valid": page_coverage_valid,
-            "requested_dimension_coverage": dimension_check, "contradicted_absence_blocked": contradiction,
+            "page_coverage_observational_only": True,
+            "requested_dimension_coverage": dimension_check, "factual_coverage": fact_coverage,
+            "contradicted_absence_blocked": contradiction,
             "contradicted_negative_claim_removed": negative_claim_removed,
             "evidence_items_supplied": len(evidence), "prompt_version": PROMPT_VERSION,
             "diagnostic_certainty_softened": certainty_softened,
