@@ -34,8 +34,11 @@ class ConversationUnderstanding:
   missing=REQUIRED-set(raw)
   if missing:raise ValueError("missing_fields:"+",".join(sorted(missing)))
   for legacy in ALIASES:raw.pop(legacy,None)
-  unknown=sorted(set(raw)-ALLOWED);clean={key:raw[key] for key in ALLOWED};clean["goal_updates"],removed=normalize_goal_updates(clean.get("goal_updates"))
-  self.normalization={"removed_goal_update_keys":removed,"schema_aliases":aliases,"removed_unknown_fields":unknown,"contract_repaired":bool(aliases or unknown)}
+  unknown=sorted(set(raw)-ALLOWED);clean={key:raw[key] for key in ALLOWED}
+  raw_goal_updates=dict(clean.get("goal_updates") or {})
+  provider_goal_status=str(raw_goal_updates.get("status") or raw_goal_updates.get("goal_status") or "").strip().casefold()
+  clean["goal_updates"],removed=normalize_goal_updates(raw_goal_updates)
+  self.normalization={"removed_goal_update_keys":removed,"schema_aliases":aliases,"removed_unknown_fields":unknown,"contract_repaired":bool(aliases or unknown),"provider_goal_status":provider_goal_status}
   return TurnUnderstanding(**clean)
  def _normalize(self,x,memory):
   corrections=[]
@@ -64,8 +67,8 @@ class ConversationUnderstanding:
    and not memory.last_assistant_question and bool(x.goal_complete)
    and not x.should_retrieve and not x.case_updates and not x.needs_clarification
    and str(x.requested_workflow or "none")=="none"
-   and str(normalized_updates.get("goal_status") or "").casefold() in {"complete","completed","closed"}
-   and set(normalized_updates).issubset({"goal_status","subject"})
+   and str(self.normalization.get("provider_goal_status") or "").casefold() in {"complete","completed","closed"}
+   and set(normalized_updates).issubset({"subject"})
   )
   if closure_shape:
    x.user_act="social";x.intent="social";x.topic_relation="same_topic" if (memory.active_topic or memory.active_subject) else "no_topic"
