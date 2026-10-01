@@ -26,9 +26,7 @@ class CleanConversationalAgent:
    # Semantic, language-independent guard. A lateral social act is visible in chat but cannot
    # become a technical goal, case fact, retrieval request or document boundary.
    u.intent="social";u.user_act="social";u.should_retrieve=False;u.needs_clarification=False;u.clarification_target=None;u.case_updates=[];u.goal_updates={};u.goal_complete=True;u.requested_workflow="none"
-   b={"relation":"neutral_social_interruption","previous_evidence_role":"preserved" if memory.active_subject else "none","reason":"social_turn_does_not_create_or_change_technical_topic"}
-   n["structural_corrections"].extend(["social_turn_operational_state_guard","social_turn_neutral_boundary"])
-   e.append({"type":"deterministic_social_terminal","reason":"semantic_social_act_requires_no_response_generation"})
+   n["structural_corrections"].append("social_turn_operational_state_guard")
   d=self.policy.decide(u,memory)
   if social_turn:
    memory.turn_number+=1

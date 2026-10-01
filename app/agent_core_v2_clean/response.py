@@ -7,10 +7,10 @@ class NaturalResponseComposer:
  def compose(self,message,m,u,d):
   intent=str(u.intent or "").casefold();act=str(u.user_act or "").casefold()
   if intent=="social" or act=="social":
-   # The semantic contract already identified a social turn. Keep the response terminal,
-   # concise and language-neutral without inspecting literal words or calling another LLM.
-   self.last_provider_result={"skipped":True,"reason":"social_turn_uses_deterministic_terminal_response"}
-   return AgentResponse("Estoy aquí para ayudarte. ¿Qué necesitas revisar?","deterministic_social",False,None,None,{},"deterministic")
+   # The understanding contract already established a social act. Do not inspect words here.
+   # Use one short conversational generation so greetings, thanks and farewells remain natural
+   # across languages without retrieval or operational-memory mutation.
+   pass
   if intent in {"meta","capabilities"} or act=="request_capabilities":return AgentResponse("Puedo explicar conceptos, consultar documentación, orientar procedimientos, apoyar diagnóstico de fallas y preparar información para escalamiento dentro del servicio de impresión.","capabilities")
   if d.action=="redirect_scope":return AgentResponse("Esa consulta está fuera del alcance de este asistente, que atiende exclusivamente soporte técnico y procesos del servicio de impresión.","out_of_scope_closed")
   if d.action=="cancel":m.pending_goal.status="inactive";return AgentResponse("Listo, cancelé el flujo actual. ¿Qué necesitas revisar ahora?","cancelled")

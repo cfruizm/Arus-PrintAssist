@@ -8,7 +8,6 @@ from .models import AgentResponse
 from .source_footer import compact_sources, strip_generated_source_footer
 from .diagnostic_language import soften_diagnostic_certainty
 from .guidance_integrity import build_guidance_integrity_contract, integrity_diagnostic
-from .documented_enumeration import ensure_enumeration_completeness
 
 PROMPT_VERSION = "documented_v11_confirmed_action_integrity"
 SYSTEM = """Eres un colega de soporte empresarial de impresion. Responde unicamente con la evidencia documental suministrada y usa el idioma del usuario. Se util, directo y natural. No inventes menus, pasos, requisitos, relaciones ni funciones. Cada afirmacion factual debe terminar con una o mas citas [R#].
@@ -360,20 +359,13 @@ class DocumentedAnswerComposer:
         if not valid:
             return AgentResponse("Encontre documentacion, pero la respuesta generada no cubrio suficientemente la evidencia o no supero la validacion de citas.", "documented_citation_guard", False, result.provider, result.model, result.usage, result.finish_reason)
         text=strip_generated_source_footer(text)
-        text, enumeration_coverage = ensure_enumeration_completeness(message, text, evidence)
-        self.validation["documented_enumeration_coverage"] = enumeration_coverage
-        if enumeration_coverage.get("repaired"):
-            for citation_id in enumeration_coverage.get("added_citation_ids") or []:
-                if citation_id not in cited:
-                    cited.append(citation_id)
         if safe_partial:
             text += "\n\n> Respuesta parcial segura: el proveedor alcanzó el límite de salida. Se publicó únicamente el contenido completo y citado disponible."
         elif coverage_partial:
             text += "\n\n> Cobertura documental parcial: se publicó únicamente la orientación respaldada por las fuentes citadas."
         footer = compact_sources(evidence, cited)
         if footer:text += "\n\n" + footer
-        enumeration_repaired = bool(enumeration_coverage.get("repaired"))
-        partial = safe_partial or coverage_partial or negative_claim_removed or enumeration_repaired
+        partial = safe_partial or coverage_partial or negative_claim_removed
         finish = ("safe_partial" if safe_partial else "coverage_partial" if coverage_partial
-                  else "negative_claim_repaired" if negative_claim_removed else "enumeration_coverage_repaired" if enumeration_repaired else result.finish_reason)
+                  else "negative_claim_repaired" if negative_claim_removed else result.finish_reason)
         return AgentResponse(text, "documented_answer_partial" if partial else "documented_answer", True, result.provider, result.model, result.usage, finish)
