@@ -103,11 +103,10 @@ with st.sidebar:
             mime="application/json",
             use_container_width=True,
         )
-
-    st.markdown(
-        '<div class="henkia-version">Núcleo estable: Agent Core V2 Clean 4A.3.9.10.3</div>',
-        unsafe_allow_html=True,
-    )
+        st.markdown(
+            '<div class="henkia-version">Núcleo estable: Agent Core V2 Clean 4A.3.9.10.3</div>',
+            unsafe_allow_html=True,
+        )
 
 st.markdown(f'<h1 class="henkia-title">{APP_NAME}</h1>', unsafe_allow_html=True)
 st.markdown(f'<div class="henkia-subtitle">{APP_SUBTITLE}</div>', unsafe_allow_html=True)
