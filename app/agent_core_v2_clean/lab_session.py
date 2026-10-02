@@ -22,6 +22,7 @@ from .documented_fallback import build_documented_fallback
 from .conceptual_route import must_preempt_documented_answer
 from .semantic_fit import apply_semantic_fit, capture_answer_context
 from .guidance_action_filter import sanitize_answer_context
+from .runtime_memory import compact_turn, compact_cache_artifact, enforce_runtime_memory_limits, memory_diagnostic
 from .unified_evidence_authority import apply_unified_evidence_verdict
 from .response_reconciler import reconcile
 from .topic_boundary import infer_topic_boundary
@@ -65,7 +66,8 @@ def _context_key(message, memory):
     return "|".join((" ".join(_safe_text(message).split()).casefold(), _safe_text(memory.active_topic).strip().casefold(), _safe_text(memory.pending_goal.summary).strip().casefold()))
 
 def _artifact(result):
-    return {k: deepcopy(result.get(k)) for k in ("understanding", "understanding_contract", "goal_update_normalization", "decision", "answer", "retrieval", "documented_answer", "procedural_answer", "internal_knowledge", "procedural_recovery", "answer_context")}
+    artifact={k: deepcopy(result.get(k)) for k in ("understanding", "understanding_contract", "goal_update_normalization", "decision", "answer", "retrieval", "documented_answer", "procedural_answer", "internal_knowledge", "procedural_recovery", "answer_context")}
+    return compact_cache_artifact(artifact)
 
 def _zero():
     return {"calls": 0, "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "provider_failed_calls": 0, "contract_failed_calls": 0, "functional_failed_calls": 0}
@@ -85,6 +87,7 @@ def get_store(s):
     for k, d in (("deterministic_results", []), ("errors", []), ("turns", []), ("messages", [])):
         x.setdefault(k, d)
     enforce_cache_limits(x)
+    enforce_runtime_memory_limits(x)
     return x
 
 def reset_store(s):
@@ -318,7 +321,8 @@ def _escalation_result(message, store, handled, before):
     store["memory"].pending_goal.status="complete" if status in {"completed","cancelled"} else "waiting_user" if status=="collecting" else "active"
     store["answer_context"]={"answer_mode":handled.get("mode","escalation"),"goal":"Preparar escalamiento estructurado","main_text_excerpt":" ".join(text.split())[:1000],"closing_question":text if status=="collecting" and pending else None,"source_identities":[],"source_titles":[x.get("title") for x in store["memory"].escalation.sources_consulted if x.get("title")],"cited_ids":[],"cited_evidence":[],"finish_reason":"deterministic","partial":False}
     data={"input":message,"state_before":before,"understanding":{"user_act":"escalation","intent":"escalation","topic_relation":"same_topic","domain_relevance":"in_scope","current_goal":"Preparar escalamiento estructurado","goal_complete":handled.get("status") in {"completed","cancelled"},"goal_updates":{},"case_updates":[],"needs_clarification":handled.get("status")=="collecting","clarification_target":handled.get("pending_field"),"should_retrieve":False,"confidence":1.0,"reasoning_summary":"native_escalation_lifecycle"},"understanding_contract":{"valid":True,"source":"native_escalation"},"decision":{"action":"continue_escalation","reason":"native_escalation_lifecycle","ask_one_question":handled.get("status")=="collecting","question_target":handled.get("pending_field")},"answer":{"text":text,"mode":handled.get("mode","escalation"),"knowledge_used":False},"retrieval":{"enabled":False,"skipped_reason":"native_escalation_lifecycle"},"escalation":{"status":handled.get("status"),"pending_field":handled.get("pending_field"),"state":deepcopy(store["memory"].escalation.to_dict()),"export":deepcopy(handled.get("export"))},"state_after":deepcopy(store["memory"].to_dict()),"provider_trace":{"understanding":{"skipped":True,"reason":"native_escalation"},"response":{"skipped":True,"reason":"native_escalation"}},"turn_metrics":_zero(),"execution":{"mode":"deterministic_escalation","llm_calls":0,"tokens":0},"production_changed":False}
-    store["messages"] += [{"role":"user","content":message},{"role":"assistant","content":text}];store["turns"].append(data)
+    store["messages"] += [{"role":"user","content":message},{"role":"assistant","content":text}];store["turns"].append(compact_turn(data))
+    enforce_runtime_memory_limits(store)
     return data
 
 def process_message(message, secrets_obj, s):
@@ -363,7 +367,8 @@ def process_message(message, secrets_obj, s):
         store["cache_metrics"]["hits"] += 1
         store["cache_metrics"]["calls_avoided"] += 1
         store["messages"] += [{"role": "user", "content": message}, {"role": "assistant", "content": text}]
-        store["turns"].append(result)
+        store["turns"].append(compact_turn(result))
+        enforce_runtime_memory_limits(store)
         return result
     allowed, _ = budget.can_call(store["telemetry"])
     if not allowed:
@@ -408,9 +413,10 @@ def process_message(message, secrets_obj, s):
         text = "No pude procesar este turno. El error quedó registrado."
         result = {"input": message, "error": {"type": type(exc).__name__, "message": str(exc)}, "execution": execution, "production_changed": False}
     store["messages"].append({"role": "assistant", "content": text})
-    store["turns"].append(result)
+    store["turns"].append(compact_turn(result))
+    enforce_runtime_memory_limits(store)
     return result
 
 def export_session(s):
     x = get_store(s)
-    return {"format": "henkia_support_assist_4b3_6_exact_symptom_qualified_absence", "session_id": x.get("session_id"), "gateway_budget": {"calls": int(s.get("llm_gateway_calls", 0)), "tokens": int(s.get("llm_gateway_tokens", 0))}, "messages": deepcopy(x["messages"]), "turns": deepcopy(x["turns"]), "state": x["memory"].to_dict(), "answer_context": deepcopy(x.get("answer_context") or {}), "budget": deepcopy(x["budget"]), "telemetry": snapshot(x["telemetry"]), "cache_metrics": deepcopy(x["cache_metrics"]), "errors": deepcopy(x["errors"]), "escalation_export": build_escalation_export(x["memory"].escalation,x["memory"].conversation_id) if x["memory"].escalation.confirmed else None, "retrieval_enabled": True, "documented_answer_enabled": True, "procedural_answer_enabled": True, "production_changed": False}
+    return {"format": "henkia_support_assist_4b3_7_runtime_memory_guard", "session_id": x.get("session_id"), "gateway_budget": {"calls": int(s.get("llm_gateway_calls", 0)), "tokens": int(s.get("llm_gateway_tokens", 0))}, "messages": deepcopy(x["messages"]), "turns": deepcopy(x["turns"]), "state": x["memory"].to_dict(), "answer_context": deepcopy(x.get("answer_context") or {}), "budget": deepcopy(x["budget"]), "telemetry": snapshot(x["telemetry"]), "cache_metrics": deepcopy(x["cache_metrics"]), "runtime_memory": memory_diagnostic(x), "errors": deepcopy(x["errors"]), "escalation_export": build_escalation_export(x["memory"].escalation,x["memory"].conversation_id) if x["memory"].escalation.confirmed else None, "retrieval_enabled": True, "documented_answer_enabled": True, "procedural_answer_enabled": True, "production_changed": False}
