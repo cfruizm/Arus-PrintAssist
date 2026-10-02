@@ -294,6 +294,19 @@ def _compact_followup_checks(text, understanding, maximum=3):
     if len(matches)<=maximum:return text
     return str(text or "")[:matches[maximum].start()].rstrip()
 
+
+def repair_qualified_absence_citation(text, evidence, valid_ids):
+    markers=("no contiene pasos adicionales","no hay pasos adicionales","no se documenta un procedimiento específico","no existen pasos adicionales","does not contain additional steps","no additional documented steps")
+    qualified=bool(evidence and any(marker in _norm(text) for marker in markers))
+    repaired=False; value=str(text or "")
+    valid,cited=validate_citations(value,valid_ids)
+    if qualified and not cited:
+        canonical=str(evidence[0].get("id") or "")
+        if canonical in valid_ids:
+            value=value.rstrip()+f" [{canonical}]"
+            valid,cited=validate_citations(value,valid_ids);repaired=bool(valid and cited)
+    return value,valid,cited,qualified,repaired
+
 class DocumentedAnswerComposer:
     def __init__(self, gateway, max_tokens=360):
         self.gateway = gateway
@@ -353,7 +366,7 @@ class DocumentedAnswerComposer:
         )
         contradiction, _ = contradicted_absence(text, message, understanding, evidence)
         valid_ids = [str(x["id"]) for x in evidence]
-        valid, cited = validate_citations(text, valid_ids)
+        text, valid, cited, qualified_absence, citation_repaired = repair_qualified_absence_citation(text,evidence,valid_ids)
         truncated = str(result.finish_reason or "").casefold() in {"length", "max_tokens"}
         partial_text, partial_cited = safe_cited_partial(text, valid_ids, result.finish_reason)
         safe_partial = bool(truncated and partial_text)
@@ -365,6 +378,7 @@ class DocumentedAnswerComposer:
         valid=bool((valid or safe_partial) and not contradiction)
         self.validation = {
             "citations_valid":valid,"cited_ids":cited,"finish_reason":result.finish_reason,
+            "qualified_absence_detected":qualified_absence,"qualified_absence_citation_repaired":citation_repaired,
             "truncated":truncated,"published_partial":bool(valid and safe_partial),
             "safe_partial_terminal":bool(valid and safe_partial),
             "coverage_partial_terminal":False,
@@ -386,7 +400,7 @@ class DocumentedAnswerComposer:
             text = visible_truncation_fallback(evidence)
             return AgentResponse(text, "documented_truncation_safe_defer", False, result.provider, result.model, result.usage, "safe_defer")
         if not valid:
-            return AgentResponse("Encontre documentacion, pero la respuesta generada no cubrio suficientemente la evidencia o no supero la validacion de citas.", "documented_citation_guard", False, result.provider, result.model, result.usage, result.finish_reason)
+            return AgentResponse("No pude publicar una respuesta documentada confiable en este turno. Conservé las fuentes para reintentar la consulta.", "documented_safe_defer", False, result.provider, result.model, result.usage, result.finish_reason)
         text=strip_generated_source_footer(text)
         if safe_partial:
             text += "\n\n> Respuesta parcial segura: el proveedor alcanzó el límite de salida. Se publicó únicamente el contenido completo y citado disponible."

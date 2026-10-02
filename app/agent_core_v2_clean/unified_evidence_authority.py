@@ -45,19 +45,17 @@ def _dedup(items):
     return out
 
 def _request_text(message, understanding, retrieval):
-    understanding = understanding or {}
-    if understanding.get("degraded"):
-        return str(message or "")
-    fields = ((retrieval.get("query") or {}).get("fields") or {})
-    relation = str(fields.get("topic_relation") or understanding.get("topic_relation") or "")
-    act = str(fields.get("user_act") or understanding.get("user_act") or "")
-    if relation == "new_topic":
-        return " ".join((str(message or ""), str(understanding.get("current_goal") or "")))
-    if relation in {"same_topic", "same_topic_refinement", "return_to_previous"} and act in {"follow_up", "answer_to_question", "request_elaboration", "attempt_result", "reported_failure"}:
-        details = fields.get("details") or {}
-        accumulated = " ".join(str(x or "") for x in (fields.get("goal"), fields.get("contextual_operation"), details.get("operation"), details.get("subject"), understanding.get("current_goal")))
-        technical = _tokens(accumulated); current = _tokens(message)
-        return accumulated if technical and len(current & technical) < 1 else " ".join((str(message or ""), accumulated))
+    understanding=understanding or {}
+    if understanding.get("degraded"):return str(message or "")
+    fields=((retrieval.get("query") or {}).get("fields") or {})
+    relation=str(fields.get("topic_relation") or understanding.get("topic_relation") or "")
+    act=str(fields.get("user_act") or understanding.get("user_act") or "")
+    if relation=="new_topic":return " ".join((str(message or ""),str(understanding.get("current_goal") or "")))
+    if relation in {"same_topic","same_topic_refinement","return_to_previous"} and act in {"follow_up","answer_to_question","request_elaboration","attempt_result","reported_failure"}:
+        details=fields.get("details") or {}
+        accumulated=" ".join(str(x or "") for x in (fields.get("goal"),fields.get("contextual_operation"),details.get("operation"),details.get("subject"),understanding.get("current_goal")))
+        technical=_tokens(accumulated);current=_tokens(message)
+        return accumulated if technical and len(current&technical)<1 else " ".join((str(message or ""),accumulated))
     return str(message or "")
 
 def _fit(item, wanted):
@@ -79,98 +77,66 @@ def _fit(item, wanted):
 
 
 def _conceptual_selection(candidates, understanding):
-    """Authorize broad conceptual evidence by subject and claim quality, not title hits alone."""
-    u = understanding or {}
-    if str(u.get("intent") or "").casefold() != "conceptual":
-        return None
-    details = u.get("goal_updates") or {}
-    subject = u.get("canonical_subject") or details.get("subject") or ""
-    subject_terms = _tokens(subject)
-    if not subject_terms:
-        return None
-    ranked = []
-    for position, item in enumerate(candidates):
-        title = _norm(item.get("title"))
-        text = _norm(item.get("text"))
-        available = _tokens(" ".join((title, text)))
-        if not subject_terms.issubset(available):
-            continue
-        # A feature page must not define the whole product merely because its title contains it.
-        possessive_feature = bool(re.search(r"\b(?:'s|s)\s+[a-z0-9]+", title)) or " configure " in f" {title} "
-        definitional = bool(re.search(r"\b(?:is|are|es|son|consta de|consists of)\b", text)) and not possessive_feature
-        descriptive = any(marker in text for marker in (
-            "proporciona", "permite", "administra", "supervision", "gestion", "compatible",
-            "provides", "allows", "manages", "monitoring", "capabilities", "supports",
-        ))
-        family = str((item.get("metadata") or {}).get("document_family") or "").casefold()
-        overview = family in {"brochure", "overview", "requirements", "general_document"}
-        semantic = float((item.get("semantic_fit") or {}).get("score", 0.0) or 0.0)
-        if not (definitional or descriptive or overview):
-            continue
-        score = (0.45 if definitional else 0.0) + (0.30 if descriptive else 0.0) + (0.15 if overview else 0.0) + min(0.10, semantic)
-        if possessive_feature:
-            score -= 0.35
-        ranked.append((score, -position, deepcopy(item)))
-    ranked.sort(reverse=True, key=lambda row: (row[0], row[1]))
-    selected = [row[2] for row in ranked if row[0] >= 0.20][:8]
-    for index, item in enumerate(selected, 1):
-        item["id"] = f"R{index}"
-    if not selected:
-        return None
-    return {
-        "schema_version": 4,
-        "status": "sufficient",
-        "mode": "documented",
-        "accepted": True,
-        "reason": "conceptual_subject_claim_coverage",
-        "request_terms": sorted(_tokens(_request_text("", u, {}))),
-        "document_ids": list(dict.fromkeys(_identity(x) for x in selected)),
-        "evidence_ids": [x["id"] for x in selected],
-        "coverage": 1.0,
-        "selected_evidence": selected,
-        "rejected_count": max(0, len(candidates) - len(selected)),
-    }
-
-
-def _primary_continuity_selection(out, candidates, wanted):
-    """Reuse a primary source only when its current fragments support the technical operation.
-
-    Prior identity is a ranking preference, never sufficient authority. Subject-only overlap
-    cannot promote weak or partial material to a documented procedural answer.
-    """
-    query=(out.get("query") or {}).get("fields") or {}; context=out.get("_answer_context") or {}
-    if str(query.get("previous_evidence_role") or "") != "primary": return None
-    identities={str(x).strip() for x in context.get("source_identities") or [] if str(x).strip()}
-    if not identities: return None
-    details=query.get("details") or {}
-    operation_text=" ".join(str(x or "") for x in (query.get("contextual_operation"), details.get("operation"), query.get("goal"), context.get("goal")))
-    operation_terms=_tokens(operation_text)
-    subject_terms=_tokens(" ".join(str(x or "") for x in (details.get("subject"), query.get("subject"))))
-    operation_terms-=subject_terms
-    previous_authority=context.get("evidence_authority") or {}
-    previous_status=str(previous_authority.get("status") or "")
-    rows=[]
+    """Conceptual routing must not override an exact symptom article."""
+    u=understanding or {}
+    if str(u.get("intent") or "").casefold()!="conceptual":return None
+    request_terms=_tokens(" ".join((str(_request_text("",u,{})),str(u.get("current_goal") or ""),str(u.get("canonical_subject") or ""))))
+    exact=[]
     for position,item in enumerate(candidates):
-        if _identity(item) not in identities: continue
-        available=_tokens(" ".join((str(item.get("title") or ""),str(item.get("text") or ""))))
-        fit=_fit(item,wanted or operation_terms)
+        sf=item.get("semantic_fit") or {}; title_terms=set(sf.get("title_matched_terms") or [])
+        title_terms={_norm(x) for x in title_terms if not str(x).startswith("concept:")}
+        semantic=float(sf.get("score",0.0) or 0.0)
+        symptom_hits=len(title_terms & request_terms)
+        if symptom_hits>=3 and semantic>=0.30:
+            exact.append((symptom_hits,semantic,-position,deepcopy(item)))
+    if exact:
+        exact.sort(reverse=True,key=lambda x:(x[0],x[1],x[2]));identity=_identity(exact[0][3])
+        selected=[x[3] for x in exact if _identity(x[3])==identity][:8]
+        for i,item in enumerate(selected,1):item["id"]=f"R{i}"
+        return {"schema_version":8,"status":"sufficient","mode":"documented","accepted":True,
+          "reason":"exact_symptom_title_precedence","request_terms":sorted(request_terms),
+          "document_ids":[identity],"evidence_ids":[x["id"] for x in selected],"coverage":1.0,
+          "selected_evidence":selected,"rejected_count":max(0,len(candidates)-len(selected)),
+          "selection_authority":"symptom_title_over_broad_conceptual"}
+    details=u.get("goal_updates") or {};subject=u.get("canonical_subject") or details.get("subject") or ""
+    subject_terms=_tokens(subject)
+    if not subject_terms:return None
+    ranked=[]
+    for position,item in enumerate(candidates):
+        title=_norm(item.get("title"));text=_norm(item.get("text"));available=_tokens(" ".join((title,text)))
+        if not subject_terms.issubset(available):continue
+        possessive_feature=bool(re.search(r"\b(?:'s|s)\s+[a-z0-9]+",title)) or " configure " in f" {title} "
+        definitional=bool(re.search(r"\b(?:is|are|es|son|consta de|consists of)\b",text)) and not possessive_feature
+        descriptive=any(m in text for m in ("proporciona","permite","administra","supervision","gestion","compatible","provides","allows","manages","monitoring","capabilities","supports"))
+        family=str((item.get("metadata") or {}).get("document_family") or "").casefold();overview=family in {"brochure","overview","requirements","general_document"}
         semantic=float((item.get("semantic_fit") or {}).get("score",0.0) or 0.0)
-        op_hits=len(operation_terms & available); subject_hits=len(subject_terms & available)
-        non_subject_hits=len((wanted-subject_terms) & available)
-        operationally_aligned=(op_hits>=2 or non_subject_hits>=2 or (op_hits>=1 and semantic>=0.30) or semantic>=0.42)
-        if previous_status == "partial" and not (op_hits>=2 or semantic>=0.42): operationally_aligned=False
-        if operationally_aligned:
-            rows.append((op_hits,non_subject_hits,fit["coverage"],semantic,-position,deepcopy(item),subject_hits))
-    if not rows: return None
-    rows.sort(reverse=True,key=lambda x:(x[0],x[1],x[2],x[3],x[4])); identity=_identity(rows[0][5])
-    selected=[x[5] for x in rows if _identity(x[5])==identity][:8]
-    for i,item in enumerate(selected,1): item["id"]=f"R{i}"
-    return {"schema_version":7,"status":"sufficient","mode":"documented","accepted":True,
-      "reason":"primary_document_operational_revalidation","request_terms":sorted(wanted or operation_terms),
-      "operation_terms":sorted(operation_terms),"document_ids":[identity],"evidence_ids":[x["id"] for x in selected],
-      "coverage":round(float(max(x[2] for x in rows)),4),"selected_evidence":selected,
-      "rejected_count":max(0,len(candidates)-len(selected)),"continuity_authority":"identity_plus_operational_alignment",
-      "previous_authority_status":previous_status or None}
+        if not (definitional or descriptive or overview):continue
+        score=(.45 if definitional else 0)+(.30 if descriptive else 0)+(.15 if overview else 0)+min(.10,semantic)-(.35 if possessive_feature else 0)
+        ranked.append((score,-position,deepcopy(item)))
+    ranked.sort(reverse=True,key=lambda x:(x[0],x[1]));selected=[x[2] for x in ranked if x[0]>=.20][:8]
+    for i,item in enumerate(selected,1):item["id"]=f"R{i}"
+    if not selected:return None
+    return {"schema_version":4,"status":"sufficient","mode":"documented","accepted":True,"reason":"conceptual_subject_claim_coverage","request_terms":sorted(request_terms),"document_ids":list(dict.fromkeys(_identity(x) for x in selected)),"evidence_ids":[x["id"] for x in selected],"coverage":1.0,"selected_evidence":selected,"rejected_count":max(0,len(candidates)-len(selected))}
+
+def _primary_continuity_selection(out,candidates,wanted):
+    query=(out.get("query") or {}).get("fields") or {};context=out.get("_answer_context") or {}
+    if str(query.get("previous_evidence_role") or "")!="primary":return None
+    identities={str(x).strip() for x in context.get("source_identities") or [] if str(x).strip()}
+    if not identities:return None
+    details=query.get("details") or {};operation_text=" ".join(str(x or "") for x in (query.get("contextual_operation"),details.get("operation"),query.get("goal"),context.get("goal")))
+    operation_terms=_tokens(operation_text);subject_terms=_tokens(" ".join(str(x or "") for x in (details.get("subject"),query.get("subject"))));operation_terms-=subject_terms
+    previous_status=str((context.get("evidence_authority") or {}).get("status") or "");rows=[]
+    for position,item in enumerate(candidates):
+        if _identity(item) not in identities:continue
+        available=_tokens(" ".join((str(item.get("title") or ""),str(item.get("text") or ""))));fit=_fit(item,wanted or operation_terms);semantic=float((item.get("semantic_fit") or {}).get("score",0) or 0)
+        op_hits=len(operation_terms&available);non_subject_hits=len((wanted-subject_terms)&available)
+        aligned=op_hits>=2 or non_subject_hits>=2 or (op_hits>=1 and semantic>=.30) or semantic>=.42
+        if previous_status=="partial" and not (op_hits>=2 or semantic>=.42):aligned=False
+        if aligned:rows.append((op_hits,non_subject_hits,fit["coverage"],semantic,-position,deepcopy(item)))
+    if not rows:return None
+    rows.sort(reverse=True,key=lambda x:(x[0],x[1],x[2],x[3],x[4]));identity=_identity(rows[0][5]);selected=[x[5] for x in rows if _identity(x[5])==identity][:8]
+    for i,item in enumerate(selected,1):item["id"]=f"R{i}"
+    return {"schema_version":8,"status":"sufficient","mode":"documented","accepted":True,"reason":"primary_document_operational_revalidation","request_terms":sorted(wanted or operation_terms),"operation_terms":sorted(operation_terms),"document_ids":[identity],"evidence_ids":[x["id"] for x in selected],"coverage":round(float(max(x[2] for x in rows)),4),"selected_evidence":selected,"rejected_count":max(0,len(candidates)-len(selected)),"continuity_authority":"identity_plus_operational_alignment","previous_authority_status":previous_status or None}
 
 def apply_unified_evidence_verdict(retrieval, message, understanding):
     out = deepcopy(retrieval or {})

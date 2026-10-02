@@ -21,6 +21,7 @@ from .documented_router import maybe_generate_procedural
 from .documented_fallback import build_documented_fallback
 from .conceptual_route import must_preempt_documented_answer
 from .semantic_fit import apply_semantic_fit, capture_answer_context
+from .guidance_action_filter import sanitize_answer_context
 from .unified_evidence_authority import apply_unified_evidence_verdict
 from .response_reconciler import reconcile
 from .topic_boundary import infer_topic_boundary
@@ -301,7 +302,7 @@ def _finalize_answer_context(result, store):
         result["social_context"]={"preserved_previous_answer_context":True,"response_mode":"deterministic_social"}
         result["state_after"]=deepcopy(store["memory"].to_dict())
         return
-    context = capture_answer_context(result, store.get("answer_context") or {})
+    context = sanitize_answer_context(capture_answer_context(result, store.get("answer_context") or {}))
     if context:
         store["answer_context"] = context
         result["answer_context"] = deepcopy(context)
@@ -412,4 +413,4 @@ def process_message(message, secrets_obj, s):
 
 def export_session(s):
     x = get_store(s)
-    return {"format": "henkia_support_assist_4b3_5_semantic_authority_guidance_integrity", "session_id": x.get("session_id"), "gateway_budget": {"calls": int(s.get("llm_gateway_calls", 0)), "tokens": int(s.get("llm_gateway_tokens", 0))}, "messages": deepcopy(x["messages"]), "turns": deepcopy(x["turns"]), "state": x["memory"].to_dict(), "answer_context": deepcopy(x.get("answer_context") or {}), "budget": deepcopy(x["budget"]), "telemetry": snapshot(x["telemetry"]), "cache_metrics": deepcopy(x["cache_metrics"]), "errors": deepcopy(x["errors"]), "escalation_export": build_escalation_export(x["memory"].escalation,x["memory"].conversation_id) if x["memory"].escalation.confirmed else None, "retrieval_enabled": True, "documented_answer_enabled": True, "procedural_answer_enabled": True, "production_changed": False}
+    return {"format": "henkia_support_assist_4b3_6_exact_symptom_qualified_absence", "session_id": x.get("session_id"), "gateway_budget": {"calls": int(s.get("llm_gateway_calls", 0)), "tokens": int(s.get("llm_gateway_tokens", 0))}, "messages": deepcopy(x["messages"]), "turns": deepcopy(x["turns"]), "state": x["memory"].to_dict(), "answer_context": deepcopy(x.get("answer_context") or {}), "budget": deepcopy(x["budget"]), "telemetry": snapshot(x["telemetry"]), "cache_metrics": deepcopy(x["cache_metrics"]), "errors": deepcopy(x["errors"]), "escalation_export": build_escalation_export(x["memory"].escalation,x["memory"].conversation_id) if x["memory"].escalation.confirmed else None, "retrieval_enabled": True, "documented_answer_enabled": True, "procedural_answer_enabled": True, "production_changed": False}
