@@ -7,6 +7,7 @@ from collections import defaultdict
 from .models import AgentResponse
 from .source_footer import compact_sources, strip_generated_source_footer
 from .diagnostic_language import soften_diagnostic_certainty
+from .applicability_language import guard_unconfirmed_applicability
 from .guidance_integrity import build_guidance_integrity_contract, integrity_diagnostic
 
 PROMPT_VERSION = "documented_v16_multichunk_completion_integrity"
@@ -360,6 +361,7 @@ class DocumentedAnswerComposer:
             }
             return AgentResponse("Encontre documentacion, pero no pude redactar la respuesta en este turno. Las fuentes recuperadas se conservaron.", "documented_provider_degraded", False)
         text = _compact_followup_checks(str(result.text or "").strip(),understanding)
+        text,applicability_repaired,applicability_diagnostic = guard_unconfirmed_applicability(text)
         text,certainty_softened = soften_diagnostic_certainty(text,intent)
         text, negative_claim_removed, dimension_check = _remove_contradicted_absence_claims(
             text, message, understanding, evidence
@@ -392,6 +394,8 @@ class DocumentedAnswerComposer:
             "contradicted_negative_claim_removed":negative_claim_removed,
             "evidence_items_supplied":len(evidence),"prompt_version":PROMPT_VERSION,
             "diagnostic_certainty_softened":certainty_softened,
+            "applicability_language_repaired":applicability_repaired,
+            "applicability_diagnostic":applicability_diagnostic,
             "guidance_integrity":integrity_diagnostic(integrity_contract),
         }
         if contradiction:
