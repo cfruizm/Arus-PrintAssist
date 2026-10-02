@@ -241,13 +241,18 @@ def apply_unified_evidence_verdict(retrieval, message, understanding):
         # Two independent lexical anchors plus target compatibility are enough for
         # exact operational documents even when OCR lowers the semantic score.
         accepted = target_ok and (direct_title or (direct_content and semantic_support))
-        if accepted:
+        partial_semantic = (
+            str((understanding or {}).get("intent") or "").casefold() == "troubleshooting"
+            and target_ok and semantic_support and best_fit["covered_count"] >= 1
+        )
+        if accepted or partial_semantic:
             identity = _identity(best)
             selected = [item for fit, item in scored if _identity(item) == identity][:8]
-            full = best_fit["coverage"] >= 0.5 or best_fit["title_hit_count"] >= 2
+            full = accepted and (best_fit["coverage"] >= 0.5 or best_fit["title_hit_count"] >= 2)
             status = "sufficient" if full else "partial"
-            mode = "documented" if full else "documented_partial"
-            reason = "direct_title_operation_match" if direct_title else "direct_content_and_operation_match"
+            mode = "documented" if full else "documented_plus_internal"
+            reason = "direct_title_operation_match" if full and direct_title else "direct_content_and_operation_match" if accepted else "semantic_troubleshooting_support_partial"
+            accepted = bool(full)
 
     for idx, item in enumerate(selected, 1):
         item["id"] = f"R{idx}"
@@ -274,6 +279,6 @@ def apply_unified_evidence_verdict(retrieval, message, understanding):
         "generation_ids": verdict["evidence_ids"],
         "generation_count": len(selected),
         "selected_document": verdict["document_ids"][0] if verdict["document_ids"] else None,
-        "decision_path": "unified_evidence_authority_v3",
+        "decision_path": "unified_evidence_authority_v6_partial_troubleshooting",
     })
     return out

@@ -104,7 +104,11 @@ class ConversationUnderstanding:
    first_error=str(exc);retry=req({"message":message,"context":compact_context(memory),"invalid_output":str(r.text or "")[:4000],"validation_error":first_error,"instruction":"Return only a complete JSON object matching the schema without extra fields."},"agent_core_v2_clean_understanding_repair")
    self.last_provider_result={"initial":r.to_dict(),"repair":retry.to_dict(),"repair_attempted":True};self.normalization={"removed_goal_update_keys":[],"repair_attempted":True,"repair_succeeded":False}
    if retry.ok:
-    try:x=self._parse(retry.text);self.contract_valid=True;self.validation_error=None;self.normalization["repair_attempted"]=True;self.normalization["repair_succeeded"]=True;return self._normalize(x,memory)
-    except Exception as retry_exc:self.validation_error=str(retry_exc)
+    try:
+     if str(getattr(retry,"finish_reason","") or "").casefold() in {"length","max_tokens"}:raise ValueError("understanding_repair_output_truncated")
+     x=self._parse(retry.text);self.contract_valid=True;self.validation_error=None;self.normalization["repair_attempted"]=True;self.normalization["repair_succeeded"]=True;return self._normalize(x,memory)
+    except Exception as retry_exc:
+     self.normalization["repair_truncated"]=str(getattr(retry,"finish_reason","") or "").casefold() in {"length","max_tokens"}
+     self.validation_error=str(retry_exc)
    else:self.validation_error="repair_provider_error:"+str(retry.error_code or "unknown")
    return self._degraded_current(message,"invalid_understanding:"+str(self.validation_error or first_error))

@@ -19,6 +19,7 @@ def load_gateway_config(secrets)->dict:
         "max_calls_per_session":max(1,min(100,int(_get(secrets,"LLM_MAX_CALLS_PER_SESSION",20)))),
         "max_total_tokens_per_session":max(500,min(200000,int(_get(secrets,"LLM_MAX_TOTAL_TOKENS_PER_SESSION",12000)))),
         "orchestrator_max_tokens":max(64,min(4096,int(_get(secrets,"LLM_ORCHESTRATOR_MAX_TOKENS",220)))),
+        "understanding_max_tokens":max(320,min(4096,int(_get(secrets,"LLM_UNDERSTANDING_MAX_TOKENS",360)))),
         "answer_max_tokens":max(128,min(4096,int(_get(secrets,"LLM_ANSWER_MAX_TOKENS",900)))),
         "evidence_judge_max_tokens":max(64,min(4096,int(_get(secrets,"LLM_EVIDENCE_JUDGE_MAX_TOKENS",360)))),
         "providers":{

@@ -9,6 +9,11 @@ def normalize(raw=None):
  return out
 def add_result(t,result,contract_valid=None):
  if not result or result.get("skipped"):return
+ nested=[result.get("initial"),result.get("repair")]
+ if any(nested):
+  traces=[x for x in nested if x and not x.get("skipped")]
+  for index,trace in enumerate(traces):add_result(t,trace,contract_valid if index==len(traces)-1 else None)
+  return
  purpose=str(result.get("purpose") or (result.get("metadata") or {}).get("attempted_purpose") or "unknown");usage=result.get("usage") or {};b=t["by_purpose"].setdefault(purpose,{"calls":0,"provider_failed_calls":0,"contract_failed_calls":0,"prompt_tokens":0,"completion_tokens":0,"total_tokens":0,"latency_ms":0.0});provider_ok=bool(result.get("ok"));contract_evaluated=contract_valid is not None;contract_ok=True if not contract_evaluated else bool(contract_valid)
  for target in (t,b):
   target["calls"]+=1;target["provider_failed_calls"]+=0 if provider_ok else 1;target["contract_failed_calls"]+=0 if contract_ok else 1;target["latency_ms"]+=float(result.get("latency_ms") or 0)
