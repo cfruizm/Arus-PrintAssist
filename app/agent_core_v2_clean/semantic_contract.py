@@ -11,5 +11,11 @@ def validate_response_contract(text,contract):
  value=" ".join(str(text or "").split()).casefold();issues=[]
  denial_markers=("no se ha confirmado","sin confirmar","falta confirmar","not confirmed","has not been confirmed")
  for fact in contract.get("confirmed_facts") or []:
-  if any(x in value for x in denial_markers):issues.append({"type":"possible_confirmed_fact_contradiction","key":fact.get("key"),"value":fact.get("value")})
+  key=str(fact.get("key") or "").casefold().strip(); fact_value=str(fact.get("value") or "").casefold().strip()
+  anchors=[x for x in (key,fact_value) if len(x)>=3]
+  contradiction=False
+  for sentence in __import__("re").split(r"(?<=[.!?;])\s+", value):
+   if any(marker in sentence for marker in denial_markers) and anchors and any(anchor in sentence for anchor in anchors):
+    contradiction=True;break
+  if contradiction:issues.append({"type":"confirmed_fact_contradiction","key":fact.get("key"),"value":fact.get("value"),"evidence":"local_denial_window"})
  return {"valid":not issues,"issues":issues,"confirmed_fact_count":len(contract.get("confirmed_facts") or []),"unresolved_fact_count":len(contract.get("unresolved_facts") or [])}

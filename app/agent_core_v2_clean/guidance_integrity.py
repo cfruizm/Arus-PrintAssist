@@ -1,7 +1,7 @@
 from __future__ import annotations
 from copy import deepcopy
 
-RISK_POLICY_VERSION = "guidance_integrity_v1"
+RISK_POLICY_VERSION = "guidance_integrity_v2_semantic"
 
 
 def _text(value):
@@ -33,6 +33,8 @@ def _guidance(retrieval):
                 "action":action,
                 "status":_text((item or {}).get("status")) or "delivered",
                 "authority":"assistant_recommendation_only",
+                "semantic_signature":list((item or {}).get("semantic_signature") or []),
+                "excerpt":_text((item or {}).get("excerpt")) or None,
             })
     return rows[-8:]
 
@@ -45,10 +47,18 @@ def build_guidance_integrity_contract(retrieval):
         "policy_version":RISK_POLICY_VERSION,
         "user_confirmed_attempts":deepcopy(confirmed),
         "assistant_delivered_guidance":deepcopy(delivered),
+        "response_policy":{
+            "exclude_previous_guidance":bool(delivered),
+            "semantic_equivalence_required":True,
+            "repeat_full_instructions":False,
+            "when_no_new_actions":"State briefly that the authorized material contains no additional steps; do not restate completed guidance.",
+        },
         "authority_rules":[
             "Only user_confirmed_attempts may be described as performed, completed, checked or verified by the user.",
             "assistant_delivered_guidance means recommendation shown previously, not action performed.",
             "Never infer execution from prior recommendation, citation, document presence or conversational continuity.",
+            "Treat paraphrases with the same action, object and intended result as already delivered guidance.",
+            "When only remaining steps are requested, exclude semantically equivalent prior guidance and answer briefly if none remain.",
             "If execution is not confirmed, use prospective language and preserve that check as pending.",
         ],
         "disruptive_guidance_policy":{

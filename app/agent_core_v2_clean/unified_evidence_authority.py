@@ -53,21 +53,10 @@ def _request_text(message, understanding, retrieval):
     act = str(fields.get("user_act") or understanding.get("user_act") or "")
     if relation == "new_topic":
         return " ".join((str(message or ""), str(understanding.get("current_goal") or "")))
-    referential = relation in {"same_topic", "same_topic_refinement", "return_to_previous"} and act in {
-        "follow_up", "answer_to_question", "request_elaboration", "attempt_result", "reported_failure"
-    }
-    if referential:
+    if relation in {"same_topic", "same_topic_refinement", "return_to_previous"} and act in {"follow_up", "answer_to_question", "request_elaboration", "attempt_result", "reported_failure"}:
         details = fields.get("details") or {}
-        accumulated = " ".join(str(x or "") for x in (
-            fields.get("goal"), fields.get("contextual_operation"),
-            details.get("operation"), details.get("subject"),
-            understanding.get("current_goal"),
-        ))
-        technical = _tokens(accumulated)
-        current = _tokens(message)
-        # Referential wording expresses dialogue control, not the technical operation.
-        # If it contributes no technical anchors, evaluate the active primary document
-        # against the accumulated objective instead of rejecting it lexically.
+        accumulated = " ".join(str(x or "") for x in (fields.get("goal"), fields.get("contextual_operation"), details.get("operation"), details.get("subject"), understanding.get("current_goal")))
+        technical = _tokens(accumulated); current = _tokens(message)
         return accumulated if technical and len(current & technical) < 1 else " ".join((str(message or ""), accumulated))
     return str(message or "")
 
@@ -144,55 +133,44 @@ def _conceptual_selection(candidates, understanding):
 
 
 def _primary_continuity_selection(out, candidates, wanted):
-    """Authorize remaining evidence in an already-authorized primary document.
+    """Reuse a primary source only when its current fragments support the technical operation.
 
-    Identity continuity alone is insufficient. The branch requires structured same-topic
-    authority and either current technical overlap or accumulated-goal overlap. Dialogue
-    control words are never treated as operational obligations.
+    Prior identity is a ranking preference, never sufficient authority. Subject-only overlap
+    cannot promote weak or partial material to a documented procedural answer.
     """
-    query = (out.get("query") or {}).get("fields") or {}
-    context = out.get("_answer_context") or {}
-    if str(query.get("previous_evidence_role") or "") != "primary":
-        return None
-    identities = {str(x).strip() for x in context.get("source_identities") or [] if str(x).strip()}
-    if not identities:
-        return None
-    details = query.get("details") or {}
-    accumulated = _tokens(" ".join(str(x or "") for x in (
-        query.get("goal"), query.get("contextual_operation"), details.get("operation"),
-        details.get("subject"), context.get("goal"), context.get("main_text_excerpt"),
-    )))
-    effective = wanted or accumulated
-    rows = []
-    for position, item in enumerate(candidates):
-        if _identity(item) not in identities:
-            continue
-        fit = _fit(item, effective)
-        available = _tokens(" ".join((str(item.get("title") or ""), str(item.get("text") or ""))))
-        current_hits = len(wanted & available)
-        accumulated_hits = len(accumulated & available)
-        semantic = float((item.get("semantic_fit") or {}).get("score", 0.0) or 0.0)
-        relevant = current_hits >= 1 or accumulated_hits >= 2 or semantic >= 0.30
-        if relevant:
-            rows.append((current_hits, accumulated_hits, fit["coverage"], semantic, -position, deepcopy(item)))
-    if not rows:
-        return None
-    rows.sort(reverse=True, key=lambda x:(x[0],x[1],x[2],x[3],x[4]))
-    identity = _identity(rows[0][5])
-    selected = [x[5] for x in rows if _identity(x[5]) == identity][:8]
-    for index, item in enumerate(selected, 1):
-        item["id"] = f"R{index}"
-    coverage = max(x[2] for x in rows)
-    reason = "primary_document_current_turn_relevance" if max(x[0] for x in rows) >= 1 else "primary_document_accumulated_goal_relevance"
-    return {
-        "schema_version": 6, "status": "sufficient", "mode": "documented", "accepted": True,
-        "reason": reason,
-        "request_terms": sorted(effective), "document_ids": [identity],
-        "evidence_ids": [x["id"] for x in selected], "coverage": round(float(coverage), 4),
-        "selected_evidence": selected, "rejected_count": max(0, len(candidates)-len(selected)),
-        "continuity_authority": "structured_primary_document",
-        "current_term_count": len(wanted), "accumulated_goal_term_count": len(accumulated),
-    }
+    query=(out.get("query") or {}).get("fields") or {}; context=out.get("_answer_context") or {}
+    if str(query.get("previous_evidence_role") or "") != "primary": return None
+    identities={str(x).strip() for x in context.get("source_identities") or [] if str(x).strip()}
+    if not identities: return None
+    details=query.get("details") or {}
+    operation_text=" ".join(str(x or "") for x in (query.get("contextual_operation"), details.get("operation"), query.get("goal"), context.get("goal")))
+    operation_terms=_tokens(operation_text)
+    subject_terms=_tokens(" ".join(str(x or "") for x in (details.get("subject"), query.get("subject"))))
+    operation_terms-=subject_terms
+    previous_authority=context.get("evidence_authority") or {}
+    previous_status=str(previous_authority.get("status") or "")
+    rows=[]
+    for position,item in enumerate(candidates):
+        if _identity(item) not in identities: continue
+        available=_tokens(" ".join((str(item.get("title") or ""),str(item.get("text") or ""))))
+        fit=_fit(item,wanted or operation_terms)
+        semantic=float((item.get("semantic_fit") or {}).get("score",0.0) or 0.0)
+        op_hits=len(operation_terms & available); subject_hits=len(subject_terms & available)
+        non_subject_hits=len((wanted-subject_terms) & available)
+        operationally_aligned=(op_hits>=2 or non_subject_hits>=2 or (op_hits>=1 and semantic>=0.30) or semantic>=0.42)
+        if previous_status == "partial" and not (op_hits>=2 or semantic>=0.42): operationally_aligned=False
+        if operationally_aligned:
+            rows.append((op_hits,non_subject_hits,fit["coverage"],semantic,-position,deepcopy(item),subject_hits))
+    if not rows: return None
+    rows.sort(reverse=True,key=lambda x:(x[0],x[1],x[2],x[3],x[4])); identity=_identity(rows[0][5])
+    selected=[x[5] for x in rows if _identity(x[5])==identity][:8]
+    for i,item in enumerate(selected,1): item["id"]=f"R{i}"
+    return {"schema_version":7,"status":"sufficient","mode":"documented","accepted":True,
+      "reason":"primary_document_operational_revalidation","request_terms":sorted(wanted or operation_terms),
+      "operation_terms":sorted(operation_terms),"document_ids":[identity],"evidence_ids":[x["id"] for x in selected],
+      "coverage":round(float(max(x[2] for x in rows)),4),"selected_evidence":selected,
+      "rejected_count":max(0,len(candidates)-len(selected)),"continuity_authority":"identity_plus_operational_alignment",
+      "previous_authority_status":previous_status or None}
 
 def apply_unified_evidence_verdict(retrieval, message, understanding):
     out = deepcopy(retrieval or {})

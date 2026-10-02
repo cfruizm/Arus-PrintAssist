@@ -8,9 +8,9 @@ from .answer_context_policy import enrich_internal_payload
 from .documentation_limitation import user_message as limitation_user_message
 from .guidance_integrity import build_guidance_integrity_contract, integrity_diagnostic
 
-PROMPT_VERSION = "controlled_internal_knowledge_v17_current_goal_historical_isolation"
+PROMPT_VERSION = "controlled_internal_knowledge_v16_compact_proportional_format"
 WARNING = "⚠️ **Orientación complementaria basada en conocimiento general del modelo**"
-SYSTEM = """Actúa como colega de soporte empresarial de impresión. Usa un formato compacto y proporcional. Si existen extractos autorizados, presenta primero ### Según la documentación y limita esa sección a afirmaciones respaldadas con citas [R#]; después usa ### Validaciones adicionales para orientación complementaria sin citas. Si no existen extractos autorizados, omite por completo la sección documental y usa solo ### Orientación sugerida, seguida opcionalmente por **Siguiente paso:**. No incluyas secciones vacías ni repitas la limitación documental. Responde estrictamente al objetivo actual. Si case_context_authority es historical, no describas historical_attempts como parte del caso actual ni introduzcas la respuesta con hechos del incidente cerrado. Para una petición procedural, responde al procedimiento solicitado; no la reemplaces por diagnóstico, dependencias o reinicios de servidor salvo respaldo documental o petición explícita. Respeta hechos confirmados. No repitas una comprobación de previous_attempts salvo nueva justificación. assistant_delivered_guidance no significa acción ejecutada. No menciones procesos internos. Conserva literalmente manufacturer, product, model, operating_system y architecture. No inventes un paquete exacto. Para acciones disruptivas aplica guidance_integrity_contract. Máximo 180 palabras."""
+SYSTEM = """Actúa como colega de soporte empresarial de impresión. Usa un formato compacto y proporcional. Si existen extractos autorizados, presenta primero ### Según la documentación y limita esa sección a afirmaciones respaldadas con citas [R#]; después usa ### Validaciones adicionales para orientación complementaria sin citas. Si no existen extractos autorizados, omite por completo la sección documental y usa solo ### Orientación sugerida, seguida opcionalmente por **Siguiente paso:**. No incluyas secciones vacías ni repitas la limitación documental en varios encabezados. Si documentation_limitation.required_message contiene texto, conserva fielmente su significado una sola vez. Responde al objetivo actual. Respeta hechos confirmados. La evidencia describe posibilidades, no elecciones del usuario. No conviertas modalidades sugeridas en hechos. Da primero comprobaciones comunes y después comprobaciones condicionales. No repitas una comprobación que aparezca en previous_attempts ni una acción semánticamente equivalente a assistant_delivered_guidance. Compara intención, acción, objeto y resultado, no solo texto literal. Si response_policy.exclude_previous_guidance es verdadero, entrega únicamente acciones nuevas; si no quedan, dilo brevemente sin volver a desarrollar las anteriores. Solo puedes repetir una acción cuando nueva evidencia lo justifique y debes explicar por qué. que nueva evidencia justifique repetirla y expliques por qué. No menciones procesos internos. Los campos manufacturer, product, model, operating_system y architecture del alcance son hechos aportados por el usuario. Consérvalos literalmente. La ausencia de documentación no constituye evidencia de que sean erróneos. No inventes un paquete exacto. Para acciones potencialmente disruptivas, aplica guidance_integrity_contract: condición, impacto, respaldo o recuperación, autorización o ventana cuando apliquen y alternativa de escalamiento. Máximo 180 palabras."""
 
 MAX_AUTHORIZED_ITEMS = 4
 MAX_AUTHORIZED_CHARS = 3200
@@ -109,20 +109,42 @@ def repair_citation_placement(text):
     value = str(text or "")
     doc = re.search(r"Según la documentación", value, re.I)
     extra = re.search(r"Validaciones adicionales", value, re.I)
-    if not (doc and extra and doc.start() < extra.start()): return value, False
+    if not (doc and extra and doc.start() < extra.start()):
+        return value, False
     tail = re.sub(r"\s*\[(R\d+)\]", "", value[extra.start():])
     return value[:extra.start()] + tail, tail != value[extra.start():]
 
 
 def validate_internal(text, finish_reason=None, valid_ids=None):
-    value=str(text or "").strip();known=set(valid_ids or []);complete=str(finish_reason or "").casefold() not in {"length","max_tokens"}
-    doc=re.search(r"Según la documentación",value,re.I);extra=re.search(r"Validaciones adicionales",value,re.I);guidance=re.search(r"Orientación sugerida",value,re.I)
+    value = str(text or "").strip()
+    known = set(valid_ids or [])
+    complete = str(finish_reason or "").casefold() not in {"length", "max_tokens"}
+    doc = re.search(r"Según la documentación", value, re.I)
+    extra = re.search(r"Validaciones adicionales", value, re.I)
+    guidance = re.search(r"Orientación sugerida", value, re.I)
     if known:
-        ordered=bool(doc and extra and doc.start()<extra.start());first=value[doc.start():extra.start()] if ordered else "";rest=value[extra.start():] if ordered else value;sections=[name for name,match in (("Según la documentación",doc),("Validaciones adicionales",extra)) if match]
+        ordered = bool(doc and extra and doc.start() < extra.start())
+        first = value[doc.start():extra.start()] if ordered else ""
+        rest = value[extra.start():] if ordered else value
+        sections = [name for name, match in (("Según la documentación", doc), ("Validaciones adicionales", extra)) if match]
     else:
-        ordered=bool(guidance) and not doc and not extra;first="";rest=value;sections=["Orientación sugerida"] if guidance else []
-    documented=set(re.findall(r"\[(R\d+)\]",first));internal=set(re.findall(r"\[(R\d+)\]",rest));safe=bool(value) and ordered and not internal and documented.issubset(known)
-    return safe and complete,{"safe_partial":safe,"sections_present":sections,"separation_valid":ordered,"finish_complete":complete,"documented_citations":sorted(documented),"internal_citations":sorted(internal),"unknown_citations":sorted((documented|internal)-known),"compact_format":True}
+        ordered = bool(guidance) and not doc and not extra
+        first = ""
+        rest = value
+        sections = ["Orientación sugerida"] if guidance else []
+    documented = set(re.findall(r"\[(R\d+)\]", first))
+    internal = set(re.findall(r"\[(R\d+)\]", rest))
+    safe = bool(value) and ordered and not internal and documented.issubset(known)
+    return safe and complete, {
+        "safe_partial": safe,
+        "sections_present": sections,
+        "separation_valid": ordered,
+        "finish_complete": complete,
+        "documented_citations": sorted(documented),
+        "internal_citations": sorted(internal),
+        "unknown_citations": sorted((documented | internal) - known),
+        "compact_format": True,
+    }
 
 
 def fingerprint(message, understanding, retrieval, assessment, model=""):
