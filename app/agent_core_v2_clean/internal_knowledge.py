@@ -8,9 +8,9 @@ from .answer_context_policy import enrich_internal_payload
 from .documentation_limitation import user_message as limitation_user_message
 from .guidance_integrity import build_guidance_integrity_contract, integrity_diagnostic
 
-PROMPT_VERSION = "controlled_internal_knowledge_v15_confirmed_action_integrity"
+PROMPT_VERSION = "controlled_internal_knowledge_v16_compact_proportional_format"
 WARNING = "⚠️ **Orientación complementaria basada en conocimiento general del modelo**"
-SYSTEM = """Actúa como colega de soporte empresarial de impresión. Usa exactamente: ### Lo que indica la documentación, ### Orientación complementaria, ### Antes de continuar. La primera sección solo usa extractos autorizados y citas [R#]. Si documentation_limitation.required_message contiene texto, conserva fielmente su significado y no lo conviertas en ausencia de documentación. Las otras secciones no usan citas. Responde al objetivo actual. Respeta hechos confirmados. La evidencia describe posibilidades, no elecciones del usuario. No conviertas modalidades sugeridas en hechos. Si una modalidad no está confirmada, usa lenguaje condicional. Da primero comprobaciones comunes y después comprobaciones condicionales. La sección Antes de continuar no exige una pregunta: úsala para una pregunta solo si falta un dato indispensable; de lo contrario indica el siguiente paso útil o una limitación. No repitas una pregunta anterior salvo que siga siendo indispensable para la solicitud actual. Si la documentación cubre requisitos, opciones o contexto pero no el procedimiento solicitado, dilo claramente y ofrece solo preparación segura. No menciones procesos internos. Los campos manufacturer, product, model, operating_system y architecture del alcance son hechos aportados por el usuario. Consérvalos literalmente. La ausencia de documentación no constituye evidencia de que sean erróneos. No los reclasifiques como número de serie, código parcial, código regional ni nombre no comercial; no solicites otro modelo salvo contradicción explícita en la evidencia. No inventes un paquete exacto. Si falta documentación específica, indica esa limitación y orienta a consultar la fuente oficial usando exactamente los identificadores aportados. No recomiendes de nuevo una comprobación que aparezca en previous_attempts, salvo que la nueva evidencia justifique repetirla y expliques por qué. Nunca describas assistant_delivered_guidance como ejecutada: solo user_confirmed_attempts tiene autoridad de ejecución. Para acciones potencialmente disruptivas, aplica el contrato guidance_integrity_contract: condición, impacto, respaldo/recuperación, autorización o ventana cuando apliquen y alternativa de escalamiento. Máximo 180 palabras."""
+SYSTEM = """Actúa como colega de soporte empresarial de impresión. Usa un formato compacto y proporcional. Si existen extractos autorizados, presenta primero ### Según la documentación y limita esa sección a afirmaciones respaldadas con citas [R#]; después usa ### Validaciones adicionales para orientación complementaria sin citas. Si no existen extractos autorizados, omite por completo la sección documental y usa solo ### Orientación sugerida, seguida opcionalmente por **Siguiente paso:**. No incluyas secciones vacías ni repitas la limitación documental en varios encabezados. Si documentation_limitation.required_message contiene texto, conserva fielmente su significado una sola vez. Responde al objetivo actual. Respeta hechos confirmados. La evidencia describe posibilidades, no elecciones del usuario. No conviertas modalidades sugeridas en hechos. Da primero comprobaciones comunes y después comprobaciones condicionales. No repitas una comprobación que aparezca en previous_attempts, salvo que nueva evidencia justifique repetirla y expliques por qué. No menciones procesos internos. Los campos manufacturer, product, model, operating_system y architecture del alcance son hechos aportados por el usuario. Consérvalos literalmente. La ausencia de documentación no constituye evidencia de que sean erróneos. No inventes un paquete exacto. Para acciones potencialmente disruptivas, aplica guidance_integrity_contract: condición, impacto, respaldo o recuperación, autorización o ventana cuando apliquen y alternativa de escalamiento. Máximo 180 palabras."""
 
 MAX_AUTHORIZED_ITEMS = 4
 MAX_AUTHORIZED_CHARS = 3200
@@ -107,40 +107,43 @@ def authorized_evidence(
 
 def repair_citation_placement(text):
     value = str(text or "")
-    names = ["Lo que indica la documentación", "Orientación complementaria", "Antes de continuar"]
-    positions = []
-    for name in names:
-        match = re.search(re.escape(name), value, re.I)
-        positions.append(match.start() if match else -1)
-    if not (all(position >= 0 for position in positions) and positions == sorted(positions)):
+    doc = re.search(r"Según la documentación", value, re.I)
+    extra = re.search(r"Validaciones adicionales", value, re.I)
+    if not (doc and extra and doc.start() < extra.start()):
         return value, False
-    rest = re.sub(r"\s*\[(R\d+)\]", "", value[positions[1]:])
-    return value[:positions[1]] + rest, rest != value[positions[1]:]
+    tail = re.sub(r"\s*\[(R\d+)\]", "", value[extra.start():])
+    return value[:extra.start()] + tail, tail != value[extra.start():]
 
 
 def validate_internal(text, finish_reason=None, valid_ids=None):
     value = str(text or "").strip()
-    names = ["Lo que indica la documentación", "Orientación complementaria", "Antes de continuar"]
-    positions = []
-    for name in names:
-        match = re.search(re.escape(name), value, re.I)
-        positions.append(match.start() if match else -1)
-    ordered = all(position >= 0 for position in positions) and positions == sorted(positions)
+    known = set(valid_ids or [])
     complete = str(finish_reason or "").casefold() not in {"length", "max_tokens"}
-    first = value[positions[0]:positions[1]] if ordered else ""
-    rest = value[positions[1]:] if ordered else value
+    doc = re.search(r"Según la documentación", value, re.I)
+    extra = re.search(r"Validaciones adicionales", value, re.I)
+    guidance = re.search(r"Orientación sugerida", value, re.I)
+    if known:
+        ordered = bool(doc and extra and doc.start() < extra.start())
+        first = value[doc.start():extra.start()] if ordered else ""
+        rest = value[extra.start():] if ordered else value
+        sections = [name for name, match in (("Según la documentación", doc), ("Validaciones adicionales", extra)) if match]
+    else:
+        ordered = bool(guidance) and not doc and not extra
+        first = ""
+        rest = value
+        sections = ["Orientación sugerida"] if guidance else []
     documented = set(re.findall(r"\[(R\d+)\]", first))
     internal = set(re.findall(r"\[(R\d+)\]", rest))
-    known = set(valid_ids or [])
     safe = bool(value) and ordered and not internal and documented.issubset(known)
     return safe and complete, {
         "safe_partial": safe,
-        "sections_present": [name for name, position in zip(names, positions) if position >= 0],
+        "sections_present": sections,
         "separation_valid": ordered,
         "finish_complete": complete,
         "documented_citations": sorted(documented),
         "internal_citations": sorted(internal),
         "unknown_citations": sorted((documented | internal) - known),
+        "compact_format": True,
     }
 
 

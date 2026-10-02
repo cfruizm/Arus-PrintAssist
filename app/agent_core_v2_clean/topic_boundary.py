@@ -58,6 +58,16 @@ def infer_topic_boundary(previous_state: dict, understanding: dict) -> TopicBoun
     changed = sorted(k for k in STRUCTURAL if before.get(k) and now.get(k) and _norm(before[k]) != _norm(now[k]))
     introduced = sorted(k for k in MATERIAL_SCOPE if not before.get(k) and now.get(k))
     material_operation = _material_operation_change(before, now, old_goal, new_goal)
+    semantic_continuation = (
+        str((understanding or {}).get("topic_relation") or "").casefold() == "same_topic"
+        or str((understanding or {}).get("user_act") or "").casefold() in _REFERENTIAL_ACTS
+        or (bool((understanding or {}).get("case_updates")) and not introduced)
+    )
+    # A diagnostic update can change the immediate operation while preserving the
+    # same incident. Explicit semantic continuity and case facts outrank lexical
+    # operation drift unless a new material subject/scope was introduced.
+    if semantic_continuation and not introduced:
+        return TopicBoundary("same_topic_refinement", "semantic_continuation_with_case_progress", round(shared, 3), changed, introduced, "primary")
     if material_operation:
         changed = sorted(set(changed) | {"operation"})
         return TopicBoundary("new_topic", "material_operation_changed", round(shared, 3), changed, introduced, "none")
