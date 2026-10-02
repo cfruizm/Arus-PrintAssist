@@ -31,6 +31,18 @@ def _tokens(value):
             out.add(token)
     return out
 
+
+_GENERIC_SUBJECT = {"impresora","printer","equipo","device","servicio","service","sistema","system","producto","product"}
+
+def _specific_subject_fit(item, understanding):
+    u=understanding or {};details=u.get("goal_updates") or {}
+    subject=_tokens(u.get("canonical_subject") or details.get("subject") or "")
+    if not subject or subject.issubset(_GENERIC_SUBJECT): return False
+    meta=item.get("metadata") or {}
+    declared=_tokens(" ".join(str(meta.get(k) or "") for k in ("product","component","vendor")))
+    title=_tokens(item.get("title"))
+    return subject.issubset(declared) or (len(subject)>=2 and subject.issubset(title|declared))
+
 def _identity(item):
     return str(item.get("url") or item.get("source") or (item.get("metadata") or {}).get("canonical_url") or item.get("title") or "")
 
@@ -243,7 +255,8 @@ def apply_unified_evidence_verdict(retrieval, message, understanding):
         accepted = target_ok and (direct_title or (direct_content and semantic_support))
         partial_semantic = (
             str((understanding or {}).get("intent") or "").casefold() == "troubleshooting"
-            and target_ok and semantic_support and best_fit["covered_count"] >= 1
+            and semantic_support and best_fit["covered_count"] >= 1
+            and _specific_subject_fit(best, understanding)
         )
         if accepted or partial_semantic:
             identity = _identity(best)
@@ -251,7 +264,7 @@ def apply_unified_evidence_verdict(retrieval, message, understanding):
             full = accepted and (best_fit["coverage"] >= 0.5 or best_fit["title_hit_count"] >= 2)
             status = "sufficient" if full else "partial"
             mode = "documented" if full else "documented_plus_internal"
-            reason = "direct_title_operation_match" if full and direct_title else "direct_content_and_operation_match" if accepted else "semantic_troubleshooting_support_partial"
+            reason = "direct_title_operation_match" if full and direct_title else "direct_content_and_operation_match" if accepted else "specific_subject_semantic_troubleshooting_support_partial"
             accepted = bool(full)
 
     for idx, item in enumerate(selected, 1):
@@ -279,6 +292,6 @@ def apply_unified_evidence_verdict(retrieval, message, understanding):
         "generation_ids": verdict["evidence_ids"],
         "generation_count": len(selected),
         "selected_document": verdict["document_ids"][0] if verdict["document_ids"] else None,
-        "decision_path": "unified_evidence_authority_v6_partial_troubleshooting",
+        "decision_path": "unified_evidence_authority_v7_specific_subject_partial",
     })
     return out
