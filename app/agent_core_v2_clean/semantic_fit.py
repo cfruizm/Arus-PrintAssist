@@ -135,16 +135,23 @@ def capture_answer_context(result, previous_context=None):
     if not text:return {}
     cited=set(re.findall(r"\[(R\d+)\]",text));evidence=retrieval.get("evidence") or []
     current=[copy.deepcopy(e) for e in evidence if not cited or str(e.get("id")) in cited]
-    previous_context=previous_context or {};continuity=(result.get("document_continuity") or {})
+    previous_context=previous_context or {};continuity=result.get("document_continuity") or {}
+    same_topic=bool(continuity.get("same_topic") or continuity.get("primary") or str((result.get("understanding") or {}).get("topic_relation") or "") in {"same_topic","return_to_previous"})
+    prior_ledger=previous_context.get("active_document_evidence_ledger") or previous_context.get("cited_evidence") or []
     current_identities=[]
     for item in current:
         identity=_identity(item)
         if identity and identity not in current_identities:current_identities.append(identity)
-    prior_ledger=previous_context.get("active_document_evidence_ledger") or previous_context.get("cited_evidence") or []
-    ledger=list(current)
-    if continuity.get("primary") and current_identities:
-        ledger += [copy.deepcopy(x) for x in prior_ledger if _identity(x) in current_identities]
-    def compact(rows, maximum):
+    if current:
+        ledger=list(current)
+        if continuity.get("primary") and current_identities:
+            ledger += [copy.deepcopy(x) for x in prior_ledger if _identity(x) in current_identities]
+    elif same_topic:
+        # An internal fallback is a response-mode change, not a documentary topic boundary.
+        ledger=[copy.deepcopy(x) for x in prior_ledger]
+    else:
+        ledger=[]
+    def compact(rows,maximum):
         out=[];seen=set()
         for item in rows:
             signature=_ledger_signature(item)
@@ -152,8 +159,7 @@ def capture_answer_context(result, previous_context=None):
             seen.add(signature);out.append(_compact_evidence_row(item))
             if len(out)>=maximum:break
         return out
-    current_compact=compact(current,8)
-    ledger_compact=compact(ledger,12)
+    current_compact=compact(current,8);ledger_compact=compact(ledger,12)
     identities=[];titles=[]
     for item in ledger_compact or current_compact:
         identity=_identity(item)
@@ -161,17 +167,24 @@ def capture_answer_context(result, previous_context=None):
         title=str(item.get("title") or "").strip()
         if title and title not in titles:titles.append(title)
     normalized=" ".join(text.split());inverted=list(re.finditer(r"¿[^?]{1,420}\?",normalized));closing_question=inverted[-1].group(0).strip() if inverted else None
-    guidance=[];markers=list(re.finditer(r"(?m)^\s*\d+[.)]\s+",text))
+    current_guidance=[];markers=list(re.finditer(r"(?m)^\s*(?:\*\*)?\d+[.)]\s+",text))
     for index,marker in enumerate(markers[:8]):
-        end=markers[index+1].start() if index+1<len(markers) else len(text);block=text[marker.end():end].strip();first=block.splitlines()[0] if block else "";action=re.sub(r"^[_#\s]+|[_:]+$","",first).strip();body=" ".join(block.split())
-        if action:guidance.append({"action":action,"excerpt":body[:260],"status":"truncated" if str(answer.get("finish_reason") or "").casefold() in {"length","max_tokens"} and index==len(markers[:8])-1 else "delivered"})
+        end=markers[index+1].start() if index+1<len(markers) else len(text);block=text[marker.end():end].strip();first=block.splitlines()[0] if block else "";action=re.sub(r"^[*_#\s]+|[*_:]+$","",first).strip();body=" ".join(block.split())
+        if action:current_guidance.append({"action":action,"excerpt":body[:260],"status":"truncated" if str(answer.get("finish_reason") or "").casefold() in {"length","max_tokens"} and index==len(markers[:8])-1 else "delivered","origin":"assistant_current"})
+    guidance=[];seen_guidance=set()
+    for item in ([copy.deepcopy(x) for x in previous_context.get("delivered_guidance") or []] if same_topic else []) + current_guidance:
+        action=" ".join(str((item or {}).get("action") or "").split())
+        key=_norm(action)
+        if action and key not in seen_guidance:
+            row=copy.deepcopy(item);row["action"]=action;guidance.append(row);seen_guidance.add(key)
     return {
         "answer_mode":answer.get("mode"),"goal":(result.get("understanding") or {}).get("current_goal"),
-        "main_text_excerpt":normalized[:1000],"evidence_ledger_version":"active_primary_document_v2",
+        "main_text_excerpt":normalized[:1000],"evidence_ledger_version":"active_primary_document_v3_persistent",
         "cumulative_evidence_count":len(ledger_compact),"closing_question":closing_question,
         "source_identities":identities,"source_titles":titles,"cited_ids":sorted(cited),
         "cited_evidence":ledger_compact,"current_answer_cited_evidence":current_compact,
         "active_document_evidence_ledger":ledger_compact,"delivered_guidance":guidance,
         "finish_reason":answer.get("finish_reason"),
         "partial":str(answer.get("mode") or "").endswith("_partial") or str(answer.get("finish_reason") or "").casefold() in {"length","max_tokens"},
+        "historical_document_context_preserved":bool(not current and same_topic and ledger_compact),
     }

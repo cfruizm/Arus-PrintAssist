@@ -31,18 +31,6 @@ def _tokens(value):
             out.add(token)
     return out
 
-
-_GENERIC_SUBJECT = {"impresora","printer","equipo","device","servicio","service","sistema","system","producto","product"}
-
-def _specific_subject_fit(item, understanding):
-    u=understanding or {};details=u.get("goal_updates") or {}
-    subject=_tokens(u.get("canonical_subject") or details.get("subject") or "")
-    if not subject or subject.issubset(_GENERIC_SUBJECT): return False
-    meta=item.get("metadata") or {}
-    declared=_tokens(" ".join(str(meta.get(k) or "") for k in ("product","component","vendor")))
-    title=_tokens(item.get("title"))
-    return subject.issubset(declared) or (len(subject)>=2 and subject.issubset(title|declared))
-
 def _identity(item):
     return str(item.get("url") or item.get("source") or (item.get("metadata") or {}).get("canonical_url") or item.get("title") or "")
 
@@ -58,15 +46,29 @@ def _dedup(items):
 
 def _request_text(message, understanding, retrieval):
     understanding = understanding or {}
-    # A degraded provider contract cannot safely contribute memory-derived goals.
     if understanding.get("degraded"):
         return str(message or "")
     fields = ((retrieval.get("query") or {}).get("fields") or {})
     relation = str(fields.get("topic_relation") or understanding.get("topic_relation") or "")
+    act = str(fields.get("user_act") or understanding.get("user_act") or "")
     if relation == "new_topic":
         return " ".join((str(message or ""), str(understanding.get("current_goal") or "")))
-    # Current follow-up wording defines the requested dimension; the active primary
-    # document provides identity continuity without diluting current-turn relevance.
+    referential = relation in {"same_topic", "same_topic_refinement", "return_to_previous"} and act in {
+        "follow_up", "answer_to_question", "request_elaboration", "attempt_result", "reported_failure"
+    }
+    if referential:
+        details = fields.get("details") or {}
+        accumulated = " ".join(str(x or "") for x in (
+            fields.get("goal"), fields.get("contextual_operation"),
+            details.get("operation"), details.get("subject"),
+            understanding.get("current_goal"),
+        ))
+        technical = _tokens(accumulated)
+        current = _tokens(message)
+        # Referential wording expresses dialogue control, not the technical operation.
+        # If it contributes no technical anchors, evaluate the active primary document
+        # against the accumulated objective instead of rejecting it lexically.
+        return accumulated if technical and len(current & technical) < 1 else " ".join((str(message or ""), accumulated))
     return str(message or "")
 
 def _fit(item, wanted):
@@ -142,49 +144,54 @@ def _conceptual_selection(candidates, understanding):
 
 
 def _primary_continuity_selection(out, candidates, wanted):
-    """Authorize relevant evidence from the already-authorized primary document.
+    """Authorize remaining evidence in an already-authorized primary document.
 
-    This branch is strictly scoped to structured same-document continuity. It does
-    not approve a document by identity alone: current-turn terms must still be
-    covered by the current evidence. No product or operation vocabulary is used.
+    Identity continuity alone is insufficient. The branch requires structured same-topic
+    authority and either current technical overlap or accumulated-goal overlap. Dialogue
+    control words are never treated as operational obligations.
     """
     query = (out.get("query") or {}).get("fields") or {}
     context = out.get("_answer_context") or {}
     if str(query.get("previous_evidence_role") or "") != "primary":
         return None
     identities = {str(x).strip() for x in context.get("source_identities") or [] if str(x).strip()}
-    if not identities or not wanted:
+    if not identities:
         return None
+    details = query.get("details") or {}
+    accumulated = _tokens(" ".join(str(x or "") for x in (
+        query.get("goal"), query.get("contextual_operation"), details.get("operation"),
+        details.get("subject"), context.get("goal"), context.get("main_text_excerpt"),
+    )))
+    effective = wanted or accumulated
     rows = []
     for position, item in enumerate(candidates):
         if _identity(item) not in identities:
             continue
-        fit = _fit(item, wanted)
+        fit = _fit(item, effective)
+        available = _tokens(" ".join((str(item.get("title") or ""), str(item.get("text") or ""))))
+        current_hits = len(wanted & available)
+        accumulated_hits = len(accumulated & available)
         semantic = float((item.get("semantic_fit") or {}).get("score", 0.0) or 0.0)
-        relevant = fit["covered_count"] >= 2 or (fit["covered_count"] >= 1 and semantic >= 0.15)
+        relevant = current_hits >= 1 or accumulated_hits >= 2 or semantic >= 0.30
         if relevant:
-            rows.append((fit["covered_count"], fit["coverage"], semantic, -position, deepcopy(item)))
+            rows.append((current_hits, accumulated_hits, fit["coverage"], semantic, -position, deepcopy(item)))
     if not rows:
         return None
-    rows.sort(reverse=True, key=lambda x:(x[0],x[1],x[2],x[3]))
-    identity = _identity(rows[0][4])
-    selected = [x[4] for x in rows if _identity(x[4]) == identity][:8]
+    rows.sort(reverse=True, key=lambda x:(x[0],x[1],x[2],x[3],x[4]))
+    identity = _identity(rows[0][5])
+    selected = [x[5] for x in rows if _identity(x[5]) == identity][:8]
     for index, item in enumerate(selected, 1):
         item["id"] = f"R{index}"
-    coverage = max(x[1] for x in rows)
+    coverage = max(x[2] for x in rows)
+    reason = "primary_document_current_turn_relevance" if max(x[0] for x in rows) >= 1 else "primary_document_accumulated_goal_relevance"
     return {
-        "schema_version": 5,
-        "status": "sufficient",
-        "mode": "documented",
-        "accepted": True,
-        "reason": "primary_document_current_turn_relevance",
-        "request_terms": sorted(wanted),
-        "document_ids": [identity],
-        "evidence_ids": [x["id"] for x in selected],
-        "coverage": round(float(coverage), 4),
-        "selected_evidence": selected,
-        "rejected_count": max(0, len(candidates)-len(selected)),
+        "schema_version": 6, "status": "sufficient", "mode": "documented", "accepted": True,
+        "reason": reason,
+        "request_terms": sorted(effective), "document_ids": [identity],
+        "evidence_ids": [x["id"] for x in selected], "coverage": round(float(coverage), 4),
+        "selected_evidence": selected, "rejected_count": max(0, len(candidates)-len(selected)),
         "continuity_authority": "structured_primary_document",
+        "current_term_count": len(wanted), "accumulated_goal_term_count": len(accumulated),
     }
 
 def apply_unified_evidence_verdict(retrieval, message, understanding):
@@ -255,8 +262,7 @@ def apply_unified_evidence_verdict(retrieval, message, understanding):
         accepted = target_ok and (direct_title or (direct_content and semantic_support))
         partial_semantic = (
             str((understanding or {}).get("intent") or "").casefold() == "troubleshooting"
-            and semantic_support and best_fit["covered_count"] >= 1
-            and _specific_subject_fit(best, understanding)
+            and target_ok and semantic_support and best_fit["covered_count"] >= 1
         )
         if accepted or partial_semantic:
             identity = _identity(best)
@@ -264,7 +270,7 @@ def apply_unified_evidence_verdict(retrieval, message, understanding):
             full = accepted and (best_fit["coverage"] >= 0.5 or best_fit["title_hit_count"] >= 2)
             status = "sufficient" if full else "partial"
             mode = "documented" if full else "documented_plus_internal"
-            reason = "direct_title_operation_match" if full and direct_title else "direct_content_and_operation_match" if accepted else "specific_subject_semantic_troubleshooting_support_partial"
+            reason = "direct_title_operation_match" if full and direct_title else "direct_content_and_operation_match" if accepted else "semantic_troubleshooting_support_partial"
             accepted = bool(full)
 
     for idx, item in enumerate(selected, 1):
@@ -292,6 +298,6 @@ def apply_unified_evidence_verdict(retrieval, message, understanding):
         "generation_ids": verdict["evidence_ids"],
         "generation_count": len(selected),
         "selected_document": verdict["document_ids"][0] if verdict["document_ids"] else None,
-        "decision_path": "unified_evidence_authority_v7_specific_subject_partial",
+        "decision_path": "unified_evidence_authority_v6_partial_troubleshooting",
     })
     return out

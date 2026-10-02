@@ -1,3 +1,4 @@
+# Export lineage retained for regression discovery: henkia_support_assist_4b1_9
 # Regression lineage: agent_core_v2_clean_phase4a3_9_10_2_compound_attempt_preservation
 # Regression lineage: agent_core_v2_clean_phase4a3_9_10_degraded_terminal_arbitration_scoped_negative_claims
 # Regression lineage: agent_core_v2_clean_phase4a3_9_9_cumulative_document_evidence_safe_negative_block_repair
@@ -102,15 +103,8 @@ def _attach_retrieval(result, message, store):
         return result
     try:
         u = type("U", (), result.get("understanding") or {})()
-        escalation_state=store["memory"].escalation
-        escalation_closed=bool(getattr(escalation_state,"confirmed",False) or getattr(escalation_state,"exported",False) or getattr(escalation_state,"completion_reason",None) or getattr(escalation_state,"completed_turn",None) is not None)
-        retrieval_memory=deepcopy(store["memory"])
-        if escalation_closed:
-            retrieval_memory.support_case.status="historical"
-            retrieval_memory.support_case.symptoms=[];retrieval_memory.support_case.observations=[];retrieval_memory.support_case.attempts=[];retrieval_memory.support_case.affected_scope=None;retrieval_memory.support_case.resolution_status=None
-            retrieval_memory.pending_goal.known_details={k:v for k,v in retrieval_memory.pending_goal.known_details.items() if k in {"subject","product"}}
         builder = RetrievalQueryBuilder()
-        query = builder.build(message, retrieval_memory, u)
+        query = builder.build(message, store["memory"], u)
         current = builder.current_only(message, u)
         # Resolve continuity before retrieval so the previously cited document can
         # be queried directly. Authority comes only from structured semantic state.
@@ -142,6 +136,7 @@ def _attach_retrieval(result, message, store):
         retrieval = apply_unified_evidence_verdict(retrieval, message, result.get("understanding") or {})
         retrieval["documentation_limitation"]=classify_documentation_limitation(retrieval)
         retrieval["_answer_context"] = deepcopy(answer_context)
+        escalation_closed=str(getattr(store["memory"].escalation,"status","") or "").casefold() in {"completed","cancelled"}
         retrieval["_case_context"] = {
             "attempts": [] if escalation_closed else deepcopy(getattr(store["memory"].support_case,"attempts",[]) or []),
             "historical_attempts": deepcopy(getattr(store["memory"].support_case,"attempts",[]) or []) if escalation_closed else [],
@@ -149,7 +144,6 @@ def _attach_retrieval(result, message, store):
             "affected_scope": None if escalation_closed else getattr(store["memory"].support_case,"affected_scope",None),
             "case_context_authority": "historical" if escalation_closed else "active",
         }
-        retrieval["historical_case_isolation"]={"applied":escalation_closed,"query_excludes_closed_case":escalation_closed}
         retrieval["pre_retrieval_boundary"] = boundary.to_dict()
     except Exception as exc:
         retrieval = {"enabled": True, "ok": False, "llm_called": False, "production_changed": False, "count": 0, "evidence": [], "errors": [{"type": type(exc).__name__, "message": str(exc)}]}
@@ -276,16 +270,20 @@ def _apply_answer_traces(result, conceptual, procedural, store):
     return recorded
 
 def _combined_turn_metrics(base_traces, generated_traces):
-    roots=[x for x in (base_traces or []) if x and not x.get("skipped")]+[x for x in (generated_traces or []) if x and not x.get("skipped")]
+    def expand(trace):
+        if not trace or trace.get("skipped"): return []
+        nested=[trace.get("initial"),trace.get("repair")]
+        return [x for x in nested if x and not x.get("skipped")] if any(nested) else [trace]
     items=[]
-    for root in roots:
-        nested=[root.get("initial"),root.get("repair")]
-        items.extend(x for x in nested if x and not x.get("skipped")) if any(nested) else items.append(root)
-    out=_zero();out["calls"]=len(items)
+    for trace in list(base_traces or [])+list(generated_traces or []): items.extend(expand(trace))
+    out = _zero()
+    out["calls"] = len(items)
     for item in items:
-        usage=item.get("usage") or {}
-        for key in ("prompt_tokens","completion_tokens","total_tokens"):out[key]+=int(usage.get(key,0) or 0)
-        if item.get("ok") is False:out["provider_failed_calls"]+=1
+        usage = item.get("usage") or {}
+        for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
+            out[key] += int(usage.get(key, 0) or 0)
+        if item.get("ok") is False:
+            out["provider_failed_calls"] += 1
     return out
 
 def _cacheable_final(result):
@@ -414,4 +412,4 @@ def process_message(message, secrets_obj, s):
 
 def export_session(s):
     x = get_store(s)
-    return {"format": "henkia_support_assist_4b3_3_relevance_historical_isolation", "session_id": x.get("session_id"), "gateway_budget": {"calls": int(s.get("llm_gateway_calls", 0)), "tokens": int(s.get("llm_gateway_tokens", 0))}, "messages": deepcopy(x["messages"]), "turns": deepcopy(x["turns"]), "state": x["memory"].to_dict(), "answer_context": deepcopy(x.get("answer_context") or {}), "budget": deepcopy(x["budget"]), "telemetry": snapshot(x["telemetry"]), "cache_metrics": deepcopy(x["cache_metrics"]), "errors": deepcopy(x["errors"]), "escalation_export": build_escalation_export(x["memory"].escalation,x["memory"].conversation_id) if x["memory"].escalation.confirmed else None, "retrieval_enabled": True, "documented_answer_enabled": True, "procedural_answer_enabled": True, "production_changed": False}
+    return {"format": "henkia_support_assist_4b3_4_active_document_guidance_integrity", "session_id": x.get("session_id"), "gateway_budget": {"calls": int(s.get("llm_gateway_calls", 0)), "tokens": int(s.get("llm_gateway_tokens", 0))}, "messages": deepcopy(x["messages"]), "turns": deepcopy(x["turns"]), "state": x["memory"].to_dict(), "answer_context": deepcopy(x.get("answer_context") or {}), "budget": deepcopy(x["budget"]), "telemetry": snapshot(x["telemetry"]), "cache_metrics": deepcopy(x["cache_metrics"]), "errors": deepcopy(x["errors"]), "escalation_export": build_escalation_export(x["memory"].escalation,x["memory"].conversation_id) if x["memory"].escalation.confirmed else None, "retrieval_enabled": True, "documented_answer_enabled": True, "procedural_answer_enabled": True, "production_changed": False}

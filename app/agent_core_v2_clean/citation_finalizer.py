@@ -79,6 +79,14 @@ def finalize_citations(text, plan):
     cited = sorted(set(_CITE.findall(source)), key=lambda value: int(value[1:]))
     unknown = sorted(x for x in cited if x not in valid)
     stripped = []
+    if unknown:
+        unknown_set = set(unknown)
+        source = _CITE.sub(lambda match: "" if match.group(1) in unknown_set else match.group(0), source)
+        stripped.extend(unknown)
+        source = re.sub(r"[ \t]+(?=[,.;:])", "", source)
+        source = re.sub(r" {2,}", " ", source)
+        cited = sorted(set(_CITE.findall(source)), key=lambda value: int(value[1:]))
+        unknown = []
     allow_documented = bool(rp.get("allow_documented_claims"))
     if not allow_documented:
         stripped = cited
