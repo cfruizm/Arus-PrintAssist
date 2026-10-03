@@ -125,7 +125,7 @@ def retrieve_exact_document(source_identity: str, k: int = 40) -> dict:
     identity=str(source_identity or "").strip()
     if not identity:return {"ok":False,"evidence":[],"count":0,"error_code":"missing_source_identity"}
     try:
-        from app.backend import get_vectorstore
+        from app.vectorstore_runtime import get_vectorstore
         raw=get_vectorstore()._collection.get(include=["documents","metadatas"],limit=20000)
     except Exception as exc:return {"ok":False,"evidence":[],"count":0,"error_code":"document_scan_failed","errors":[f"{type(exc).__name__}: {exc}"]}
     rows=[]

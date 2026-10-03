@@ -65,40 +65,12 @@ class IncidentState:
 # -----------------------------------------------------------------------------
 # Streamlit resources
 # -----------------------------------------------------------------------------
-@st.cache_resource
-def get_embedding_model():
-    return HuggingFaceEmbeddings(model_name=CONFIG["embedding_model_name"])
-
-
-def get_vectorstore_signature(vectorstore_dir: str) -> str:
-    base = Path(vectorstore_dir)
-    if not base.exists():
-        return "missing"
-
-    parts = []
-    for path in sorted(base.rglob("*")):
-        if path.is_file():
-            parts.append(f"{path.relative_to(base)}:{path.stat().st_size}")
-    return "|".join(parts)
-
-
-@st.cache_resource
-def get_vectorstore_cached(signature: str):
-    vectorstore_dir = CONFIG["vectorstore_dir"]
-    collection_name = CONFIG.get("collection_name", "langchain")
-    return Chroma(
-        collection_name=collection_name,
-        persist_directory=vectorstore_dir,
-        embedding_function=get_embedding_model(),
-    )
-
-
-def get_vectorstore():
-    vectorstore_dir = CONFIG["vectorstore_dir"]
-    if not Path(vectorstore_dir).exists():
-        raise FileNotFoundError(f"Vector store directory not found: {vectorstore_dir}")
-    signature = get_vectorstore_signature(vectorstore_dir)
-    return get_vectorstore_cached(signature)
+from app.vectorstore_runtime import (
+    get_embedding_model,
+    get_vectorstore_signature,
+    get_vectorstore_cached,
+    get_vectorstore,
+)
 
 
 @st.cache_resource

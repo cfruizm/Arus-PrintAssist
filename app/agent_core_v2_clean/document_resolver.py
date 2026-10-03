@@ -13,7 +13,7 @@ def catalog(force=False):
  now=time.time()
  if CACHE['entries'] and not force and now-CACHE['at']<900:return CACHE
  try:
-  from app.backend import get_vectorstore
+  from app.vectorstore_runtime import get_vectorstore
   vs=get_vectorstore();col=getattr(vs,'_collection',None) or getattr(vs,'collection',None);raw=col.get(include=['metadatas']);unique={}
   for m in raw.get('metadatas') or []:
    m=dict(m or {});src=str(m.get('canonical_url') or m.get('source') or m.get('source_name') or '')
