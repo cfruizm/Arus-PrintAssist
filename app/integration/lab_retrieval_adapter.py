@@ -63,11 +63,11 @@ def retrieve_from_existing_backend(query: str, k: int = 6) -> dict:
     The function does not call generate_answer_with_rag and does not alter chat state.
     """
     try:
-        from app.backend import retrieve_context
+        from app.retrieval_runtime import retrieve_context
     except Exception as exc:
         return {
             "ok": False,
-            "adapter": "app.backend.retrieve_context",
+            "adapter": "app.retrieval_runtime.retrieve_context",
             "query": query,
             "evidence": [],
             "count": 0,
@@ -80,7 +80,7 @@ def retrieve_from_existing_backend(query: str, k: int = 6) -> dict:
     except Exception as exc:
         return {
             "ok": False,
-            "adapter": "app.backend.retrieve_context",
+            "adapter": "app.retrieval_runtime.retrieve_context",
             "query": query,
             "evidence": [],
             "count": 0,
@@ -91,7 +91,7 @@ def retrieve_from_existing_backend(query: str, k: int = 6) -> dict:
     if not isinstance(raw_result, tuple) or len(raw_result) < 2:
         return {
             "ok": False,
-            "adapter": "app.backend.retrieve_context",
+            "adapter": "app.retrieval_runtime.retrieve_context",
             "query": query,
             "evidence": [],
             "count": 0,
@@ -109,7 +109,7 @@ def retrieve_from_existing_backend(query: str, k: int = 6) -> dict:
 
     return {
         "ok": True,
-        "adapter": "app.backend.retrieve_context",
+        "adapter": "app.retrieval_runtime.retrieve_context",
         "query": query,
         "evidence": evidence,
         "count": len(evidence),
